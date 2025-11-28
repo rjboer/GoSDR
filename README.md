@@ -39,9 +39,10 @@ This Go project recreates that behaviour with an emphasis on:
 ---
 
 
-Example of the webinterface:
 
-<img width="1400" height="1272" alt="image" src="https://github.com/user-attachments/assets/6506984b-c380-4c0b-8ce1-b1db27e2100b" />
+
+
+
 ## Project Structure
 
 ```text
@@ -56,7 +57,9 @@ Example of the webinterface:
 ├── agent.md              # instructions and roadmap for an AI/dev agent
 └── README.md             # this file
 
-
+```
+Example of the webinterface:
+<img width="1400" height="1272" alt="image" src="https://github.com/user-attachments/assets/e9f8e93d-71cf-4bdc-942d-6c853d70e085" />
 
 
 
