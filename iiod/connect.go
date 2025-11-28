@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 type Client struct {
@@ -13,14 +14,32 @@ type Client struct {
 }
 
 func Dial(addr string) (*Client, error) {
-	c, err := net.Dial("tcp", addr)
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	c, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
+
 	return &Client{
 		conn:   c,
 		reader: bufio.NewReader(c),
 	}, nil
+}
+
+// Close shuts down the underlying network connection.
+func (c *Client) Close() error {
+	if c.conn == nil {
+		return nil
+	}
+
+	err := c.conn.Close()
+	c.conn = nil
+	return err
+}
+
+// Send issues a command to the server and returns its response payload.
+func (c *Client) Send(cmd string) (string, error) {
+	return c.send(cmd)
 }
 
 func (c *Client) send(cmd string) (string, error) {
