@@ -32,6 +32,23 @@ type Client struct {
 	reader *bufio.Reader
 }
 
+// Send issues a raw IIOD command and returns the response payload.
+//
+// This is a thin wrapper around the internal send helper for callers that need
+// direct access to lower-level protocol commands.
+func (c *Client) Send(cmd string) (string, error) {
+	return c.send(cmd)
+}
+
+// Close terminates the underlying network connection.
+func (c *Client) Close() error {
+	if c == nil || c.conn == nil {
+		return fmt.Errorf("client is not connected")
+	}
+
+	return c.conn.Close()
+}
+
 // ContextInfo describes the remote IIOD context reported by the server.
 type ContextInfo struct {
 	Major       int

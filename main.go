@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"yourmodule/iiod"
+	"github.com/rjboer/GoSDR/iiod"
 )
 
 func main() {
@@ -18,10 +18,10 @@ func main() {
 		}
 	}()
 
-	reply, err := c.Send("VERSION")
+	info, err := c.GetContextInfo()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Println("IIOD VERSION:", reply)
+	fmt.Printf("IIOD VERSION: %d.%d %s\n", info.Major, info.Minor, info.Description)
 }
