@@ -12,8 +12,15 @@
     <p>Live steering angle and peak telemetry</p>
   </header>
   <main>
-    <section class="chart-panel">
-      <canvas id="angleChart" aria-label="Angle chart"></canvas>
+    <section class="chart-grid">
+      <div class="chart-panel">
+        <h2>Steering Angle</h2>
+        <canvas id="angleChart" aria-label="Angle chart"></canvas>
+      </div>
+      <div class="chart-panel">
+        <h2>Peak Level</h2>
+        <canvas id="peakChart" aria-label="Peak chart"></canvas>
+      </div>
     </section>
     <section class="history">
       <h2>Latest samples</h2>

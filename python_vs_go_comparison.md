@@ -4,7 +4,7 @@
 
 The Go implementation successfully ports the core functionality of the Python monopulse DOA tracker with the following status:
 
-✅ **Fully Implemented**: Core DSP, tracking loop, MockSDR, web telemetry UI
+✅ **Fully Implemented**: Core DSP, tracking loop, MockSDR, web telemetry UI with angle + peak history
 ⚠️ **Partially Implemented**: Hardware SDR (Pluto support exists but needs testing)
 ❌ **Not Implemented**: None
 
@@ -72,9 +72,7 @@ type SDR interface {
 | Buffer management | ✅ `set_kernel_buffers_count(1)` | ✅ (handled in iiod client) | ✅ |
 | Warm-up period | ✅ 20 iterations | ✅ `--warmup-buffers` (defaults to 3) | ✅ |
 
-**Verdict**: Go now mirrors the Python warm-up behaviour and exposes RX/TX gains directly on the CLI.
-
-**Verdict**: Go has **better testability** with MockSDR, and now matches the Python warm-up sequence while keeping CLI gain controls.
+**Verdict**: Go now mirrors the Python warm-up behaviour and exposes RX/TX gains directly on the CLI while retaining a mock-friendly design for testability.
 
 ---
 
@@ -392,11 +390,11 @@ hub := telemetry.NewHub(500)
 go telemetry.NewWebServer(":8080", hub).Start(ctx)
 tracker := app.NewTracker(backend, telemetry.MultiReporter{hub, telemetry.StdoutReporter{}}, cfg)
 ```
-The embedded web interface streams telemetry over **Server-Sent Events** to a Chart.js line plot (angle vs. time) and a table of recent samples.
+The embedded web interface streams telemetry over **Server-Sent Events** to Chart.js line plots (angle vs. time and peak vs. time), pre-seeded with history for an instant dashboard alongside the live table of recent samples.
 
 | Feature | Python | Go | Status |
 |---------|--------|-----|--------|
-| Real-time plot | ✅ PyQtGraph | ✅ Embedded web UI (Chart.js) | ✅ |
+| Real-time plots | ✅ PyQtGraph | ✅ Embedded web UI (Chart.js angle + peak) | ✅ |
 | Console output | ❌ | ✅ Formatted stdout | ✅ |
 | Angle vs time | ✅ Live graph | ✅ Live graph | ✅ |
 | Peak level display | ✅ In scan | ✅ In scan & table | ✅ |
@@ -420,7 +418,7 @@ The embedded web interface streams telemetry over **Server-Sent Events** to a Ch
 | **Tracking Loop** | ✅ | ✅ | ✅ Equal |
 | **Warm-up Period** | ✅ 20 iterations | ✅ Configurable (`--warmup-buffers`) | ✅ |
 | **Angle History** | ✅ Stored | ✅ Tracker + telemetry hub | ✅ |
-| **Real-time Visualization** | ✅ PyQtGraph | ✅ Web UI (Chart.js via SSE) | ✅ |
+| **Real-time Visualization** | ✅ PyQtGraph | ✅ Web UI (Chart.js via SSE, angle + peak) | ✅ |
 | **Console Output** | ❌ | ✅ | ✅ Better in Go |
 | **Error Handling** | Minimal | Comprehensive | ✅ Better in Go |
 | **Testing** | None | Unit + integration | ✅ Better in Go |
@@ -433,7 +431,7 @@ The embedded web interface streams telemetry over **Server-Sent Events** to a Ch
 1. **Full scan data return**: Python returns all scan results for debugging
 
 ### Nice to Have
-2. **Additional plots**: Spectrum/scan visualizations similar to Python demos
+2. **Spectrum/scan visualizations** to complement the angle/peak charts
 3. **Record/replay**: Capture IQ data for offline analysis
 
 ---
@@ -455,7 +453,7 @@ The embedded web interface streams telemetry over **Server-Sent Events** to a Ch
 ### To Achieve Full Parity
 
 1. **Return full scan data** from [CoarseScan](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/dsp/monopulse.go#29-69) for debugging/export.
-2. **Add additional plots** (e.g., spectrum or scan heatmaps) to the web UI for parity with Python's exploratory visuals.
+2. **Add spectrum/scan plots** to the web UI to pair with the live angle/peak charts.
 3. **Implement record/replay** for IQ data to aid offline analysis and demos.
 
 ### Optional Enhancements

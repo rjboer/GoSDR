@@ -67,8 +67,9 @@ func CoarseScan(rx0, rx1 []complex64, phaseCal float64, startBin, endBin int, st
 	return bestDelay, bestTheta, peakDBFS
 }
 
-// MonopulseTrack applies a monopulse correction step based on the sign of the correlation phase.
-func MonopulseTrack(lastDelay float64, rx0, rx1 []complex64, phaseCal float64, startBin, endBin int, phaseStep float64) float64 {
+// MonopulseTrack applies a monopulse correction step based on the sign of the correlation phase
+// and returns the updated delay along with the observed peak in the sum spectrum (dBFS).
+func MonopulseTrack(lastDelay float64, rx0, rx1 []complex64, phaseCal float64, startBin, endBin int, phaseStep float64) (float64, float64) {
 	phaseRad := (lastDelay + phaseCal) * math.Pi / 180
 	adjusted := make([]complex64, len(rx1))
 	for i, v := range rx1 {
@@ -81,11 +82,20 @@ func MonopulseTrack(lastDelay float64, rx0, rx1 []complex64, phaseCal float64, s
 		sumBuf[i] = rx0[i] + adjusted[i]
 		deltaBuf[i] = rx0[i] - adjusted[i]
 	}
-	sumFFT, _ := FFTAndDBFS(sumBuf)
+	sumFFT, sumDBFS := FFTAndDBFS(sumBuf)
 	deltaFFT, _ := FFTAndDBFS(deltaBuf)
 	monoPhase := MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
-	if math.Signbit(monoPhase) {
-		return lastDelay - phaseStep
+	peak := -math.MaxFloat64
+	for _, v := range sumDBFS {
+		if v > peak {
+			peak = v
+		}
 	}
-	return lastDelay + phaseStep
+	if peak == -math.MaxFloat64 {
+		peak = 0
+	}
+	if math.Signbit(monoPhase) {
+		return lastDelay - phaseStep, peak
+	}
+	return lastDelay + phaseStep, peak
 }

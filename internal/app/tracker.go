@@ -78,10 +78,8 @@ func (t *Tracker) Run(ctx context.Context) error {
 	if t.cfg.TrackingLength == 0 {
 		t.cfg.TrackingLength = 50
 	}
-	for i := 0; i < t.cfg.WarmupBuffers; i++ {
-		if _, _, err := t.sdr.RX(ctx); err != nil {
-			return err
-		}
+	if err := t.warmup(ctx); err != nil {
+		return err
 	}
 	for i := 0; i < t.cfg.TrackingLength; i++ {
 		rx0, rx1, err := t.sdr.RX(ctx)
@@ -106,11 +104,12 @@ func (t *Tracker) Run(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
-		t.lastDelay = dsp.MonopulseTrack(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep)
+		var peak float64
+		t.lastDelay, peak = dsp.MonopulseTrack(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep)
 		theta := dsp.PhaseToTheta(t.lastDelay, t.cfg.RxLO, t.cfg.SpacingWavelength)
 		t.appendHistory(theta)
 		if t.reporter != nil {
-			t.reporter.Report(theta, 0)
+			t.reporter.Report(theta, peak)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -134,4 +133,21 @@ func (t *Tracker) appendHistory(theta float64) {
 	if len(t.history) > t.cfg.HistoryLimit && t.cfg.HistoryLimit > 0 {
 		t.history = t.history[len(t.history)-t.cfg.HistoryLimit:]
 	}
+}
+
+func (t *Tracker) warmup(ctx context.Context) error {
+	if t.cfg.WarmupBuffers <= 0 {
+		return nil
+	}
+	for i := 0; i < t.cfg.WarmupBuffers; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if _, _, err := t.sdr.RX(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
