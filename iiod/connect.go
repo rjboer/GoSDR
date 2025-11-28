@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Client implements a small subset of the IIOD TCP protocol used by libiio.
@@ -40,10 +41,12 @@ type ContextInfo struct {
 
 // Dial opens a TCP connection to an IIOD server.
 func Dial(addr string) (*Client, error) {
-	c, err := net.Dial("tcp", addr)
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	c, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
+
 	return &Client{
 		conn:   c,
 		reader: bufio.NewReader(c),
