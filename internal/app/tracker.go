@@ -94,3 +94,8 @@ func (t *Tracker) Run(ctx context.Context) error {
 	}
 	return nil
 }
+
+// LastDelay returns the most recent phase delay used by the tracker.
+func (t *Tracker) LastDelay() float64 {
+	return t.lastDelay
+}

@@ -85,7 +85,7 @@ func MonopulseTrack(lastDelay float64, rx0, rx1 []complex64, phaseCal float64, s
 	deltaFFT, _ := FFTAndDBFS(deltaBuf)
 	monoPhase := MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
 	if math.Signbit(monoPhase) {
-		return lastDelay + phaseStep
+		return lastDelay - phaseStep
 	}
-	return lastDelay - phaseStep
+	return lastDelay + phaseStep
 }
