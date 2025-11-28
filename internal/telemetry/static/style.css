@@ -12,6 +12,39 @@ header {
     border-bottom: 1px solid #1f2a3a;
 }
 
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.top-nav {
+    display: inline-flex;
+    gap: 0.5rem;
+    background: #0c1118;
+    padding: 0.5rem;
+    border-radius: 6px;
+    border: 1px solid #1f2a3a;
+}
+
+.top-nav a {
+    color: #cbd5e1;
+    text-decoration: none;
+    padding: 0.4rem 0.75rem;
+    border-radius: 4px;
+}
+
+.top-nav a:hover,
+.top-nav a:focus {
+    background: #1f2a3a;
+}
+
+.top-nav a.active {
+    background: #2f80ed;
+    color: #fff;
+}
+
 main {
         padding: 1rem 1.5rem;
         display: grid;

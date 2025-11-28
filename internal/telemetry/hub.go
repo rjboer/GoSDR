@@ -13,9 +13,24 @@ import (
 // It focuses on user-facing sampling and buffering values that must be guarded
 // by the hub's RWMutex for thread-safe access.
 type Config struct {
-	SampleRateHz int `json:"sampleRateHz"`
-	BufferSize   int `json:"bufferSize"`
-	HistoryLimit int `json:"historyLimit"`
+	SampleRateHz      int     `json:"sampleRateHz"`
+	RxLoHz            float64 `json:"rxLoHz"`
+	ToneOffsetHz      float64 `json:"toneOffsetHz"`
+	SpacingWavelength float64 `json:"spacingWavelength"`
+	NumSamples        int     `json:"numSamples"`
+	BufferSize        int     `json:"bufferSize"`
+	HistoryLimit      int     `json:"historyLimit"`
+	TrackingLength    int     `json:"trackingLength"`
+	PhaseStepDeg      float64 `json:"phaseStepDeg"`
+	ScanStepDeg       float64 `json:"scanStepDeg"`
+	PhaseCalDeg       float64 `json:"phaseCalDeg"`
+	PhaseDeltaDeg     float64 `json:"phaseDeltaDeg"`
+	WarmupBuffers     int     `json:"warmupBuffers"`
+	RxGain0           int     `json:"rxGain0"`
+	RxGain1           int     `json:"rxGain1"`
+	TxGain            int     `json:"txGain"`
+	SDRBackend        string  `json:"sdrBackend"`
+	SDRURI            string  `json:"sdrUri"`
 }
 
 const (
@@ -25,13 +40,32 @@ const (
 	maxBufferSize   = 1 << 20
 	minHistoryLimit = 1
 	maxHistoryLimit = 10_000
+	minNumSamples   = 64
+	maxNumSamples   = 1 << 20
+	minTracking     = 1
+	maxTracking     = 10_000
 )
 
 func defaultConfig() Config {
 	return Config{
-		SampleRateHz: 2_000_000,
-		BufferSize:   4096,
-		HistoryLimit: 500,
+		SampleRateHz:      2_000_000,
+		RxLoHz:            2_300_000_000,
+		ToneOffsetHz:      200_000,
+		SpacingWavelength: 0.5,
+		NumSamples:        512,
+		BufferSize:        4096,
+		HistoryLimit:      500,
+		TrackingLength:    50,
+		PhaseStepDeg:      1,
+		ScanStepDeg:       2,
+		PhaseCalDeg:       0,
+		PhaseDeltaDeg:     35,
+		WarmupBuffers:     3,
+		RxGain0:           0,
+		RxGain1:           0,
+		TxGain:            -10,
+		SDRBackend:        "mock",
+		SDRURI:            "ip:192.168.2.1",
 	}
 }
 
@@ -43,15 +77,51 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	if cfg.SampleRateHz == 0 {
 		cfg.SampleRateHz = base.SampleRateHz
 	}
+	if cfg.RxLoHz == 0 {
+		cfg.RxLoHz = base.RxLoHz
+	}
+	if cfg.ToneOffsetHz == 0 {
+		cfg.ToneOffsetHz = base.ToneOffsetHz
+	}
+	if cfg.SpacingWavelength == 0 {
+		cfg.SpacingWavelength = base.SpacingWavelength
+	}
+	if cfg.NumSamples == 0 {
+		cfg.NumSamples = base.NumSamples
+	}
 	if cfg.BufferSize == 0 {
 		cfg.BufferSize = base.BufferSize
 	}
 	if cfg.HistoryLimit == 0 {
 		cfg.HistoryLimit = base.HistoryLimit
 	}
+	if cfg.TrackingLength == 0 {
+		cfg.TrackingLength = base.TrackingLength
+	}
+	if cfg.PhaseStepDeg == 0 {
+		cfg.PhaseStepDeg = base.PhaseStepDeg
+	}
+	if cfg.ScanStepDeg == 0 {
+		cfg.ScanStepDeg = base.ScanStepDeg
+	}
+	if cfg.WarmupBuffers == 0 {
+		cfg.WarmupBuffers = base.WarmupBuffers
+	}
+	if cfg.SDRBackend == "" {
+		cfg.SDRBackend = base.SDRBackend
+	}
+	if cfg.SDRURI == "" {
+		cfg.SDRURI = base.SDRURI
+	}
 
 	if cfg.SampleRateHz < minSampleRateHz || cfg.SampleRateHz > maxSampleRateHz {
 		return Config{}, fmt.Errorf("sample rate must be between %d and %d Hz", minSampleRateHz, maxSampleRateHz)
+	}
+	if cfg.NumSamples < minNumSamples || cfg.NumSamples > maxNumSamples {
+		return Config{}, fmt.Errorf("num samples must be between %d and %d", minNumSamples, maxNumSamples)
+	}
+	if cfg.NumSamples&(cfg.NumSamples-1) != 0 {
+		return Config{}, errors.New("num samples must be a power of two")
 	}
 	if cfg.BufferSize < minBufferSize || cfg.BufferSize > maxBufferSize {
 		return Config{}, fmt.Errorf("buffer size must be between %d and %d", minBufferSize, maxBufferSize)
@@ -61,6 +131,18 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	}
 	if cfg.HistoryLimit < minHistoryLimit || cfg.HistoryLimit > maxHistoryLimit {
 		return Config{}, fmt.Errorf("history limit must be between %d and %d", minHistoryLimit, maxHistoryLimit)
+	}
+	if cfg.TrackingLength < minTracking || cfg.TrackingLength > maxTracking {
+		return Config{}, fmt.Errorf("tracking length must be between %d and %d", minTracking, maxTracking)
+	}
+	if cfg.PhaseStepDeg <= 0 {
+		return Config{}, errors.New("phase step must be positive")
+	}
+	if cfg.ScanStepDeg <= 0 {
+		return Config{}, errors.New("scan step must be positive")
+	}
+	if cfg.SpacingWavelength <= 0 {
+		return Config{}, errors.New("spacing wavelength must be positive")
 	}
 
 	return cfg, nil
