@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>GoSDR Telemetry</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header>
+    <h1>GoSDR Monopulse Tracker</h1>
+    <p>Live steering angle and peak telemetry</p>
+  </header>
+  <main>
+    <section class="chart-panel">
+      <canvas id="angleChart" aria-label="Angle chart"></canvas>
+    </section>
+    <section class="history">
+      <h2>Latest samples</h2>
+      <table id="historyTable" aria-label="Telemetry history">
+        <thead>
+          <tr><th>Time</th><th>Angle (deg)</th><th>Peak (dBFS)</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

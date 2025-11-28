@@ -14,6 +14,9 @@ import (
 type Config struct {
 	SampleRate        float64
 	RxLO              float64
+	RxGain0           int
+	RxGain1           int
+	TxGain            int
 	ToneOffset        float64
 	NumSamples        int
 	SpacingWavelength float64
@@ -22,6 +25,8 @@ type Config struct {
 	PhaseCal          float64
 	ScanStep          float64
 	PhaseDelta        float64
+	WarmupBuffers     int
+	HistoryLimit      int
 }
 
 // Tracker wires SDR input into the DSP monopulse tracking loop.
@@ -32,6 +37,7 @@ type Tracker struct {
 	startBin  int
 	endBin    int
 	lastDelay float64
+	history   []float64
 }
 
 func NewTracker(backend sdr.SDR, reporter telemetry.Reporter, cfg Config) *Tracker {
@@ -49,9 +55,18 @@ func (t *Tracker) Init(ctx context.Context) error {
 	if t.cfg.PhaseStep == 0 {
 		t.cfg.PhaseStep = 1
 	}
+	if t.cfg.WarmupBuffers == 0 {
+		t.cfg.WarmupBuffers = 3
+	}
+	if t.cfg.HistoryLimit == 0 {
+		t.cfg.HistoryLimit = t.cfg.TrackingLength
+	}
 	return t.sdr.Init(ctx, sdr.Config{
 		SampleRate: t.cfg.SampleRate,
 		RxLO:       t.cfg.RxLO,
+		RxGain0:    t.cfg.RxGain0,
+		RxGain1:    t.cfg.RxGain1,
+		TxGain:     t.cfg.TxGain,
 		ToneOffset: t.cfg.ToneOffset,
 		NumSamples: t.cfg.NumSamples,
 		PhaseDelta: t.cfg.PhaseDelta,
@@ -62,6 +77,11 @@ func (t *Tracker) Init(ctx context.Context) error {
 func (t *Tracker) Run(ctx context.Context) error {
 	if t.cfg.TrackingLength == 0 {
 		t.cfg.TrackingLength = 50
+	}
+	for i := 0; i < t.cfg.WarmupBuffers; i++ {
+		if _, _, err := t.sdr.RX(ctx); err != nil {
+			return err
+		}
 	}
 	for i := 0; i < t.cfg.TrackingLength; i++ {
 		rx0, rx1, err := t.sdr.RX(ctx)
@@ -75,6 +95,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 		if i == 0 {
 			delay, theta, peak := dsp.CoarseScan(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength)
 			t.lastDelay = delay
+			t.appendHistory(theta)
 			if t.reporter != nil {
 				t.reporter.Report(theta, peak)
 			}
@@ -87,6 +108,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 		}
 		t.lastDelay = dsp.MonopulseTrack(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep)
 		theta := dsp.PhaseToTheta(t.lastDelay, t.cfg.RxLO, t.cfg.SpacingWavelength)
+		t.appendHistory(theta)
 		if t.reporter != nil {
 			t.reporter.Report(theta, 0)
 		}
@@ -98,4 +120,18 @@ func (t *Tracker) Run(ctx context.Context) error {
 // LastDelay returns the most recent phase delay used by the tracker.
 func (t *Tracker) LastDelay() float64 {
 	return t.lastDelay
+}
+
+// AngleHistory returns the collected steering angles from coarse scan and monopulse updates.
+func (t *Tracker) AngleHistory() []float64 {
+	out := make([]float64, len(t.history))
+	copy(out, t.history)
+	return out
+}
+
+func (t *Tracker) appendHistory(theta float64) {
+	t.history = append(t.history, theta)
+	if len(t.history) > t.cfg.HistoryLimit && t.cfg.HistoryLimit > 0 {
+		t.history = t.history[len(t.history)-t.cfg.HistoryLimit:]
+	}
 }
