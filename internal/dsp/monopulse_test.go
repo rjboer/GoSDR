@@ -60,8 +60,11 @@ func TestCoarseScanFindsDelay(t *testing.T) {
 func TestMonopulseTrackStep(t *testing.T) {
 	rx0, rx1 := tonePair(256, 200e3, 2e6, 20)
 	start, end := SignalBinRange(len(rx0), 2e6, 200e3)
-	next := MonopulseTrack(-10, rx0, rx1, 0, start, end, 1)
+	next, peak := MonopulseTrack(-10, rx0, rx1, 0, start, end, 1)
 	if next >= -10 {
 		t.Fatalf("expected negative step toward phase delta got %.2f", next)
+	}
+	if peak == 0 {
+		t.Fatalf("expected non-zero peak telemetry")
 	}
 }
