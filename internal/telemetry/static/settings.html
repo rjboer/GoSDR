@@ -5,39 +5,153 @@
   <meta charset="utf-8" />
   <title>GoSDR Settings</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/settings.css" />
 </head>
 
 <body>
-  <header>
-    <h1>GoSDR Telemetry Settings</h1>
-    <p>View and update runtime configuration</p>
+  <header class="page-header">
+    <div>
+      <h1>GoSDR Settings</h1>
+      <p>Configure RF, timing, and SDR backend parameters</p>
+    </div>
+    <nav class="top-nav" aria-label="Primary">
+      <a href="/">Telemetry</a>
+      <a class="active" href="/settings">Settings</a>
+    </nav>
   </header>
-  <main class="settings-layout">
-    <section class="settings-panel">
-      <h2>Configuration</h2>
-      <form id="configForm">
-        <div class="form-field">
-          <label for="sampleRateHz">Sample rate (Hz)</label>
-          <input id="sampleRateHz" name="sampleRateHz" type="number" min="1000" step="1000" required>
-          <small>Valid range: 1,000 - 61,440,000 Hz</small>
+
+  <main class="settings-page">
+    <form id="configForm" class="settings-form">
+      <section class="card">
+        <div class="section-heading">
+          <h2>RF</h2>
+          <p>Front-end and signal parameters</p>
         </div>
-        <div class="form-field">
-          <label for="bufferSize">Buffer size</label>
-          <input id="bufferSize" name="bufferSize" type="number" min="64" step="64" required>
-          <small>Power-of-two values between 64 and 1,048,576.</small>
+        <div class="field-grid">
+          <label class="field" for="sampleRateHz">
+            <span>Sample rate (Hz)</span>
+            <input id="sampleRateHz" name="sampleRateHz" type="number" min="1000" max="61440000" step="1000" required>
+            <small>1 kHz – 61.44 MHz</small>
+          </label>
+          <label class="field" for="rxLoHz">
+            <span>RX LO (Hz)</span>
+            <input id="rxLoHz" name="rxLoHz" type="number" min="1" step="1000" required>
+            <small>Carrier center frequency</small>
+          </label>
+          <label class="field" for="toneOffsetHz">
+            <span>Tone offset (Hz)</span>
+            <input id="toneOffsetHz" name="toneOffsetHz" type="number" min="-10000000" max="10000000" step="1000" required>
+            <small>Offset from LO for the transmitted tone</small>
+          </label>
+          <label class="field" for="spacingWavelength">
+            <span>Spacing (wavelengths)</span>
+            <input id="spacingWavelength" name="spacingWavelength" type="number" min="0.1" max="2" step="0.05" required>
+            <small>Antenna spacing in wavelengths</small>
+          </label>
+          <label class="field" for="rxGain0">
+            <span>RX gain ch0 (dB)</span>
+            <input id="rxGain0" name="rxGain0" type="number" step="1">
+          </label>
+          <label class="field" for="rxGain1">
+            <span>RX gain ch1 (dB)</span>
+            <input id="rxGain1" name="rxGain1" type="number" step="1">
+          </label>
+          <label class="field" for="txGain">
+            <span>TX gain (dB)</span>
+            <input id="txGain" name="txGain" type="number" step="1">
+          </label>
         </div>
-        <div class="form-field">
-          <label for="historyLimit">History limit</label>
-          <input id="historyLimit" name="historyLimit" type="number" min="1" max="10000" required>
-          <small>Number of telemetry samples retained server-side.</small>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <h2>Timing & buffering</h2>
+          <p>Capture windows and history retention</p>
         </div>
-        <div class="form-actions">
-          <button type="submit">Update configuration</button>
-          <span id="status" role="status" aria-live="polite"></span>
+        <div class="field-grid">
+          <label class="field" for="numSamples">
+            <span>FFT size (samples)</span>
+            <input id="numSamples" name="numSamples" type="number" min="64" max="1048576" step="64" required>
+            <small>Power-of-two sample window</small>
+          </label>
+          <label class="field" for="bufferSize">
+            <span>Buffer size</span>
+            <input id="bufferSize" name="bufferSize" type="number" min="64" max="1048576" step="64" required>
+            <small>Power-of-two streaming buffer</small>
+          </label>
+          <label class="field" for="warmupBuffers">
+            <span>Warmup buffers</span>
+            <input id="warmupBuffers" name="warmupBuffers" type="number" min="0" max="100" step="1" required>
+            <small>Discarded buffers before tracking</small>
+          </label>
+          <label class="field" for="historyLimit">
+            <span>History limit</span>
+            <input id="historyLimit" name="historyLimit" type="number" min="1" max="10000" step="1" required>
+            <small>Telemetry samples retained</small>
+          </label>
         </div>
-      </form>
-    </section>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <h2>Tracking</h2>
+          <p>Monopulse scan and loop parameters</p>
+        </div>
+        <div class="field-grid">
+          <label class="field" for="trackingLength">
+            <span>Tracking iterations</span>
+            <input id="trackingLength" name="trackingLength" type="number" min="1" max="10000" step="1" required>
+            <small>Loop iterations to run</small>
+          </label>
+          <label class="field" for="phaseStepDeg">
+            <span>Phase step (deg)</span>
+            <input id="phaseStepDeg" name="phaseStepDeg" type="number" min="0.01" max="90" step="0.1" required>
+          </label>
+          <label class="field" for="scanStepDeg">
+            <span>Scan step (deg)</span>
+            <input id="scanStepDeg" name="scanStepDeg" type="number" min="0.01" max="90" step="0.1" required>
+          </label>
+          <label class="field" for="phaseCalDeg">
+            <span>Phase calibration (deg)</span>
+            <input id="phaseCalDeg" name="phaseCalDeg" type="number" step="0.1" required>
+          </label>
+          <label class="field" for="phaseDeltaDeg">
+            <span>Phase delta (deg)</span>
+            <input id="phaseDeltaDeg" name="phaseDeltaDeg" type="number" step="0.1" required>
+            <small>Initial channel offset estimate</small>
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <h2>SDR backend</h2>
+          <p>Radio selection and connection target</p>
+        </div>
+        <div class="field-grid">
+          <label class="field" for="sdrBackend">
+            <span>Backend</span>
+            <select id="sdrBackend" name="sdrBackend">
+              <option value="mock">Mock</option>
+              <option value="pluto">Pluto / AD9361</option>
+            </select>
+          </label>
+          <label class="field" for="sdrUri">
+            <span>Backend URI</span>
+            <input id="sdrUri" name="sdrUri" type="text" placeholder="ip:192.168.2.1">
+            <small>Connection string passed to the backend</small>
+          </label>
+        </div>
+      </section>
+
+      <div class="form-actions">
+        <button type="submit">Save changes</button>
+        <button type="button" id="resetBtn" class="ghost">Reset to defaults</button>
+        <span id="status" class="status" role="status" aria-live="polite"></span>
+      </div>
+    </form>
   </main>
+
   <script src="/static/settings.js"></script>
 </body>
 
