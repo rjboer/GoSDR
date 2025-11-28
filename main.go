@@ -12,6 +12,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer func() {
+		if err := c.Close(); err != nil {
+			log.Printf("failed to close IIOD client: %v", err)
+		}
+	}()
 
 	reply, err := c.Send("VERSION")
 	if err != nil {
