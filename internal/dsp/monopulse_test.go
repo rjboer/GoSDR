@@ -21,31 +21,47 @@ func tonePair(num int, freqOffset float64, sampleRate float64, phaseDelta float6
 }
 
 func TestMonopulsePhase(t *testing.T) {
-	sumFFT := []complex128{1, 1}
-	deltaFFT := []complex128{1i, 1i}
-	phase := MonopulsePhase(sumFFT, deltaFFT, 0, 2)
-	if math.Abs(phase-math.Pi/2) > 1e-9 {
-		t.Fatalf("expected pi/2 got %f", phase)
+	tests := []struct {
+		name       string
+		sumFFT     []complex128
+		deltaFFT   []complex128
+		start, end int
+		expected   float64
+	}{
+		{name: "quadrature", sumFFT: []complex128{1, 1}, deltaFFT: []complex128{1i, 1i}, start: 0, end: 2, expected: math.Pi / 2},
+		{name: "neg_quadrature", sumFFT: []complex128{1i, 1i}, deltaFFT: []complex128{1, 1}, start: 0, end: 2, expected: -math.Pi / 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			phase := MonopulsePhase(tt.sumFFT, tt.deltaFFT, tt.start, tt.end)
+			if math.Abs(phase-tt.expected) > 1e-9 {
+				t.Fatalf("expected %f got %f", tt.expected, phase)
+			}
+		})
 	}
 }
 
 func TestCoarseScanFindsDelay(t *testing.T) {
-	rx0, rx1 := tonePair(512, 200e3, 2e6, 45)
+	rx0, rx1 := tonePair(512, 200e3, 2e6, 30)
 	start, end := SignalBinRange(len(rx0), 2e6, 200e3)
-	delay, theta, _ := CoarseScan(rx0, rx1, 0, start, end, 5, 2.3e9, 0.5)
-	if math.Abs(delay+45) > 5 {
-		t.Fatalf("expected delay near -45, got %.2f", delay)
+	delay, theta, peak := CoarseScan(rx0, rx1, 0, start, end, 2, 2.3e9, 0.5)
+	if math.Abs(delay+30) > 2 {
+		t.Fatalf("expected delay near -30, got %.2f", delay)
 	}
 	if math.Abs(theta-PhaseToTheta(delay, 2.3e9, 0.5)) > 1e-6 {
 		t.Fatalf("theta mismatch")
+	}
+	if peak <= -math.MaxFloat64/4 {
+		t.Fatalf("peak was not updated")
 	}
 }
 
 func TestMonopulseTrackStep(t *testing.T) {
 	rx0, rx1 := tonePair(256, 200e3, 2e6, 20)
 	start, end := SignalBinRange(len(rx0), 2e6, 200e3)
-	next := MonopulseTrack(0, rx0, rx1, 0, start, end, 1)
-	if math.Abs(next) < 0.5 || math.Abs(next) > 5 {
-		t.Fatalf("unexpected next delay %.2f", next)
+	next := MonopulseTrack(-10, rx0, rx1, 0, start, end, 1)
+	if next >= -10 {
+		t.Fatalf("expected negative step toward phase delta got %.2f", next)
 	}
 }
