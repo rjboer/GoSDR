@@ -3,16 +3,43 @@ package iiod
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
 
+// Client implements a small subset of the IIOD TCP protocol used by libiio.
+//
+// Typical usage:
+//
+//	client, err := iiod.Dial("192.168.2.1:30431")
+//	if err != nil {
+//	        // handle error
+//	}
+//	info, _ := client.GetContextInfo()
+//	devices, _ := client.ListDevices()
+//	channels, _ := client.GetChannels(devices[0])
+//	_, _ = client.CreateBuffer(devices[0], 1024)
+//	_ = client.WriteAttr(devices[0], "", "sampling_frequency", "1000000")
+//	_, _ = client.ReadAttr(devices[0], "", "sampling_frequency")
+//
+// The methods build protocol-compliant command strings and rely on the shared
+// send helper to validate responses.
 type Client struct {
 	conn   net.Conn
 	reader *bufio.Reader
 }
 
+// ContextInfo describes the remote IIOD context reported by the server.
+type ContextInfo struct {
+	Major       int
+	Minor       int
+	Description string
+}
+
+// Dial opens a TCP connection to an IIOD server.
 func Dial(addr string) (*Client, error) {
 	dialer := net.Dialer{Timeout: 5 * time.Second}
 	c, err := dialer.Dial("tcp", addr)
@@ -26,42 +53,163 @@ func Dial(addr string) (*Client, error) {
 	}, nil
 }
 
-// Close shuts down the underlying network connection.
-func (c *Client) Close() error {
-	if c.conn == nil {
-		return nil
+// GetContextInfo queries the remote IIOD context version and description.
+func (c *Client) GetContextInfo() (ContextInfo, error) {
+	payload, err := c.send("VERSION")
+	if err != nil {
+		return ContextInfo{}, err
 	}
 
-	err := c.conn.Close()
-	c.conn = nil
+	parts := strings.Fields(payload)
+	if len(parts) < 2 {
+		return ContextInfo{}, fmt.Errorf("unexpected context info: %q", payload)
+	}
+
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return ContextInfo{}, fmt.Errorf("invalid major version: %w", err)
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return ContextInfo{}, fmt.Errorf("invalid minor version: %w", err)
+	}
+
+	description := ""
+	if len(parts) > 2 {
+		description = strings.Join(parts[2:], " ")
+	}
+
+	return ContextInfo{Major: major, Minor: minor, Description: description}, nil
+}
+
+// ListDevices returns the set of device identifiers known by the server.
+func (c *Client) ListDevices() ([]string, error) {
+	payload, err := c.send("LIST_DEVICES")
+	if err != nil {
+		return nil, err
+	}
+	if payload == "" {
+		return nil, nil
+	}
+	return strings.Fields(payload), nil
+}
+
+// GetChannels returns channel names for a given device.
+func (c *Client) GetChannels(device string) ([]string, error) {
+	if strings.TrimSpace(device) == "" {
+		return nil, fmt.Errorf("device name is required")
+	}
+
+	payload, err := c.send(fmt.Sprintf("LIST_CHANNELS %s", device))
+	if err != nil {
+		return nil, err
+	}
+	if payload == "" {
+		return nil, nil
+	}
+	return strings.Fields(payload), nil
+}
+
+// CreateBuffer allocates a remote buffer for the given device and sample count.
+func (c *Client) CreateBuffer(device string, samples int) (string, error) {
+	if strings.TrimSpace(device) == "" {
+		return "", fmt.Errorf("device name is required")
+	}
+	if samples <= 0 {
+		return "", fmt.Errorf("sample count must be positive")
+	}
+
+	return c.send(fmt.Sprintf("CREATE_BUFFER %s %d", device, samples))
+}
+
+// ReadAttr reads a device or channel attribute. An empty channel targets a
+// device attribute; otherwise the attribute is read from the named channel.
+func (c *Client) ReadAttr(device, channel, attr string) (string, error) {
+	if strings.TrimSpace(device) == "" {
+		return "", fmt.Errorf("device name is required")
+	}
+	if strings.TrimSpace(attr) == "" {
+		return "", fmt.Errorf("attribute name is required")
+	}
+
+	target := fmt.Sprintf("%s %s", device, attr)
+	if channel != "" {
+		target = fmt.Sprintf("%s %s %s", device, channel, attr)
+	}
+
+	return c.send(fmt.Sprintf("READ_ATTR %s", target))
+}
+
+// WriteAttr writes a device or channel attribute value. An empty channel targets
+// a device attribute; otherwise the attribute is written to the named channel.
+func (c *Client) WriteAttr(device, channel, attr, value string) error {
+	if strings.TrimSpace(device) == "" {
+		return fmt.Errorf("device name is required")
+	}
+	if strings.TrimSpace(attr) == "" {
+		return fmt.Errorf("attribute name is required")
+	}
+
+	target := fmt.Sprintf("%s %s %s", device, attr, value)
+	if channel != "" {
+		target = fmt.Sprintf("%s %s %s %s", device, channel, attr, value)
+	}
+
+	_, err := c.send(fmt.Sprintf("WRITE_ATTR %s", target))
 	return err
 }
 
-// Send issues a command to the server and returns its response payload.
-func (c *Client) Send(cmd string) (string, error) {
-	return c.send(cmd)
-}
-
 func (c *Client) send(cmd string) (string, error) {
-	fmt.Fprintf(c.conn, "%s\n", cmd)
+	if c == nil || c.conn == nil || c.reader == nil {
+		return "", fmt.Errorf("client is not connected")
+	}
+	if strings.TrimSpace(cmd) == "" {
+		return "", fmt.Errorf("command is required")
+	}
+
+	if _, err := fmt.Fprintf(c.conn, "%s\n", cmd); err != nil {
+		return "", err
+	}
+
 	line, err := c.reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
 	line = strings.TrimSpace(line)
 
-	parts := strings.SplitN(line, " ", 3)
-	if len(parts) < 2 {
-		return "", fmt.Errorf("malformed reply: %s", line)
+	parts := strings.Fields(line)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("malformed reply header: %q", line)
 	}
 
-	status := parts[0]
-	if status != "0" {
-		return "", fmt.Errorf("iiod error: %s", line)
+	status, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("invalid status code: %w", err)
+	}
+	length, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("invalid payload length: %w", err)
+	}
+	if length < 0 {
+		return "", fmt.Errorf("negative payload length: %d", length)
 	}
 
-	if len(parts) >= 3 {
-		return parts[2], nil
+	var payload string
+	if length > 0 {
+		buf := make([]byte, length)
+		if _, err := io.ReadFull(c.reader, buf); err != nil {
+			return "", err
+		}
+		payload = string(buf)
 	}
-	return "", nil
+
+	if status != 0 {
+		payload = strings.TrimSpace(payload)
+		if payload != "" {
+			return "", fmt.Errorf("iiod error %d: %s", status, payload)
+		}
+		return "", fmt.Errorf("iiod error %d", status)
+	}
+
+	return strings.TrimSpace(payload), nil
 }
