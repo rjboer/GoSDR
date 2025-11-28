@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <title>GoSDR Settings</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+
+<body>
+  <header>
+    <h1>GoSDR Telemetry Settings</h1>
+    <p>View and update runtime configuration</p>
+  </header>
+  <main class="settings-layout">
+    <section class="settings-panel">
+      <h2>Configuration</h2>
+      <form id="configForm">
+        <div class="form-field">
+          <label for="sampleRateHz">Sample rate (Hz)</label>
+          <input id="sampleRateHz" name="sampleRateHz" type="number" min="1000" step="1000" required>
+          <small>Valid range: 1,000 - 61,440,000 Hz</small>
+        </div>
+        <div class="form-field">
+          <label for="bufferSize">Buffer size</label>
+          <input id="bufferSize" name="bufferSize" type="number" min="64" step="64" required>
+          <small>Power-of-two values between 64 and 1,048,576.</small>
+        </div>
+        <div class="form-field">
+          <label for="historyLimit">History limit</label>
+          <input id="historyLimit" name="historyLimit" type="number" min="1" max="10000" required>
+          <small>Number of telemetry samples retained server-side.</small>
+        </div>
+        <div class="form-actions">
+          <button type="submit">Update configuration</button>
+          <span id="status" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script src="/static/settings.js"></script>
+</body>
+
+</html>

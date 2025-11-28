@@ -23,6 +23,11 @@ func NewWebServer(addr string, hub *Hub) *WebServer {
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 	mux.HandleFunc("/api/history", hub.handleHistory)
 	mux.HandleFunc("/api/live", hub.handleLive)
+	mux.HandleFunc("/api/config", hub.handleGetConfig)
+	mux.HandleFunc("/api/config/update", hub.handleSetConfig)
+	mux.HandleFunc("/settings", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, staticFiles, "static/settings.html")
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, staticFiles, "static/index.html")
 	})

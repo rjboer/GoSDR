@@ -13,10 +13,16 @@ header {
 }
 
 main {
-    padding: 1rem 1.5rem;
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: 2fr 1fr;
+        padding: 1rem 1.5rem;
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: 2fr 1fr;
+}
+
+.settings-layout {
+        display: grid;
+        gap: 1rem;
+        padding: 1rem 1.5rem;
 }
 
 .chart-grid {
@@ -76,8 +82,8 @@ td {
 }
 
 th {
-    color: #9fb3c8;
-    font-weight: 600;
+        color: #9fb3c8;
+        font-weight: 600;
 }
 
 tr:nth-child(odd) {
@@ -85,7 +91,72 @@ tr:nth-child(odd) {
 }
 
 @media (max-width: 900px) {
-    main {
-        grid-template-columns: 1fr;
-    }
+        main {
+                grid-template-columns: 1fr;
+        }
+}
+
+.settings-panel {
+        background: #121926;
+        padding: 1rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        max-width: 600px;
+}
+
+.settings-panel h2 {
+        margin-top: 0;
+}
+
+.form-field {
+        display: flex;
+        flex-direction: column;
+        margin-bottom: 0.75rem;
+}
+
+.form-field label {
+        margin-bottom: 0.35rem;
+        color: #cbd5e1;
+}
+
+.form-field input {
+        padding: 0.5rem;
+        border-radius: 4px;
+        border: 1px solid #1f2a3a;
+        background: #0c1118;
+        color: #e4e9f0;
+}
+
+.form-field small {
+        color: #9fb3c8;
+        margin-top: 0.25rem;
+}
+
+.form-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1rem;
+}
+
+.form-actions button {
+        padding: 0.6rem 1rem;
+        border: none;
+        border-radius: 4px;
+        background: #2f80ed;
+        color: #fff;
+        cursor: pointer;
+}
+
+.form-actions button:hover {
+        background: #256bc0;
+}
+
+.status {
+        font-size: 0.95rem;
+        color: #9fb3c8;
+}
+
+.status.error {
+        color: #ef4444;
 }
