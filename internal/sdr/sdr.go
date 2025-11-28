@@ -8,6 +8,9 @@ import (
 type Config struct {
 	SampleRate float64
 	RxLO       float64
+	RxGain0    int
+	RxGain1    int
+	TxGain     int
 	ToneOffset float64
 	NumSamples int
 	PhaseDelta float64 // phase offset between channels in degrees

@@ -32,6 +32,8 @@ func TestTrackerConvergesWithMock(t *testing.T) {
 		PhaseStep:         1,
 		ScanStep:          2,
 		PhaseDelta:        35,
+		WarmupBuffers:     0,
+		HistoryLimit:      20,
 	}
 	tracker := NewTracker(backend, reporter, cfg)
 
@@ -53,5 +55,9 @@ func TestTrackerConvergesWithMock(t *testing.T) {
 	finalDelay := tracker.LastDelay()
 	if math.Abs(finalDelay-expectedDelay) > 5 {
 		t.Fatalf("expected delay near %.2f got %.2f", expectedDelay, finalDelay)
+	}
+
+	if got := len(tracker.AngleHistory()); got != cfg.TrackingLength {
+		t.Fatalf("expected %d history entries got %d", cfg.TrackingLength, got)
 	}
 }
