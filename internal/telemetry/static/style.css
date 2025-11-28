@@ -1,12 +1,91 @@
-body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #0c1118; color: #e4e9f0; }
-header { padding: 1rem 1.5rem; background: #121926; border-bottom: 1px solid #1f2a3a; }
-main { padding: 1rem 1.5rem; display: grid; gap: 1rem; grid-template-columns: 2fr 1fr; }
-.chart-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-.chart-panel, .history { background: #121926; padding: 1rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-.chart-panel h2 { margin: 0 0 0.5rem; color: #cbd5e1; }
-.history h2 { margin-top: 0; }
-table { width: 100%; border-collapse: collapse; }
-th, td { padding: 0.35rem 0.5rem; text-align: left; border-bottom: 1px solid #1f2a3a; }
-th { color: #9fb3c8; font-weight: 600; }
-tr:nth-child(odd) { background: #0f1624; }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background: #0c1118;
+    color: #e4e9f0;
+}
+
+header {
+    padding: 1rem 1.5rem;
+    background: #121926;
+    border-bottom: 1px solid #1f2a3a;
+}
+
+main {
+    padding: 1rem 1.5rem;
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: 2fr 1fr;
+}
+
+.chart-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+}
+
+.radar-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#radarCanvas {
+    background: #000000;
+    border: 2px solid #00ff00;
+    border-radius: 4px;
+    margin: 0.5rem 0;
+}
+
+.radar-info {
+    font-family: 'Courier New', monospace;
+    font-size: 1.1rem;
+    color: #00ff00;
+    font-weight: bold;
+    margin-top: 0.5rem;
+}
+
+.chart-panel,
+.history {
+    background: #121926;
+    padding: 1rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.chart-panel h2 {
+    margin: 0 0 0.5rem;
+    color: #cbd5e1;
+}
+
+.history h2 {
+    margin-top: 0;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+    border-bottom: 1px solid #1f2a3a;
+}
+
+th {
+    color: #9fb3c8;
+    font-weight: 600;
+}
+
+tr:nth-child(odd) {
+    background: #0f1624;
+}
+
+@media (max-width: 900px) {
+    main {
+        grid-template-columns: 1fr;
+    }
+}
