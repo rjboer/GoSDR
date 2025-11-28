@@ -46,7 +46,14 @@ func (c *Client) Close() error {
 		return fmt.Errorf("client is not connected")
 	}
 
-	return c.conn.Close()
+	err := c.conn.Close()
+	c.conn = nil
+	c.reader = nil
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ContextInfo describes the remote IIOD context reported by the server.
