@@ -51,3 +51,9 @@ This Go project recreates that behaviour with an emphasis on:
 │   └── telemetry/        # logging / optional HTTP+WS visualisation
 ├── agent.md              # instructions and roadmap for an AI/dev agent
 └── README.md             # this file
+
+<img width="1400" height="1272" alt="image" src="https://github.com/user-attachments/assets/63238494-d7f5-4027-9abf-fd5202eeda12" />
+
+
+
+
