@@ -3,6 +3,7 @@ package iiod
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -156,25 +157,56 @@ func (c *Client) WriteAttr(device, channel, attr, value string) error {
 }
 
 func (c *Client) send(cmd string) (string, error) {
-	fmt.Fprintf(c.conn, "%s\n", cmd)
+	if c == nil || c.conn == nil || c.reader == nil {
+		return "", fmt.Errorf("client is not connected")
+	}
+	if strings.TrimSpace(cmd) == "" {
+		return "", fmt.Errorf("command is required")
+	}
+
+	if _, err := fmt.Fprintf(c.conn, "%s\n", cmd); err != nil {
+		return "", err
+	}
+
 	line, err := c.reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
 	line = strings.TrimSpace(line)
 
-	parts := strings.SplitN(line, " ", 3)
-	if len(parts) < 2 {
-		return "", fmt.Errorf("malformed reply: %s", line)
+	parts := strings.Fields(line)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("malformed reply header: %q", line)
 	}
 
-	status := parts[0]
-	if status != "0" {
-		return "", fmt.Errorf("iiod error: %s", line)
+	status, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("invalid status code: %w", err)
+	}
+	length, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("invalid payload length: %w", err)
+	}
+	if length < 0 {
+		return "", fmt.Errorf("negative payload length: %d", length)
 	}
 
-	if len(parts) >= 3 {
-		return parts[2], nil
+	var payload string
+	if length > 0 {
+		buf := make([]byte, length)
+		if _, err := io.ReadFull(c.reader, buf); err != nil {
+			return "", err
+		}
+		payload = string(buf)
 	}
-	return "", nil
+
+	if status != 0 {
+		payload = strings.TrimSpace(payload)
+		if payload != "" {
+			return "", fmt.Errorf("iiod error %d: %s", status, payload)
+		}
+		return "", fmt.Errorf("iiod error %d", status)
+	}
+
+	return strings.TrimSpace(payload), nil
 }
