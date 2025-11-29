@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,8 +9,10 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,17 +49,18 @@ type Config struct {
 }
 
 const (
-	minSampleRateHz = 1_000
-	maxSampleRateHz = 61_440_000
-	minBufferSize   = 64
-	maxBufferSize   = 1 << 20
-	minHistoryLimit = 1
-	maxHistoryLimit = 10_000
-	minNumSamples   = 64
-	maxNumSamples   = 1 << 20
-	minTracking     = 1
-	maxTracking     = 10_000
-	configFilePath  = "config.json"
+	minSampleRateHz        = 1_000
+	maxSampleRateHz        = 61_440_000
+	minBufferSize          = 64
+	maxBufferSize          = 1 << 20
+	minHistoryLimit        = 1
+	maxHistoryLimit        = 10_000
+	minNumSamples          = 64
+	maxNumSamples          = 1 << 20
+	minTracking            = 1
+	maxTracking            = 10_000
+	configFilePath         = "config.json"
+	defaultMetricsInterval = 2 * time.Second
 )
 
 type persistentConfig struct {
@@ -379,7 +383,9 @@ type ProcessMetrics struct {
 	MemoryAlloc      uint64        `json:"memoryAllocBytes"`
 	MemoryTotalAlloc uint64        `json:"memoryTotalAllocBytes"`
 	MemorySys        uint64        `json:"memorySysBytes"`
+	MemoryRSS        uint64        `json:"memoryRssBytes"`
 	NumGoroutine     int           `json:"numGoroutine"`
+	NumThreads       int           `json:"numThreads"`
 	CPUPercent       float64       `json:"cpuPercent"`
 	Samples          int64         `json:"samples"`
 	UpdateRateHz     float64       `json:"updateRateHz"`
@@ -413,6 +419,7 @@ type DiagnosticEvent struct {
 
 // Diagnostics bundles runtime metrics and spectrum data.
 type Diagnostics struct {
+	Version  string            `json:"version"`
 	Process  ProcessMetrics    `json:"process"`
 	Spectrum SpectrumSnapshot  `json:"spectrum"`
 	Signal   SignalQuality     `json:"signal"`
@@ -423,8 +430,18 @@ type Diagnostics struct {
 // HealthStatus surfaces overall process health.
 type HealthStatus struct {
 	Status  string         `json:"status"`
+	Version string         `json:"version"`
 	Process ProcessMetrics `json:"process"`
 	Reason  string         `json:"reason,omitempty"`
+	Checks  []HealthCheck  `json:"checks,omitempty"`
+}
+
+// HealthCheck captures the outcome of a recent health probe.
+type HealthCheck struct {
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	Detail     string    `json:"detail,omitempty"`
+	ObservedAt time.Time `json:"observedAt"`
 }
 
 // Hub collects history and fan-outs telemetry updates to subscribers.
@@ -449,6 +466,7 @@ type Hub struct {
 	events         []DiagnosticEvent
 	eventLimit     int
 	lastLockState  LockState
+	version        string
 }
 
 // NewHub builds a telemetry hub with the provided history limit.
@@ -477,10 +495,12 @@ func NewHub(historyLimit int, logger logging.Logger) *Hub {
 		logger:       logger.With(logging.Field{Key: "subsystem", Value: "telemetry"}),
 		startTime:    time.Now(),
 		eventLimit:   100,
+		version:      resolveVersion(),
 	}
 	h.mockSpectrum = mockSpectrumSnapshot()
 	h.process = h.collectProcessMetrics()
 	h.recordEvent("info", "telemetry hub initialized")
+	go h.runProcessSampler(defaultMetricsInterval)
 	return h
 }
 
@@ -609,9 +629,24 @@ func (h *Hub) applyConfig(cfg Config) {
 	h.recordEventLocked("info", "configuration updated")
 }
 
+func (h *Hub) runProcessSampler(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	h.collectProcessMetrics()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		h.collectProcessMetrics()
+	}
+}
+
 func (h *Hub) collectProcessMetrics() ProcessMetrics {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
+	rss := readRSSBytes()
+	threads := readThreadCount()
 
 	h.mu.RLock()
 	start := h.startTime
@@ -652,7 +687,9 @@ func (h *Hub) collectProcessMetrics() ProcessMetrics {
 		MemoryAlloc:      mem.Alloc,
 		MemoryTotalAlloc: mem.TotalAlloc,
 		MemorySys:        mem.Sys,
+		MemoryRSS:        rss,
 		NumGoroutine:     runtime.NumGoroutine(),
+		NumThreads:       threads,
 		CPUPercent:       cpuPercent,
 		Samples:          samples,
 		UpdateRateHz:     updateRate,
@@ -668,6 +705,12 @@ func (h *Hub) collectProcessMetrics() ProcessMetrics {
 	h.mu.Unlock()
 
 	return metrics
+}
+
+func (h *Hub) processSnapshot() ProcessMetrics {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.process
 }
 
 func (h *Hub) spectrumSnapshot() SpectrumSnapshot {
@@ -711,6 +754,64 @@ func readProcessCPUSeconds() float64 {
 	return 0
 }
 
+func readThreadCount() int {
+	file, err := os.Open("/proc/self/status")
+	if err != nil {
+		return runtime.GOMAXPROCS(0)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "Threads:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if threads, err := strconv.Atoi(fields[1]); err == nil {
+					return threads
+				}
+			}
+			break
+		}
+	}
+	return runtime.GOMAXPROCS(0)
+}
+
+func readRSSBytes() uint64 {
+	file, err := os.Open("/proc/self/status")
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "VmRSS:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if kb, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
+					return kb * 1024
+				}
+			}
+			break
+		}
+	}
+	return 0
+}
+
+func resolveVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return info.Main.Version
+		}
+		if info.Main.Path != "" {
+			return info.Main.Path
+		}
+	}
+	return "dev"
+}
+
 func estimateNoiseFloor(bins []float64) float64 {
 	if len(bins) == 0 {
 		return 0
@@ -750,6 +851,83 @@ func (h *Hub) recentEvents() []DiagnosticEvent {
 	out := make([]DiagnosticEvent, len(h.events))
 	copy(out, h.events)
 	return out
+}
+
+func severityRank(status string) int {
+	switch status {
+	case "critical":
+		return 3
+	case "degraded":
+		return 2
+	case "warn":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func maxStatus(current, candidate string) string {
+	if severityRank(candidate) > severityRank(current) {
+		return candidate
+	}
+	return current
+}
+
+func healthSeverity(value float64, warn float64, critical float64) string {
+	if value >= critical {
+		return "critical"
+	}
+	if value >= warn {
+		return "warn"
+	}
+	return "ok"
+}
+
+func (h *Hub) healthStatus() HealthStatus {
+	process := h.collectProcessMetrics()
+	spectrum := h.spectrumSnapshot()
+	now := time.Now()
+	checks := []HealthCheck{}
+	status := "ok"
+	reason := ""
+
+	addCheck := func(name, s, detail string) {
+		checks = append(checks, HealthCheck{Name: name, Status: s, Detail: detail, ObservedAt: now})
+		newStatus := maxStatus(status, s)
+		if newStatus != status {
+			status = newStatus
+			reason = detail
+		} else if reason == "" && s != "ok" {
+			reason = detail
+		}
+	}
+
+	if spectrum.Source == "mock" {
+		addCheck("data-source", "degraded", "serving mock diagnostics")
+	} else {
+		addCheck("data-source", "ok", "live spectrum data")
+	}
+
+	cpuStatus := healthSeverity(process.CPUPercent, 75, 90)
+	addCheck("cpu", cpuStatus, fmt.Sprintf("CPU %.1f%%", process.CPUPercent))
+
+	memMB := float64(process.MemoryAlloc) / (1024 * 1024)
+	memStatus := healthSeverity(memMB, 512, 800)
+	addCheck("memory", memStatus, fmt.Sprintf("alloc %.1f MB", memMB))
+
+	if process.MemoryRSS > 0 {
+		rssMB := float64(process.MemoryRSS) / (1024 * 1024)
+		rssStatus := healthSeverity(rssMB, 600, 900)
+		addCheck("rss", rssStatus, fmt.Sprintf("rss %.1f MB", rssMB))
+	}
+
+	threadStatus := healthSeverity(float64(process.NumThreads), 150, 250)
+	addCheck("threads", threadStatus, fmt.Sprintf("%d os threads", process.NumThreads))
+
+	goStatus := healthSeverity(float64(process.NumGoroutine), 500, 1000)
+	addCheck("goroutines", goStatus, fmt.Sprintf("%d goroutines", process.NumGoroutine))
+
+	return HealthStatus{Status: status, Version: h.version, Process: process, Reason: reason, Checks: checks}
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
@@ -862,6 +1040,7 @@ func (h *Hub) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	h.mu.RUnlock()
 
 	response := Diagnostics{
+		Version:  h.version,
 		Process:  process,
 		Spectrum: spectrum,
 		Signal:   signal,
@@ -873,22 +1052,76 @@ func (h *Hub) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
+func (h *Hub) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	encoder := func() []byte {
+		payload := struct {
+			Process ProcessMetrics `json:"process"`
+			Health  HealthStatus   `json:"health"`
+		}{
+			Process: h.processSnapshot(),
+			Health:  h.healthStatus(),
+		}
+		data, _ := json.Marshal(payload)
+		return data
+	}
+
+	writePayload := func() bool {
+		data := encoder()
+		if _, err := w.Write([]byte("data: ")); err != nil {
+			return false
+		}
+		if _, err := w.Write(data); err != nil {
+			return false
+		}
+		if _, err := w.Write([]byte("\n\n")); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	if !writePayload() {
+		return
+	}
+
+	ticker := time.NewTicker(defaultMetricsInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if !writePayload() {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
 func (h *Hub) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	spectrum := h.spectrumSnapshot()
-	status := "ok"
-	reason := ""
-	if spectrum.Source == "mock" {
-		status = "degraded"
-		reason = "serving mock diagnostics"
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(HealthStatus{Status: status, Process: h.collectProcessMetrics(), Reason: reason})
+	_ = json.NewEncoder(w).Encode(h.healthStatus())
 }
 
 func (h *Hub) handleSpectrumSnapshot(w http.ResponseWriter, r *http.Request) {
