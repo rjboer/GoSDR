@@ -17,6 +17,7 @@ type scanResult struct {
 	phase     float64
 	peak      float64
 	monoPhase float64
+	snr       float64
 	peakBin   int
 	ok        bool
 }
@@ -58,6 +59,46 @@ func peakInBand(db []float64, start, end int) (peak float64, bin int, ok bool) {
 		return 0, bin, false
 	}
 	return peak, bin, true
+}
+
+// noiseFloor computes the average power in [start, end) excluding a small guard
+// region around the signal bin to avoid biasing the estimate.
+func noiseFloor(db []float64, start, end, signalBin int) (float64, bool) {
+	s, e := binRange(len(db), start, end)
+	if s == e {
+		return 0, false
+	}
+
+	var sum float64
+	var count int
+	for i := s; i < e; i++ {
+		if i == signalBin || i == signalBin-1 || i == signalBin+1 {
+			continue
+		}
+		v := db[i]
+		if math.IsInf(v, 0) || math.IsNaN(v) {
+			continue
+		}
+		sum += v
+		count++
+	}
+	if count == 0 {
+		return 0, false
+	}
+	return sum / float64(count), true
+}
+
+// estimateSNR computes the SNR as peak - noise floor for the given band.
+func estimateSNR(db []float64, peak float64, peakBin int, start, end int) float64 {
+	noise, ok := noiseFloor(db, start, end, peakBin)
+	if !ok {
+		return 0
+	}
+	snr := peak - noise
+	if math.IsNaN(snr) || math.IsInf(snr, 0) {
+		return 0
+	}
+	return snr
 }
 
 // MonopulsePhase correlates sum and delta FFT bins and returns the resulting phase (radians).
@@ -302,7 +343,7 @@ func doPhaseScan(
 	startBin, endBin int,
 	dsp *CachedDSP,
 	adjusted, sumBuf, deltaBuf []complex64,
-) (peak float64, monoPhase float64, peakBin int, ok bool) {
+) (peak float64, monoPhase float64, snr float64, peakBin int, ok bool) {
 	phaseRad := (phase + phaseCal) * degToRad
 	phaseFactor := complex64(cmplx.Exp(complex(0, phaseRad)))
 
@@ -313,18 +354,23 @@ func doPhaseScan(
 	deltaFFT, _ := dsp.FFTAndDBFS(deltaBuf)
 
 	if len(sumDBFS) == 0 || len(sumFFT) == 0 || len(deltaFFT) == 0 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 
 	// Choose correlation or ratio-based monopulse:
 	monoPhase = MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
 	// monoPhase = MonopulsePhaseRatio(sumFFT, deltaFFT, startBin, endBin)
 
+	bandStart := startBin
+	bandEnd := endBin
 	peak, peakBin, ok = peakInBand(sumDBFS, startBin, endBin)
 	if !ok {
+		bandStart = 0
+		bandEnd = len(sumDBFS)
 		peak, peakBin, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
 	}
-	return peak, monoPhase, peakBin, ok
+	snr = estimateSNR(sumDBFS, peak, peakBin, bandStart, bandEnd)
+	return peak, monoPhase, snr, peakBin, ok
 }
 
 // CoarseScanParallel performs coarse scan with parallel FFT processing using a worker pool.
@@ -338,7 +384,7 @@ func CoarseScanParallel(
 	freqHz float64,
 	spacingWavelength float64,
 	dsp *CachedDSP,
-) (bestDelay float64, bestTheta float64, peakDBFS float64, monoPhase float64, peakBin int) {
+) (bestDelay float64, bestTheta float64, peakDBFS float64, monoPhase float64, peakBin int, snr float64) {
 	if stepDeg == 0 {
 		stepDeg = 2
 	}
@@ -348,7 +394,7 @@ func CoarseScanParallel(
 		n = len(rx1)
 	}
 	if n == 0 {
-		return 0, 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0
 	}
 
 	// Build the phase grid.
@@ -357,7 +403,7 @@ func CoarseScanParallel(
 		phases = append(phases, phase)
 	}
 	if len(phases) == 0 {
-		return 0, 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0
 	}
 
 	numWorkers := runtime.NumCPU()
@@ -376,7 +422,7 @@ func CoarseScanParallel(
 			deltaBuf := make([]complex64, n)
 
 			for phase := range jobs {
-				peak, monoPhase, peakBin, ok := doPhaseScan(
+				peak, monoPhase, snr, peakBin, ok := doPhaseScan(
 					phase, rx0, rx1, n, phaseCal,
 					startBin, endBin, dsp,
 					adjusted, sumBuf, deltaBuf,
@@ -385,6 +431,7 @@ func CoarseScanParallel(
 					phase:     phase,
 					peak:      peak,
 					monoPhase: monoPhase,
+					snr:       snr,
 					peakBin:   peakBin,
 					ok:        ok,
 				}
@@ -403,6 +450,7 @@ func CoarseScanParallel(
 	peakDBFS = -math.MaxFloat64
 	bestMonoPhase := math.MaxFloat64
 	bestPeakBin := 0
+	bestSNR := 0.0
 
 	// Collect results.
 	for range phases {
@@ -416,13 +464,14 @@ func CoarseScanParallel(
 			bestTheta = PhaseToTheta(res.phase, freqHz, spacingWavelength)
 			bestMonoPhase = res.monoPhase
 			bestPeakBin = res.peakBin
+			bestSNR = res.snr
 		}
 	}
 
 	if peakDBFS == -math.MaxFloat64 {
 		peakDBFS = 0
 	}
-	return bestDelay, bestTheta, peakDBFS, bestMonoPhase, bestPeakBin
+	return bestDelay, bestTheta, peakDBFS, bestMonoPhase, bestPeakBin, bestSNR
 }
 
 // --------- Tracking (parallel FFTs for a single step) ---------
@@ -436,13 +485,13 @@ func MonopulseTrackParallel(
 	startBin, endBin int,
 	phaseStep float64,
 	dsp *CachedDSP,
-) (float64, float64, float64, int) {
+) (float64, float64, float64, float64, int) {
 	n := len(rx0)
 	if len(rx1) < n {
 		n = len(rx1)
 	}
 	if n == 0 {
-		return lastDelay, 0, 0, 0
+		return lastDelay, 0, 0, 0, 0
 	}
 
 	adjusted := make([]complex64, n)
@@ -474,19 +523,24 @@ func MonopulseTrackParallel(
 	wg.Wait()
 
 	if len(sumDBFS) == 0 || len(sumFFT) == 0 || len(deltaFFT) == 0 {
-		return lastDelay, 0, 0, 0
+		return lastDelay, 0, 0, 0, 0
 	}
 
 	monoPhase := MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
 	// monoPhase := MonopulsePhaseRatio(sumFFT, deltaFFT, startBin, endBin)
 
+	bandStart := startBin
+	bandEnd := endBin
 	peak, peakBin, ok := peakInBand(sumDBFS, startBin, endBin)
 	if !ok {
+		bandStart = 0
+		bandEnd = len(sumDBFS)
 		peak, peakBin, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
 	}
 	if !ok {
 		peak = 0
 	}
+	snr := estimateSNR(sumDBFS, peak, peakBin, bandStart, bandEnd)
 
 	newDelay := lastDelay
 	if monoPhase > monoDeadbandRad {
@@ -494,5 +548,5 @@ func MonopulseTrackParallel(
 	} else if monoPhase < -monoDeadbandRad {
 		newDelay = lastDelay - phaseStep
 	}
-	return newDelay, peak, monoPhase, peakBin
+	return newDelay, peak, monoPhase, snr, peakBin
 }

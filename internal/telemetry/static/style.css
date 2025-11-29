@@ -122,6 +122,50 @@ main {
     margin-top: 0.5rem;
 }
 
+.metric-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    width: 100%;
+}
+
+.metric-card {
+    background: #0c1118;
+    border: 1px solid #1f2a3a;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+
+.metric-value {
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.lock-badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    background: #1f2a3a;
+    color: #cbd5e1;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.lock-badge.locked {
+    background: #16a34a;
+    color: #e5f7eb;
+}
+
+.lock-badge.tracking {
+    background: #f59e0b;
+    color: #0c1118;
+}
+
+.lock-badge.searching {
+    background: #1f2a3a;
+}
+
 .chart-panel,
 .history {
     background: #121926;

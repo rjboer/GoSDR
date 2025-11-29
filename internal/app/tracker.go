@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/rjboer/GoSDR/internal/dsp"
@@ -41,6 +42,9 @@ type Tracker struct {
 	lastDelay float64
 	history   []float64
 	dsp       *dsp.CachedDSP // Cached DSP resources for performance
+	lockState telemetry.LockState
+	stableCnt int
+	dropCnt   int
 }
 
 func NewTracker(backend sdr.SDR, reporter telemetry.Reporter, logger logging.Logger, cfg Config) *Tracker {
@@ -48,11 +52,12 @@ func NewTracker(backend sdr.SDR, reporter telemetry.Reporter, logger logging.Log
 		logger = logging.Default()
 	}
 	return &Tracker{
-		sdr:      backend,
-		reporter: reporter,
-		logger:   logger,
-		cfg:      cfg,
-		dsp:      dsp.NewCachedDSP(cfg.NumSamples),
+		sdr:       backend,
+		reporter:  reporter,
+		logger:    logger,
+		cfg:       cfg,
+		dsp:       dsp.NewCachedDSP(cfg.NumSamples),
+		lockState: telemetry.LockStateSearching,
 	}
 }
 
@@ -122,9 +127,12 @@ func (t *Tracker) Run(ctx context.Context) error {
 		// First iteration: coarse scan
 		if iteration == 0 {
 			// Use parallel coarse scan with cached DSP
-			delay, theta, peak, monoPhase, peakBin := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
+			delay, theta, peak, monoPhase, peakBin, snr := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
 			t.lastDelay = delay
 			t.appendHistory(theta)
+
+			confidence := t.trackingConfidence(snr, monoPhase)
+			state := t.updateLockState(snr, confidence)
 
 			var debug *telemetry.DebugInfo
 			if t.cfg.DebugMode {
@@ -140,7 +148,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 			}
 
 			if t.reporter != nil {
-				t.reporter.Report(theta, peak, debug)
+				t.reporter.Report(theta, peak, snr, confidence, state, debug)
 			}
 			iteration++
 			continue
@@ -148,11 +156,14 @@ func (t *Tracker) Run(ctx context.Context) error {
 
 		// Subsequent iterations: monopulse tracking
 		// Use parallel tracking with cached DSP
-		var peak, monoPhase float64
+		var peak, monoPhase, snr float64
 		var peakBin int
-		t.lastDelay, peak, monoPhase, peakBin = dsp.MonopulseTrackParallel(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
+		t.lastDelay, peak, monoPhase, snr, peakBin = dsp.MonopulseTrackParallel(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
 		theta := dsp.PhaseToTheta(t.lastDelay, t.cfg.RxLO, t.cfg.SpacingWavelength)
 		t.appendHistory(theta)
+
+		confidence := t.trackingConfidence(snr, monoPhase)
+		state := t.updateLockState(snr, confidence)
 
 		var debug *telemetry.DebugInfo
 		if t.cfg.DebugMode {
@@ -168,10 +179,82 @@ func (t *Tracker) Run(ctx context.Context) error {
 		}
 
 		if t.reporter != nil {
-			t.reporter.Report(theta, peak, debug)
+			t.reporter.Report(theta, peak, snr, confidence, state, debug)
 		}
 		iteration++
 	}
+}
+
+func (t *Tracker) trackingConfidence(snr float64, monoPhase float64) float64 {
+	snrScore := clamp((snr)/30.0, 0, 1)
+	monoScore := clamp(1-math.Min(math.Abs(monoPhase)/(10*(math.Pi/180)), 1), 0, 1)
+	confidence := 0.7*snrScore + 0.3*monoScore
+	if confidence < 0 {
+		return 0
+	}
+	if confidence > 1 {
+		return 1
+	}
+	return confidence
+}
+
+func (t *Tracker) updateLockState(snr float64, confidence float64) telemetry.LockState {
+	const (
+		acquireSNR     = 6.0
+		lockSNR        = 12.0
+		dropSNR        = 4.0
+		lockConfidence = 0.6
+		acquireConf    = 0.3
+		stableNeeded   = 3
+		dropNeeded     = 2
+	)
+
+	switch t.lockState {
+	case telemetry.LockStateLocked:
+		if snr < dropSNR || confidence < acquireConf {
+			t.dropCnt++
+			if t.dropCnt >= dropNeeded {
+				t.lockState = telemetry.LockStateTracking
+				t.stableCnt = 0
+			}
+		} else {
+			t.dropCnt = 0
+		}
+	case telemetry.LockStateTracking:
+		if snr >= lockSNR && confidence >= lockConfidence {
+			t.stableCnt++
+			if t.stableCnt >= stableNeeded {
+				t.lockState = telemetry.LockStateLocked
+				t.dropCnt = 0
+			}
+		} else if snr < dropSNR || confidence < acquireConf {
+			t.dropCnt++
+			if t.dropCnt >= dropNeeded {
+				t.lockState = telemetry.LockStateSearching
+				t.stableCnt = 0
+			}
+		} else {
+			t.stableCnt = 0
+			t.dropCnt = 0
+		}
+	default:
+		if snr >= acquireSNR && confidence >= acquireConf {
+			t.lockState = telemetry.LockStateTracking
+			t.stableCnt = 0
+			t.dropCnt = 0
+		}
+	}
+	return t.lockState
+}
+
+func clamp(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 // LastDelay returns the most recent phase delay used by the tracker.

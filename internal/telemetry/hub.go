@@ -81,6 +81,18 @@ type persistentConfig struct {
 	DebugMode      bool    `json:"debug_mode"`
 }
 
+// LockState represents the current tracking lock quality.
+type LockState string
+
+const (
+	// LockStateSearching indicates the tracker has not yet acquired a stable target.
+	LockStateSearching LockState = "searching"
+	// LockStateTracking indicates the tracker is following a candidate but not fully locked.
+	LockStateTracking LockState = "tracking"
+	// LockStateLocked indicates a confident lock on the target signal.
+	LockStateLocked LockState = "locked"
+)
+
 func defaultConfig() Config {
 	return Config{
 		SampleRateHz:      2_000_000,
@@ -334,10 +346,13 @@ func (h *Hub) persistConfig(cfg Config) error {
 
 // Sample captures a single telemetry point for visualization.
 type Sample struct {
-	Timestamp time.Time  `json:"timestamp"`
-	AngleDeg  float64    `json:"angleDeg"`
-	Peak      float64    `json:"peak"`
-	Debug     *DebugInfo `json:"debug,omitempty"`
+	Timestamp  time.Time  `json:"timestamp"`
+	AngleDeg   float64    `json:"angleDeg"`
+	Peak       float64    `json:"peak"`
+	SNR        float64    `json:"snr"`
+	Confidence float64    `json:"trackingConfidence"`
+	LockState  LockState  `json:"lockState"`
+	Debug      *DebugInfo `json:"debug,omitempty"`
 }
 
 // DebugInfo captures optional DSP internals for troubleshooting.
@@ -431,8 +446,8 @@ func NewHub(historyLimit int, logger logging.Logger) *Hub {
 }
 
 // Report implements Reporter and records a new telemetry sample.
-func (h *Hub) Report(angleDeg float64, peak float64, debug *DebugInfo) {
-	sample := Sample{Timestamp: time.Now(), AngleDeg: angleDeg, Peak: peak}
+func (h *Hub) Report(angleDeg float64, peak float64, snr float64, confidence float64, state LockState, debug *DebugInfo) {
+	sample := Sample{Timestamp: time.Now(), AngleDeg: angleDeg, Peak: peak, SNR: snr, Confidence: confidence, LockState: state}
 	if debug != nil {
 		h.mu.RLock()
 		debugEnabled := h.config.DebugMode
@@ -505,10 +520,10 @@ func (h *Hub) Subscribe() (chan Sample, func()) {
 type MultiReporter []Reporter
 
 // Report forwards telemetry to each configured reporter.
-func (m MultiReporter) Report(angleDeg float64, peak float64, debug *DebugInfo) {
+func (m MultiReporter) Report(angleDeg float64, peak float64, snr float64, confidence float64, state LockState, debug *DebugInfo) {
 	for _, r := range m {
 		if r != nil {
-			r.Report(angleDeg, peak, debug)
+			r.Report(angleDeg, peak, snr, confidence, state, debug)
 		}
 	}
 }

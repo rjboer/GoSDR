@@ -17,7 +17,7 @@ type recordingReporter struct {
 	angles []float64
 }
 
-func (r *recordingReporter) Report(angleDeg float64, _ float64, _ *telemetry.DebugInfo) {
+func (r *recordingReporter) Report(angleDeg float64, _ float64, _ float64, _ float64, _ telemetry.LockState, _ *telemetry.DebugInfo) {
 	r.angles = append(r.angles, angleDeg)
 }
 
