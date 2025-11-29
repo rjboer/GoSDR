@@ -135,11 +135,17 @@
               <option value="mock">Mock</option>
               <option value="pluto">Pluto / AD9361</option>
             </select>
+            <small>Choose the simulated mock source or Pluto hardware.</small>
           </label>
           <label class="field" for="sdrUri">
             <span>Backend URI</span>
             <input id="sdrUri" name="sdrUri" type="text" placeholder="ip:192.168.2.1">
-            <small>Connection string passed to the backend</small>
+            <small>Connection string passed to the backend (disabled for mock).</small>
+          </label>
+          <label class="field" for="mockPhaseDelta">
+            <span>Mock phase delta (deg)</span>
+            <input id="mockPhaseDelta" name="mockPhaseDelta" type="number" step="0.1">
+            <small>Channel offset simulated by the mock backend.</small>
           </label>
         </div>
       </section>

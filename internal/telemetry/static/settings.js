@@ -15,6 +15,7 @@ const fieldIds = [
   'scanStepDeg',
   'phaseCalDeg',
   'phaseDeltaDeg',
+  'mockPhaseDelta',
   'warmupBuffers',
   'rxGain0',
   'rxGain1',
@@ -36,6 +37,7 @@ const numericFields = new Set([
   'scanStepDeg',
   'phaseCalDeg',
   'phaseDeltaDeg',
+  'mockPhaseDelta',
   'warmupBuffers',
   'rxGain0',
   'rxGain1',
@@ -55,6 +57,7 @@ const defaults = {
   scanStepDeg: 2,
   phaseCalDeg: 0,
   phaseDeltaDeg: 35,
+  mockPhaseDelta: 30,
   warmupBuffers: 3,
   rxGain0: 0,
   rxGain1: 0,
@@ -66,10 +69,28 @@ const defaults = {
 const statusEl = $('status');
 const form = $('configForm');
 const resetBtn = $('resetBtn');
+const backendField = $('sdrBackend');
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
   statusEl.className = isError ? 'status error' : 'status';
+}
+
+function updateBackendState() {
+  const backend = backendField?.value;
+  const isMock = backend === 'mock';
+  const sdrUriInput = $('sdrUri');
+  const mockPhaseInput = $('mockPhaseDelta');
+
+  if (sdrUriInput) {
+    sdrUriInput.disabled = isMock;
+    if (isMock) {
+      sdrUriInput.value = '';
+    }
+  }
+  if (mockPhaseInput) {
+    mockPhaseInput.disabled = !isMock;
+  }
 }
 
 function applyConfig(cfg) {
@@ -80,6 +101,7 @@ function applyConfig(cfg) {
     if (!el) return;
     el.value = merged[id];
   });
+  updateBackendState();
 }
 
 async function loadConfig() {
@@ -137,5 +159,7 @@ resetBtn.addEventListener('click', () => {
   applyConfig(defaults);
   setStatus('Restored defaults (not yet saved)');
 });
+
+backendField?.addEventListener('change', updateBackendState);
 
 loadConfig();

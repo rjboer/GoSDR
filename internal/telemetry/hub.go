@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -25,6 +28,7 @@ type Config struct {
 	ScanStepDeg       float64 `json:"scanStepDeg"`
 	PhaseCalDeg       float64 `json:"phaseCalDeg"`
 	PhaseDeltaDeg     float64 `json:"phaseDeltaDeg"`
+	MockPhaseDelta    float64 `json:"mockPhaseDelta"`
 	WarmupBuffers     int     `json:"warmupBuffers"`
 	RxGain0           int     `json:"rxGain0"`
 	RxGain1           int     `json:"rxGain1"`
@@ -44,7 +48,29 @@ const (
 	maxNumSamples   = 1 << 20
 	minTracking     = 1
 	maxTracking     = 10_000
+	configFilePath  = "config.json"
 )
+
+type persistentConfig struct {
+	SampleRate     float64 `json:"sample_rate"`
+	RxLO           float64 `json:"rx_lo"`
+	RxGain0        int     `json:"rx_gain0"`
+	RxGain1        int     `json:"rx_gain1"`
+	TxGain         int     `json:"tx_gain"`
+	ToneOffset     float64 `json:"tone_offset"`
+	NumSamples     int     `json:"num_samples"`
+	TrackingLength int     `json:"tracking_length"`
+	PhaseStep      float64 `json:"phase_step"`
+	PhaseCal       float64 `json:"phase_cal"`
+	ScanStep       float64 `json:"scan_step"`
+	Spacing        float64 `json:"spacing_wavelength"`
+	PhaseDelta     float64 `json:"phase_delta"`
+	SDRBackend     string  `json:"sdr_backend"`
+	SDRURI         string  `json:"sdr_uri"`
+	WarmupBuffers  int     `json:"warmup_buffers"`
+	HistoryLimit   int     `json:"history_limit"`
+	WebAddr        string  `json:"web_addr"`
+}
 
 func defaultConfig() Config {
 	return Config{
@@ -60,12 +86,36 @@ func defaultConfig() Config {
 		ScanStepDeg:       2,
 		PhaseCalDeg:       0,
 		PhaseDeltaDeg:     35,
+		MockPhaseDelta:    30,
 		WarmupBuffers:     3,
 		RxGain0:           0,
 		RxGain1:           0,
 		TxGain:            -10,
 		SDRBackend:        "mock",
 		SDRURI:            "ip:192.168.2.1",
+	}
+}
+
+func defaultPersistentConfig() persistentConfig {
+	return persistentConfig{
+		SampleRate:     2e6,
+		RxLO:           2.3e9,
+		RxGain0:        60,
+		RxGain1:        60,
+		TxGain:         -10,
+		ToneOffset:     200e3,
+		NumSamples:     1 << 12,
+		TrackingLength: 100,
+		PhaseStep:      1,
+		PhaseCal:       0,
+		ScanStep:       2,
+		Spacing:        0.5,
+		PhaseDelta:     30,
+		SDRBackend:     "mock",
+		SDRURI:         "",
+		WarmupBuffers:  3,
+		HistoryLimit:   500,
+		WebAddr:        ":8080",
 	}
 }
 
@@ -107,11 +157,26 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	if cfg.WarmupBuffers == 0 {
 		cfg.WarmupBuffers = base.WarmupBuffers
 	}
+	if cfg.MockPhaseDelta == 0 {
+		cfg.MockPhaseDelta = base.MockPhaseDelta
+	}
+
 	if cfg.SDRBackend == "" {
 		cfg.SDRBackend = base.SDRBackend
 	}
-	if cfg.SDRURI == "" {
-		cfg.SDRURI = base.SDRURI
+
+	switch cfg.SDRBackend {
+	case "mock":
+		cfg.SDRURI = ""
+	case "pluto":
+		if cfg.SDRURI == "" {
+			cfg.SDRURI = base.SDRURI
+		}
+		if cfg.SDRURI == "" {
+			return Config{}, errors.New("sdr uri required for pluto backend")
+		}
+	default:
+		return Config{}, fmt.Errorf("unsupported sdr backend %q", cfg.SDRBackend)
 	}
 
 	if cfg.SampleRateHz < minSampleRateHz || cfg.SampleRateHz > maxSampleRateHz {
@@ -146,6 +211,60 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func loadPersistentConfig(path string) (persistentConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return persistentConfig{}, err
+	}
+
+	var cfg persistentConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return persistentConfig{}, err
+	}
+
+	return cfg, nil
+}
+
+func savePersistentConfig(path string, cfg persistentConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+func (h *Hub) persistConfig(cfg Config) error {
+	stored, err := loadPersistentConfig(configFilePath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			stored = defaultPersistentConfig()
+		} else {
+			return err
+		}
+	}
+
+	stored.SampleRate = float64(cfg.SampleRateHz)
+	stored.RxLO = cfg.RxLoHz
+	stored.RxGain0 = cfg.RxGain0
+	stored.RxGain1 = cfg.RxGain1
+	stored.TxGain = cfg.TxGain
+	stored.ToneOffset = cfg.ToneOffsetHz
+	stored.NumSamples = cfg.NumSamples
+	stored.TrackingLength = cfg.TrackingLength
+	stored.PhaseStep = cfg.PhaseStepDeg
+	stored.PhaseCal = cfg.PhaseCalDeg
+	stored.ScanStep = cfg.ScanStepDeg
+	stored.Spacing = cfg.SpacingWavelength
+	stored.PhaseDelta = cfg.MockPhaseDelta
+	stored.SDRBackend = cfg.SDRBackend
+	stored.SDRURI = cfg.SDRURI
+	stored.WarmupBuffers = cfg.WarmupBuffers
+	stored.HistoryLimit = cfg.HistoryLimit
+
+	return savePersistentConfig(configFilePath, stored)
 }
 
 // Sample captures a single telemetry point for visualization.
@@ -282,6 +401,12 @@ func (h *Hub) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.applyConfig(cfg)
 	h.mu.Unlock()
+
+	if err := h.persistConfig(cfg); err != nil {
+		log.Printf("failed to persist config: %v", err)
+		http.Error(w, fmt.Sprintf("failed to save config: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cfg)
