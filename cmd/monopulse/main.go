@@ -5,50 +5,73 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 
 	"github.com/rjboer/GoSDR/internal/app"
+	"github.com/rjboer/GoSDR/internal/logging"
 	"github.com/rjboer/GoSDR/internal/sdr"
 	"github.com/rjboer/GoSDR/internal/telemetry"
 )
 
 func main() {
 	const configPath = "config.json"
+	logger := logging.New(logging.Warn, logging.Text, os.Stdout).With(logging.Field{Key: "subsystem", Value: "cli"})
+	logging.SetDefault(logger)
 
 	persistentCfg, err := loadOrCreateConfig(configPath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		logger.Error("load config", logging.Field{Key: "error", Value: err})
+		os.Exit(1)
 	}
 
 	cfg, err := parseConfig(os.Args[1:], os.LookupEnv, persistentCfg)
 	if err != nil {
-		log.Fatalf("parse config: %v", err)
+		logger.Error("parse config", logging.Field{Key: "error", Value: err})
+		os.Exit(1)
 	}
+
+	level, err := logging.ParseLevel(cfg.logLevel)
+	if err != nil {
+		logger.Error("invalid log level", logging.Field{Key: "error", Value: err})
+		os.Exit(1)
+	}
+	format, err := logging.ParseFormat(cfg.logFormat)
+	if err != nil {
+		logger.Error("invalid log format", logging.Field{Key: "error", Value: err})
+		os.Exit(1)
+	}
+
+	logger = logging.New(level, format, os.Stdout).With(logging.Field{Key: "subsystem", Value: "cli"})
+	logging.SetDefault(logger)
+
 	if err := saveConfig(configPath, persistentFromCLI(cfg)); err != nil {
-		log.Fatalf("save config: %v", err)
+		logger.Error("save config", logging.Field{Key: "error", Value: err})
+		os.Exit(1)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	backend, err := selectBackend(cfg)
 	if err != nil {
-		log.Fatalf("select backend: %v", err)
+		logger.Error("select backend", logging.Field{Key: "error", Value: err})
+		os.Exit(1)
 	}
 	// Only use web telemetry (no stdout spam)
 	var reporters []telemetry.Reporter
 	if cfg.webAddr != "" {
-		hub := telemetry.NewHub(cfg.historyLimit)
+		hubLogger := logger.With(logging.Field{Key: "subsystem", Value: "telemetry"})
+		hub := telemetry.NewHub(cfg.historyLimit, hubLogger)
 		reporters = append(reporters, hub)
-		go telemetry.NewWebServer(cfg.webAddr, hub).Start(ctx)
-		log.Printf("Web interface: http://localhost%s", cfg.webAddr)
+		go telemetry.NewWebServer(cfg.webAddr, hub, hubLogger).Start(ctx)
+		hubLogger.Info("web interface available", logging.Field{Key: "addr", Value: cfg.webAddr})
 	} else {
 		// Fallback to stdout if no web interface
-		reporters = append(reporters, telemetry.StdoutReporter{})
+		reporters = append(reporters, telemetry.NewStdoutReporter(logger.With(logging.Field{Key: "subsystem", Value: "telemetry"})))
 	}
 
-	tracker := app.NewTracker(backend, telemetry.MultiReporter(reporters), app.Config{
+	trackerLogger := logger.With(logging.Field{Key: "subsystem", Value: "tracker"})
+	tracker := app.NewTracker(backend, telemetry.MultiReporter(reporters), trackerLogger, app.Config{
 		SampleRate:        cfg.sampleRate,
 		RxLO:              cfg.rxLO,
 		RxGain0:           cfg.rxGain0,
@@ -67,13 +90,15 @@ func main() {
 	})
 
 	if err := tracker.Init(ctx); err != nil {
-		log.Fatalf("init tracker: %v", err)
+		trackerLogger.Error("init tracker", logging.Field{Key: "error", Value: err})
+		os.Exit(1)
 	}
 
 	// Run continuously (no timeout)
-	log.Printf("Starting tracker (Ctrl+C to stop)...")
+	trackerLogger.Info("starting tracker", logging.Field{Key: "note", Value: "Ctrl+C to stop"})
 	if err := tracker.Run(ctx); err != nil && err != context.Canceled {
-		log.Fatalf("run tracker: %v", err)
+		trackerLogger.Error("run tracker", logging.Field{Key: "error", Value: err})
+		os.Exit(1)
 	}
 }
 
@@ -96,6 +121,8 @@ type cliConfig struct {
 	warmupBuffers  int
 	historyLimit   int
 	webAddr        string
+	logLevel       string
+	logFormat      string
 }
 
 type persistentConfig struct {
@@ -117,6 +144,8 @@ type persistentConfig struct {
 	WarmupBuffers  int     `json:"warmup_buffers"`
 	HistoryLimit   int     `json:"history_limit"`
 	WebAddr        string  `json:"web_addr"`
+	LogLevel       string  `json:"log_level"`
+	LogFormat      string  `json:"log_format"`
 }
 
 func parseConfig(args []string, lookup func(string) (string, bool), defaults persistentConfig) (cliConfig, error) {
@@ -140,6 +169,8 @@ func parseConfig(args []string, lookup func(string) (string, bool), defaults per
 	fs.IntVar(&cfg.warmupBuffers, "warmup-buffers", envInt(lookup, "MONO_WARMUP_BUFFERS", defaults.WarmupBuffers), "Number of RX buffers to discard for warm-up")
 	fs.IntVar(&cfg.historyLimit, "history-limit", envInt(lookup, "MONO_HISTORY_LIMIT", defaults.HistoryLimit), "Maximum samples to keep in telemetry history")
 	fs.StringVar(&cfg.webAddr, "web-addr", envString(lookup, "MONO_WEB_ADDR", defaults.WebAddr), "Optional web telemetry listen address (e.g. :8080)")
+	fs.StringVar(&cfg.logLevel, "log-level", envString(lookup, "MONO_LOG_LEVEL", defaults.LogLevel), "Log level (debug|info|warn|error)")
+	fs.StringVar(&cfg.logFormat, "log-format", envString(lookup, "MONO_LOG_FORMAT", defaults.LogFormat), "Log format (text|json)")
 
 	if err := fs.Parse(args); err != nil {
 		return cliConfig{}, err
@@ -148,6 +179,12 @@ func parseConfig(args []string, lookup func(string) (string, bool), defaults per
 }
 
 func persistentFromCLI(cfg cliConfig) persistentConfig {
+	if cfg.logLevel == "" {
+		cfg.logLevel = "warn"
+	}
+	if cfg.logFormat == "" {
+		cfg.logFormat = "text"
+	}
 	return persistentConfig{
 		SampleRate:     cfg.sampleRate,
 		RxLO:           cfg.rxLO,
@@ -167,6 +204,8 @@ func persistentFromCLI(cfg cliConfig) persistentConfig {
 		WarmupBuffers:  cfg.warmupBuffers,
 		HistoryLimit:   cfg.historyLimit,
 		WebAddr:        cfg.webAddr,
+		LogLevel:       cfg.logLevel,
+		LogFormat:      cfg.logFormat,
 	}
 }
 
@@ -219,6 +258,8 @@ func defaultPersistentConfig() persistentConfig {
 		WarmupBuffers:  3,
 		HistoryLimit:   500,
 		WebAddr:        ":8080",
+		LogLevel:       "warn",
+		LogFormat:      "text",
 	}
 }
 

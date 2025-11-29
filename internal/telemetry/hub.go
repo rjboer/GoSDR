@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rjboer/GoSDR/internal/logging"
 )
 
 // Config represents the runtime configuration exposed by the telemetry hub.
@@ -36,6 +37,8 @@ type Config struct {
 	TxGain            int     `json:"txGain"`
 	SDRBackend        string  `json:"sdrBackend"`
 	SDRURI            string  `json:"sdrUri"`
+	LogLevel          string  `json:"logLevel"`
+	LogFormat         string  `json:"logFormat"`
 }
 
 const (
@@ -71,6 +74,8 @@ type persistentConfig struct {
 	WarmupBuffers  int     `json:"warmup_buffers"`
 	HistoryLimit   int     `json:"history_limit"`
 	WebAddr        string  `json:"web_addr"`
+	LogLevel       string  `json:"log_level"`
+	LogFormat      string  `json:"log_format"`
 }
 
 func defaultConfig() Config {
@@ -94,6 +99,8 @@ func defaultConfig() Config {
 		TxGain:            -10,
 		SDRBackend:        "mock",
 		SDRURI:            "ip:192.168.2.1",
+		LogLevel:          "warn",
+		LogFormat:         "text",
 	}
 }
 
@@ -117,6 +124,33 @@ func defaultPersistentConfig() persistentConfig {
 		WarmupBuffers:  3,
 		HistoryLimit:   500,
 		WebAddr:        ":8080",
+		LogLevel:       "warn",
+		LogFormat:      "text",
+	}
+}
+
+func configFromPersistent(stored persistentConfig) Config {
+	return Config{
+		SampleRateHz:      int(stored.SampleRate),
+		RxLoHz:            stored.RxLO,
+		ToneOffsetHz:      stored.ToneOffset,
+		SpacingWavelength: stored.Spacing,
+		NumSamples:        stored.NumSamples,
+		HistoryLimit:      stored.HistoryLimit,
+		TrackingLength:    stored.TrackingLength,
+		PhaseStepDeg:      stored.PhaseStep,
+		ScanStepDeg:       stored.ScanStep,
+		PhaseCalDeg:       stored.PhaseCal,
+		PhaseDeltaDeg:     stored.PhaseDelta,
+		MockPhaseDelta:    stored.PhaseDelta,
+		WarmupBuffers:     stored.WarmupBuffers,
+		RxGain0:           stored.RxGain0,
+		RxGain1:           stored.RxGain1,
+		TxGain:            stored.TxGain,
+		SDRBackend:        stored.SDRBackend,
+		SDRURI:            stored.SDRURI,
+		LogLevel:          stored.LogLevel,
+		LogFormat:         stored.LogFormat,
 	}
 }
 
@@ -213,6 +247,18 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	if cfg.SpacingWavelength <= 0 {
 		return Config{}, errors.New("spacing wavelength must be positive")
 	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = base.LogLevel
+	}
+	if cfg.LogFormat == "" {
+		cfg.LogFormat = base.LogFormat
+	}
+	if _, err := logging.ParseLevel(cfg.LogLevel); err != nil {
+		return Config{}, fmt.Errorf("invalid log level: %w", err)
+	}
+	if _, err := logging.ParseFormat(cfg.LogFormat); err != nil {
+		return Config{}, fmt.Errorf("invalid log format: %w", err)
+	}
 
 	return cfg, nil
 }
@@ -267,6 +313,14 @@ func (h *Hub) persistConfig(cfg Config) error {
 	stored.SDRURI = cfg.SDRURI
 	stored.WarmupBuffers = cfg.WarmupBuffers
 	stored.HistoryLimit = cfg.HistoryLimit
+	stored.LogLevel = cfg.LogLevel
+	stored.LogFormat = cfg.LogFormat
+	if stored.LogLevel == "" {
+		stored.LogLevel = "warn"
+	}
+	if stored.LogFormat == "" {
+		stored.LogFormat = "text"
+	}
 
 	return savePersistentConfig(configFilePath, stored)
 }
@@ -285,11 +339,24 @@ type Hub struct {
 	historyLimit int
 	subscribers  map[chan Sample]struct{}
 	config       Config
+	logger       logging.Logger
 }
 
 // NewHub builds a telemetry hub with the provided history limit.
-func NewHub(historyLimit int) *Hub {
+func NewHub(historyLimit int, logger logging.Logger) *Hub {
+	if logger == nil {
+		logger = logging.Default()
+	}
 	cfg := defaultConfig()
+	if stored, err := loadPersistentConfig(configFilePath); err == nil {
+		if validated, vErr := validateConfig(configFromPersistent(stored), cfg); vErr == nil {
+			cfg = validated
+		} else {
+			logger.Warn("ignoring invalid stored config", logging.Field{Key: "error", Value: vErr})
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		logger.Warn("failed to load persisted config", logging.Field{Key: "error", Value: err})
+	}
 	if historyLimit > 0 {
 		cfg.HistoryLimit = historyLimit
 	}
@@ -298,6 +365,7 @@ func NewHub(historyLimit int) *Hub {
 		historyLimit: cfg.HistoryLimit,
 		subscribers:  make(map[chan Sample]struct{}),
 		config:       cfg,
+		logger:       logger.With(logging.Field{Key: "subsystem", Value: "telemetry"}),
 	}
 }
 
@@ -413,7 +481,7 @@ func (h *Hub) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 
 	if err := h.persistConfig(cfg); err != nil {
-		log.Printf("failed to persist config: %v", err)
+		h.logger.Warn("failed to persist config", logging.Field{Key: "error", Value: err})
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save config: %v", err))
 		return
 	}

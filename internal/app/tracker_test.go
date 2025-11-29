@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"io"
 	"math"
 	"math/rand"
 	"testing"
 	"time"
 
+	"github.com/rjboer/GoSDR/internal/logging"
 	"github.com/rjboer/GoSDR/internal/sdr"
 )
 
@@ -35,7 +37,7 @@ func TestTrackerConvergesWithMock(t *testing.T) {
 		WarmupBuffers:     0,
 		HistoryLimit:      20,
 	}
-	tracker := NewTracker(backend, reporter, cfg)
+	tracker := NewTracker(backend, reporter, logging.New(logging.Info, logging.Text, io.Discard), cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

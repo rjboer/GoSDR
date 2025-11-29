@@ -1,6 +1,6 @@
 package telemetry
 
-import "log"
+import "github.com/rjboer/GoSDR/internal/logging"
 
 // Reporter captures telemetry events.
 type Reporter interface {
@@ -8,12 +8,27 @@ type Reporter interface {
 }
 
 // StdoutReporter prints tracking updates to stdout.
-type StdoutReporter struct{}
+type StdoutReporter struct {
+	logger logging.Logger
+}
 
-func (StdoutReporter) Report(angleDeg float64, peak float64) {
+// NewStdoutReporter builds a stdout reporter with the provided logger.
+func NewStdoutReporter(logger logging.Logger) StdoutReporter {
+	if logger == nil {
+		logger = logging.Default()
+	}
+	return StdoutReporter{logger: logger}
+}
+
+func (r StdoutReporter) Report(angleDeg float64, peak float64) {
+	fields := []logging.Field{
+		{Key: "subsystem", Value: "telemetry"},
+		{Key: "angle_deg", Value: angleDeg},
+	}
 	if peak != 0 {
-		log.Printf("steering angle=%.2f deg peak=%.2f dBFS", angleDeg, peak)
+		fields = append(fields, logging.Field{Key: "peak_dbfs", Value: peak})
+		r.logger.Info("telemetry sample", fields...)
 		return
 	}
-	log.Printf("steering angle=%.2f deg", angleDeg)
+	r.logger.Info("telemetry sample", fields...)
 }
