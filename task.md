@@ -6,18 +6,18 @@
 ## Priority 1: Basic Debug Capabilities
 
 ### Structured Logging
-- [ ] Create `internal/logging/logger.go` package
-- [ ] Implement log levels (DEBUG, INFO, WARN, ERROR)
-- [ ] Add `--log-level` CLI flag
+- [x] Create `internal/logging/logger.go` package
+- [x] Implement log levels (DEBUG, INFO, WARN, ERROR)
+- [x] Add `--log-level` CLI flag
 - [ ] Replace `log.Printf` with structured logging in key areas
-- [ ] Add JSON output option for production
+- [x] Add JSON output option for production
 
 ### Diagnostic Endpoints
-- [ ] Add `GET /api/diagnostics` - system metrics
-- [ ] Add `GET /api/diagnostics/health` - health check
-- [ ] Add `GET /api/diagnostics/spectrum` - latest FFT snapshot
-- [ ] Add uptime, memory, goroutine count to diagnostics
-- [ ] Test diagnostic endpoints
+- [x] Add `GET /api/diagnostics` - system metrics
+- [x] Add `GET /api/diagnostics/health` - health check
+- [x] Add `GET /api/diagnostics/spectrum` - latest FFT snapshot
+- [x] Add uptime, memory, goroutine count to diagnostics
+- [x] Test diagnostic endpoints
 
 ### Quick Debug Wins
 - [ ] Add `--verbose` flag for detailed console output
@@ -46,12 +46,12 @@
 
 
 ### Tab Navigation System
-- [ ] Create tab navigation HTML structure in [index.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/index.html)
-- [ ] Add tab container divs (telemetry, trace, debug, settings)
-- [ ] Implement tab switching JavaScript in [app.js](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/app.js)
-- [ ] Add CSS styling for tabs in [app.css](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/app.css)
-- [ ] Make tabs responsive (mobile-friendly)
-- [ ] Test tab switching functionality
+- [x] Create tab navigation HTML structure in [index.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/index.html)
+- [x] Add tab container divs (telemetry, trace, debug, settings)
+- [x] Implement tab switching JavaScript in [app.js](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/app.js)
+- [x] Add CSS styling for tabs in [app.css](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/app.css)
+- [x] Make tabs responsive (mobile-friendly)
+- [x] Test tab switching functionality
 
 ---
 
@@ -73,17 +73,17 @@
 - [ ] Show current update rate
 
 ### Fix Chart Data Accumulation
-- [ ] Implement `MAX_CHART_POINTS = 100` limit
-- [ ] Auto-remove old data with `shift()` when limit exceeded
-- [ ] Apply to angle chart
-- [ ] Apply to peak chart
-- [ ] Test chart scrolling behavior
+- [x] Implement `MAX_CHART_POINTS = 100` limit
+- [x] Auto-remove old data with `shift()` when limit exceeded
+- [x] Apply to angle chart
+- [x] Apply to peak chart
+- [x] Test chart scrolling behavior
 
 ### Performance Optimizations
-- [ ] Add SSE update throttling (10 Hz max)
-- [ ] Use `chart.update('none')` to disable animations
-- [ ] Implement requestAnimationFrame for rendering
-- [ ] Add update rate limiter
+- [x] Add SSE update throttling (10 Hz max)
+- [x] Use `chart.update('none')` to disable animations
+- [x] Implement requestAnimationFrame for rendering
+- [x] Add update rate limiter
 
 ---
 
@@ -113,10 +113,10 @@
 ## Phase 4: Debug Tab ⏱️ 3-4 hours
 
 ### Backend API Endpoints
-- [ ] Create `/api/diagnostics` endpoint in [hub.go](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go)
-- [ ] Create `/api/diagnostics/health` endpoint
-- [ ] Implement system metrics collection (uptime, CPU, memory)
-- [ ] Add goroutine count tracking
+- [x] Create `/api/diagnostics` endpoint in [hub.go](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go)
+- [x] Create `/api/diagnostics/health` endpoint
+- [x] Implement system metrics collection (uptime, CPU, memory)
+- [x] Add goroutine count tracking
 - [ ] Implement signal quality estimation (SNR, confidence)
 
 ### Frontend Debug UI
@@ -133,16 +133,16 @@
 ## Phase 5: Settings Tab Enhancements ⏱️ 1-2 hours
 
 ### Add SDR Backend Fields
-- [ ] Add backend dropdown (Mock/Pluto) to [settings.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.html)
-- [ ] Add SDR URI input field
-- [ ] Add Mock phase delta field
-- [ ] Implement show/hide logic for backend-specific fields
+- [x] Add backend dropdown (Mock/Pluto) to [settings.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.html)
+- [x] Add SDR URI input field
+- [x] Add Mock phase delta field
+- [x] Implement show/hide logic for backend-specific fields
 
 ### Configuration Persistence
-- [ ] Update [handleSetConfig](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go#389-424) to save to config.json
-- [ ] Add "Restart Required" warning for SDR changes
+- [x] Update [handleSetConfig](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go#389-424) to save to config.json
+- [x] Add "Restart Required" warning for SDR changes
 - [ ] Add Export Config button
-- [ ] Test settings persistence
+- [x] Test settings persistence
 
 ---
 
@@ -202,7 +202,7 @@
 
 ## Current Status
 
-**Active:** Not started
-**Next:** Phase 1 - Tab Infrastructure
+**Active:** Phase 2 - Telemetry Tab Improvements
+**Next:** Phase 3 - Raw Trace Tab
 
 **Total Estimated Time:** 10-16 hours
