@@ -68,10 +68,10 @@ func TestCoarseScanParallel_SingleTarget(t *testing.T) {
 
 	dsp := NewCachedDSP(nSamples) // Properly initialize with FFT size
 
-_, estTheta, peak, _, _ := CoarseScanParallel(
-rx0, rx1,
-0, // phaseCal
-startBin, endBin,
+	_, estTheta, peak, _, _, snr := CoarseScanParallel(
+		rx0, rx1,
+		0, // phaseCal
+		startBin, endBin,
 		stepDeg,
 		freqHz,
 		spacingWavelength,
@@ -80,6 +80,9 @@ startBin, endBin,
 
 	if peak == 0 {
 		t.Fatalf("no peak detected")
+	}
+	if snr <= 0 {
+		t.Fatalf("expected positive SNR estimate, got %.2f", snr)
 	}
 
 	errDeg := math.Abs(math.Abs(estTheta) - math.Abs(trueThetaDeg))
@@ -104,11 +107,11 @@ func BenchmarkCoarseScanParallel(b *testing.B) {
 	dsp := NewCachedDSP(nSamples)
 
 	b.ResetTimer()
-for i := 0; i < b.N; i++ {
-_, _, _, _, _ = CoarseScanParallel(
-rx0, rx1,
-0, // phaseCal
-startBin, endBin,
+	for i := 0; i < b.N; i++ {
+		_, _, _, _, _, _ = CoarseScanParallel(
+			rx0, rx1,
+			0, // phaseCal
+			startBin, endBin,
 			stepDeg,
 			freqHz,
 			spacingWavelength,

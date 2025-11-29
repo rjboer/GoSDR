@@ -4,7 +4,7 @@ import "github.com/rjboer/GoSDR/internal/logging"
 
 // Reporter captures telemetry events.
 type Reporter interface {
-	Report(angleDeg float64, peak float64, debug *DebugInfo)
+	Report(angleDeg float64, peak float64, snr float64, confidence float64, lockState LockState, debug *DebugInfo)
 }
 
 // StdoutReporter prints tracking updates to stdout.
@@ -20,13 +20,22 @@ func NewStdoutReporter(logger logging.Logger) StdoutReporter {
 	return StdoutReporter{logger: logger}
 }
 
-func (r StdoutReporter) Report(angleDeg float64, peak float64, debug *DebugInfo) {
+func (r StdoutReporter) Report(angleDeg float64, peak float64, snr float64, confidence float64, lockState LockState, debug *DebugInfo) {
 	fields := []logging.Field{
 		{Key: "subsystem", Value: "telemetry"},
 		{Key: "angle_deg", Value: angleDeg},
 	}
 	if peak != 0 {
 		fields = append(fields, logging.Field{Key: "peak_dbfs", Value: peak})
+	}
+	if snr != 0 {
+		fields = append(fields, logging.Field{Key: "snr_db", Value: snr})
+	}
+	if confidence != 0 {
+		fields = append(fields, logging.Field{Key: "tracking_confidence", Value: confidence})
+	}
+	if lockState != "" {
+		fields = append(fields, logging.Field{Key: "lock_state", Value: lockState})
 	}
 	if debug != nil {
 		fields = append(fields,

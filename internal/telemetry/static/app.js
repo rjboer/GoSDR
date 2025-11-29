@@ -71,6 +71,9 @@ function stopTelemetry() {
 const radarCanvas = document.getElementById('radarCanvas');
 const radarCtx = radarCanvas.getContext('2d');
 const radarAngleDisplay = document.getElementById('radarAngle');
+const snrDisplay = document.getElementById('snrValue');
+const confidenceDisplay = document.getElementById('confidenceValue');
+const lockBadge = document.getElementById('lockBadge');
 
 // Radar dimensions
 const radarCenterX = radarCanvas.width / 2;
@@ -179,6 +182,8 @@ function createChart(elementId, label, color, yTitle) {
 
 const angleChart = createChart('angleChart', 'Angle (deg)', '#2f80ed', 'Degrees');
 const peakChart = createChart('peakChart', 'Peak (dBFS)', '#9b59b6', 'dBFS');
+const snrChart = createChart('snrChart', 'SNR (dB)', '#27ae60', 'dB');
+const confidenceChart = createChart('confidenceChart', 'Confidence (%)', '#f59e0b', 'Percent');
 
 const MAX_POINTS = 100;
 
@@ -238,17 +243,46 @@ function addSample(sample) {
   const timestamp = new Date(sample.timestamp).toLocaleTimeString();
   pushPoint(angleChart, timestamp, sample.angleDeg);
   pushPoint(peakChart, timestamp, sample.peak);
+  pushPoint(snrChart, timestamp, sample.snr ?? 0);
+  const confidencePercent = Math.max(0, Math.min(1, sample.trackingConfidence ?? 0)) * 100;
+  pushPoint(confidenceChart, timestamp, confidencePercent);
 
   // Update radar display
   updateRadar(sample.angleDeg);
+  updateMetrics(sample.snr, confidencePercent, sample.lockState);
 
   updateDebugPanel(sample);
 
   const row = document.createElement('tr');
-  row.innerHTML = `<td>${timestamp}</td><td>${sample.angleDeg.toFixed(2)}</td><td>${sample.peak.toFixed(2)}</td>`;
+  row.innerHTML = `<td>${timestamp}</td><td>${sample.angleDeg.toFixed(2)}</td><td>${sample.peak.toFixed(2)}</td><td>${(sample.snr ?? 0).toFixed(2)}</td><td>${confidencePercent.toFixed(0)}%</td><td>${sample.lockState || 'searching'}</td>`;
   historyBody.prepend(row);
   while (historyBody.children.length > MAX_POINTS) {
     historyBody.removeChild(historyBody.lastChild);
+  }
+}
+
+function updateMetrics(snr, confidencePercent, lockState) {
+  if (snrDisplay) {
+    snrDisplay.textContent = Number.isFinite(snr) ? `${snr.toFixed(1)} dB` : '-- dB';
+  }
+  if (confidenceDisplay) {
+    const safe = Number.isFinite(confidencePercent) ? confidencePercent : 0;
+    confidenceDisplay.textContent = `${safe.toFixed(0)}%`;
+  }
+  updateLockBadge(lockState);
+}
+
+function updateLockBadge(state) {
+  if (!lockBadge) return;
+  const normalized = (state || 'searching').toLowerCase();
+  lockBadge.textContent = normalized;
+  lockBadge.classList.remove('locked', 'tracking', 'searching');
+  if (normalized === 'locked') {
+    lockBadge.classList.add('locked');
+  } else if (normalized === 'tracking') {
+    lockBadge.classList.add('tracking');
+  } else {
+    lockBadge.classList.add('searching');
   }
 }
 

@@ -33,6 +33,20 @@
           <canvas id="radarCanvas" width="400" height="250" aria-label="Radar display"></canvas>
           <div class="radar-info">
             <span id="radarAngle">Angle: --</span>
+            <div class="metric-strip">
+              <div class="metric-card">
+                <p class="muted">SNR</p>
+                <div id="snrValue" class="metric-value">-- dB</div>
+              </div>
+              <div class="metric-card">
+                <p class="muted">Confidence</p>
+                <div id="confidenceValue" class="metric-value">--%</div>
+              </div>
+              <div class="metric-card">
+                <p class="muted">Lock</p>
+                <div id="lockBadge" class="lock-badge">searching</div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="chart-panel">
@@ -43,6 +57,14 @@
           <h2>Peak Level</h2>
           <canvas id="peakChart" aria-label="Peak chart"></canvas>
         </div>
+        <div class="chart-panel">
+          <h2>SNR</h2>
+          <canvas id="snrChart" aria-label="SNR chart"></canvas>
+        </div>
+        <div class="chart-panel">
+          <h2>Tracking Confidence</h2>
+          <canvas id="confidenceChart" aria-label="Confidence chart"></canvas>
+        </div>
       </div>
       <div class="history">
         <h2>Latest samples</h2>
@@ -52,6 +74,9 @@
               <th>Time</th>
               <th>Angle (deg)</th>
               <th>Peak (dBFS)</th>
+              <th>SNR (dB)</th>
+              <th>Confidence</th>
+              <th>Lock</th>
             </tr>
           </thead>
           <tbody></tbody>
