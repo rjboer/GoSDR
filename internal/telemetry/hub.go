@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -160,6 +161,9 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	if cfg.MockPhaseDelta == 0 {
 		cfg.MockPhaseDelta = base.MockPhaseDelta
 	}
+
+	cfg.SDRBackend = strings.ToLower(strings.TrimSpace(cfg.SDRBackend))
+	cfg.SDRURI = strings.TrimSpace(cfg.SDRURI)
 
 	if cfg.SDRBackend == "" {
 		cfg.SDRBackend = base.SDRBackend
@@ -366,6 +370,12 @@ func (h *Hub) applyConfig(cfg Config) {
 	}
 }
 
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 func (h *Hub) handleHistory(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(h.History())
@@ -378,13 +388,13 @@ func (h *Hub) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 
 func (h *Hub) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	var incoming Config
 	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
-		http.Error(w, fmt.Sprintf("invalid config payload: %v", err), http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid config payload: %v", err))
 		return
 	}
 
@@ -394,7 +404,7 @@ func (h *Hub) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := validateConfig(incoming, current)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -404,7 +414,7 @@ func (h *Hub) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.persistConfig(cfg); err != nil {
 		log.Printf("failed to persist config: %v", err)
-		http.Error(w, fmt.Sprintf("failed to save config: %v", err), http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save config: %v", err))
 		return
 	}
 

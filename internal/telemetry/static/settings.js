@@ -70,10 +70,23 @@ const statusEl = $('status');
 const form = $('configForm');
 const resetBtn = $('resetBtn');
 const backendField = $('sdrBackend');
+const restartBanner = $('restartBanner');
 
-function setStatus(message, isError = false) {
+let lastSavedConfig = null;
+
+function setStatus(message, type = 'info') {
+  if (!statusEl) return;
   statusEl.textContent = message;
-  statusEl.className = isError ? 'status error' : 'status';
+  const classNames = ['status'];
+  if (type === 'error') classNames.push('error');
+  if (type === 'success') classNames.push('success');
+  if (!message) classNames.push('hidden');
+  statusEl.className = classNames.join(' ');
+}
+
+function showRestartBanner(visible) {
+  if (!restartBanner) return;
+  restartBanner.classList.toggle('hidden', !visible);
 }
 
 function updateBackendState() {
@@ -113,10 +126,12 @@ async function loadConfig() {
     }
     const cfg = await res.json();
     applyConfig(cfg);
+    lastSavedConfig = cfg;
+    showRestartBanner(false);
     setStatus('');
   } catch (err) {
     console.error(err);
-    setStatus(err.message, true);
+    setStatus(err.message, 'error');
     applyConfig(defaults);
   }
 }
@@ -144,14 +159,24 @@ form.addEventListener('submit', async (evt) => {
     });
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(errText || `Failed with status ${res.status}`);
+      let message = errText || `Failed with status ${res.status}`;
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed?.error) message = parsed.error;
+      } catch (_) {}
+      throw new Error(message);
     }
     const saved = await res.json();
     applyConfig(saved);
-    setStatus('Configuration updated');
+    const backendChanged =
+      lastSavedConfig &&
+      (lastSavedConfig.sdrBackend !== saved.sdrBackend || lastSavedConfig.sdrUri !== saved.sdrUri);
+    lastSavedConfig = saved;
+    setStatus('Configuration updated', 'success');
+    showRestartBanner(Boolean(backendChanged));
   } catch (err) {
     console.error(err);
-    setStatus(err.message, true);
+    setStatus(err.message, 'error');
   }
 });
 

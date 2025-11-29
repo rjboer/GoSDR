@@ -200,6 +200,13 @@ Once started with `--web-addr=:8080`:
 - `GET /api/config` - Get current configuration
 - `POST /api/config/update` - Update configuration
 
+### Configuration Persistence & Restarts
+
+- All UI and API configuration edits are validated server-side and then written to `config.json` in the GoSDR working directory.
+- Values that affect the SDR backend (switching between `mock` and `pluto` or changing `sdr_uri`) are stored immediately but require a tracker restart to take effect on the radio connection.
+- Other tuning fields (FFT size, tracking length, gains, etc.) are applied live in the telemetry hub once validation passes.
+- If validation fails, the API returns a JSON error message describing the invalid field so you can correct it from the Settings page or CLI.
+
 ### Troubleshooting
 
 **Web interface not accessible:**

@@ -21,6 +21,11 @@
   </header>
 
   <main class="settings-page">
+    <div id="restartBanner" class="info-banner hidden" role="status" aria-live="polite">
+      <strong>Restart required for SDR changes.</strong>
+      <span>Restart the GoSDR service to apply backend updates.</span>
+    </div>
+
     <form id="configForm" class="settings-form">
       <section class="card">
         <div class="section-heading">
@@ -153,7 +158,7 @@
       <div class="form-actions">
         <button type="submit">Save changes</button>
         <button type="button" id="resetBtn" class="ghost">Reset to defaults</button>
-        <span id="status" class="status" role="status" aria-live="polite"></span>
+        <span id="status" class="status hidden" role="status" aria-live="polite"></span>
       </div>
     </form>
   </main>
