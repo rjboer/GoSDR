@@ -146,9 +146,42 @@
       </div>
     </section>
     <section id="trace" class="tab-panel" role="tabpanel" aria-label="Trace view">
-      <div class="placeholder">
-        <h2>Trace</h2>
-        <p>Trace data will appear here when available.</p>
+      <div class="chart-panel trace-panel">
+        <div class="trace-header">
+          <div>
+            <h2>Trace</h2>
+            <p class="muted">Live telemetry samples with export options</p>
+          </div>
+          <div class="trace-meta">
+            <span id="traceCount" class="metric-value">0 / 500</span>
+            <span id="traceStatus" class="trace-status-badge">live</span>
+          </div>
+        </div>
+        <div class="trace-controls" role="group" aria-label="Trace controls">
+          <div class="trace-actions">
+            <button id="tracePauseBtn" class="secondary-btn" type="button">Pause</button>
+            <button id="traceClearBtn" class="secondary-btn" type="button">Clear history</button>
+          </div>
+          <div class="trace-export" aria-label="Trace export controls">
+            <label for="traceExportFormat" class="muted">Export as</label>
+            <select id="traceExportFormat" aria-label="Trace export format">
+              <option value="csv">CSV</option>
+              <option value="json">JSON</option>
+            </select>
+            <button id="traceCopyBtn" class="secondary-btn" type="button">Copy</button>
+            <button id="traceDownloadBtn" class="primary-btn" type="button">Download</button>
+          </div>
+        </div>
+        <div class="trace-table" aria-live="polite">
+          <div class="trace-table-header">
+            <div>Timestamp</div>
+            <div>Angle (deg)</div>
+            <div>Peak (dBFS)</div>
+          </div>
+          <div class="trace-table-body" id="traceViewport">
+            <div id="traceVirtualList" class="trace-virtual-list" role="rowgroup"></div>
+          </div>
+        </div>
       </div>
     </section>
     <section id="debug" class="tab-panel" role="tabpanel" aria-label="Debug view">

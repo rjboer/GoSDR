@@ -342,3 +342,139 @@ main {
         color: #9fb3c8;
         font-size: 0.95rem;
 }
+
+.primary-btn,
+.secondary-btn {
+    padding: 0.55rem 0.9rem;
+    border-radius: 6px;
+    border: 1px solid #1f2a3a;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.primary-btn {
+    background: #2f80ed;
+    color: #fff;
+    border-color: #2f80ed;
+}
+
+.primary-btn:hover {
+    background: #256bc0;
+}
+
+.secondary-btn {
+    background: #0c1118;
+    color: #cbd5e1;
+}
+
+.secondary-btn:hover {
+    background: #1f2a3a;
+}
+
+.trace-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.trace-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+}
+
+.trace-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.trace-status-badge {
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    background: #16a34a;
+    color: #e5f7eb;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    letter-spacing: 0.02em;
+}
+
+.trace-status-badge.paused {
+    background: #f59e0b;
+    color: #0c1118;
+}
+
+.trace-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.trace-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.trace-export {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.trace-export select {
+    background: #0c1118;
+    color: #e4e9f0;
+    border: 1px solid #1f2a3a;
+    border-radius: 6px;
+    padding: 0.4rem 0.5rem;
+}
+
+.trace-table {
+    border: 1px solid #1f2a3a;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.trace-table-header {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr 1fr;
+    background: #1f2a3a;
+    color: #cbd5e1;
+    padding: 0.65rem 0.75rem;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.trace-table-body {
+    max-height: 360px;
+    overflow-y: auto;
+    position: relative;
+    background: #0c1118;
+}
+
+.trace-virtual-list {
+    position: relative;
+    width: 100%;
+}
+
+.trace-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: grid;
+    grid-template-columns: 1.5fr 1fr 1fr;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #1f2a3a;
+    box-sizing: border-box;
+    color: #e4e9f0;
+}
+
+.trace-row-alt {
+    background: rgba(31, 42, 58, 0.4);
+}
