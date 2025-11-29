@@ -3,7 +3,7 @@
 A couple of days ago I saw a script from Jon Kraft about beamforming and direction of arrival tracking using an Pluto SDR. 
 As i have a pluto+ SDR I enjoyed this inmensly. 
 
-So I decided to create a golang version of Jon's idea because it is more easily portable (executables). 
+So I decided to create a golang version of Jon's idea because it is more easily portable (executables with the IIOD in there!). 
 While I was at it, i thought about also adding a configuration page in there. 
 
 
