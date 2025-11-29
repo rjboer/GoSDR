@@ -51,7 +51,8 @@ function startTelemetry() {
   telemetryStream.onmessage = (event) => {
     try {
       const sample = JSON.parse(event.data);
-      handleSample(sample);
+      pendingSample = sample;
+      scheduleSampleRender();
     } catch (err) {
       console.error('parse sample', err);
     }
@@ -179,9 +180,45 @@ function createChart(elementId, label, color, yTitle) {
 const angleChart = createChart('angleChart', 'Angle (deg)', '#2f80ed', 'Degrees');
 const peakChart = createChart('peakChart', 'Peak (dBFS)', '#9b59b6', 'dBFS');
 
-const MAX_POINTS = 500;
+const MAX_POINTS = 100;
 
 const historyBody = document.querySelector('#historyTable tbody');
+
+// Rate limiting for SSE updates (10 Hz cap + animation frame batching)
+const FRAME_INTERVAL_MS = 100;
+let pendingSample = null;
+let frameScheduled = false;
+let lastFrameTime = 0;
+
+function scheduleSampleRender() {
+  if (frameScheduled) return;
+  frameScheduled = true;
+  requestAnimationFrame(processPendingSample);
+}
+
+function processPendingSample(timestamp) {
+  if (!pendingSample) {
+    frameScheduled = false;
+    return;
+  }
+
+  const elapsed = timestamp - lastFrameTime;
+  if (elapsed < FRAME_INTERVAL_MS) {
+    requestAnimationFrame(processPendingSample);
+    return;
+  }
+
+  frameScheduled = false;
+  lastFrameTime = timestamp;
+
+  const sample = pendingSample;
+  pendingSample = null;
+  handleSample(sample);
+
+  if (pendingSample) {
+    scheduleSampleRender();
+  }
+}
 
 function handleSample(sample) {
   if (!telemetryActive) return;
@@ -199,7 +236,7 @@ function addSample(sample) {
   const row = document.createElement('tr');
   row.innerHTML = `<td>${timestamp}</td><td>${sample.angleDeg.toFixed(2)}</td><td>${sample.peak.toFixed(2)}</td>`;
   historyBody.prepend(row);
-  while (historyBody.children.length > 100) {
+  while (historyBody.children.length > MAX_POINTS) {
     historyBody.removeChild(historyBody.lastChild);
   }
 }
@@ -220,3 +257,4 @@ setActiveTab('telemetry');
 // 1. Load page and confirm Telemetry tab is active with charts and radar visible.
 // 2. Switch to Trace/Debug/Settings tabs and verify Telemetry visuals hide while placeholders render.
 // 3. Return to Telemetry and confirm data resumes updating without console errors.
+// 4. Let more than 100 samples stream in and confirm charts/history cap at 100, scroll smoothly, and Chrome shows no performance warnings.
