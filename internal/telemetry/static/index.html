@@ -188,18 +188,101 @@
       <div class="debug-panel" aria-live="polite">
         <div class="debug-header">
           <h2>Debug telemetry</h2>
-          <p id="debugStatus" class="muted">Waiting for debug data…</p>
+          <p id="debugStatus" class="muted">Waiting for diagnostics…</p>
         </div>
-        <div class="debug-grid">
-          <div class="debug-card">
-            <h3>Phase</h3>
-            <div class="debug-value" id="debugPhaseDelay">--</div>
-            <p class="muted">Monopulse phase: <span id="debugMonopulsePhase">--</span> rad</p>
+        <div class="debug-sections">
+          <div class="debug-section">
+            <div class="debug-section-header">
+              <h3>System Status</h3>
+              <span class="muted" id="debugLastUpdated">--</span>
+            </div>
+            <div class="debug-grid">
+              <div class="debug-card">
+                <h4>Uptime</h4>
+                <div class="debug-value" id="diagUptime">--</div>
+                <p class="muted">Started at <span id="diagStartTime">--</span></p>
+              </div>
+              <div class="debug-card">
+                <h4>Samples</h4>
+                <div class="debug-value" id="diagSamples">--</div>
+                <p class="muted">Last sample <span id="diagLastSample">--</span></p>
+              </div>
+              <div class="debug-card">
+                <h4>Update rate</h4>
+                <div class="debug-value" id="diagUpdateRate">--</div>
+                <p class="muted">avg samples/sec</p>
+              </div>
+            </div>
           </div>
-          <div class="debug-card">
-            <h3>Peak</h3>
-            <div class="debug-value" id="debugPeakValue">--</div>
-            <p class="muted">Bin <span id="debugPeakBin">--</span> in band <span id="debugPeakBand">--</span></p>
+          <div class="debug-section">
+            <div class="debug-section-header">
+              <h3>Performance</h3>
+            </div>
+            <div class="debug-grid">
+              <div class="debug-card">
+                <h4>CPU load</h4>
+                <div class="debug-value" id="diagCpuLoad">--</div>
+                <p class="muted">recent process usage</p>
+              </div>
+              <div class="debug-card">
+                <h4>Memory</h4>
+                <div class="debug-value" id="diagMemAlloc">--</div>
+                <p class="muted">Total reserved <span id="diagMemSys">--</span></p>
+              </div>
+              <div class="debug-card">
+                <h4>Goroutines</h4>
+                <div class="debug-value" id="diagGoroutines">--</div>
+                <p class="muted">Iteration <span id="diagIterationTime">--</span></p>
+              </div>
+            </div>
+          </div>
+          <div class="debug-section">
+            <div class="debug-section-header">
+              <h3>Signal Quality</h3>
+            </div>
+            <div class="debug-grid">
+              <div class="debug-card">
+                <h4>SNR</h4>
+                <div class="debug-value" id="diagSNR">--</div>
+                <p class="muted">Noise floor <span id="diagNoiseFloor">--</span></p>
+              </div>
+              <div class="debug-card">
+                <h4>Confidence</h4>
+                <div class="debug-value" id="diagConfidence">--</div>
+                <p class="muted">Lock <span class="lock-badge" id="diagLockState">--</span></p>
+              </div>
+            </div>
+          </div>
+          <div class="debug-section">
+            <div class="debug-section-header">
+              <h3>Debug Info</h3>
+            </div>
+            <div class="debug-grid">
+              <div class="debug-card">
+                <h4>Phase delay</h4>
+                <div class="debug-value" id="debugPhaseDelay">--</div>
+                <p class="muted">Monopulse phase <span id="debugMonopulsePhase">--</span></p>
+              </div>
+              <div class="debug-card">
+                <h4>Peak</h4>
+                <div class="debug-value" id="debugPeakValue">--</div>
+                <p class="muted">Bin <span id="debugPeakBin">--</span> in band <span id="debugPeakBand">--</span></p>
+              </div>
+            </div>
+          </div>
+          <div class="debug-section">
+            <div class="debug-section-header">
+              <h3>Event Log</h3>
+              <span class="muted">Latest 100 events</span>
+            </div>
+            <div class="event-log">
+              <div class="event-log-header">
+                <span>Time</span>
+                <span>Level</span>
+                <span>Message</span>
+              </div>
+              <div class="event-log-body" id="eventLog"></div>
+            </div>
           </div>
         </div>
       </div>

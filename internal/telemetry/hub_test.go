@@ -15,11 +15,12 @@ func newTestHub() *Hub {
 }
 
 func TestHandleDiagnosticsReturnsMetricsAndSpectrum(t *testing.T) {
-	hub := newTestHub()
-	hub.UpdateSpectrumSnapshot([]float64{1, 2, 3, 4}, "test-source")
+        hub := newTestHub()
+        hub.UpdateSpectrumSnapshot([]float64{1, 2, 3, 4}, "test-source")
+        hub.Report(10, -12, 15, 0.8, LockStateTracking, &DebugInfo{})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil)
-	rr := httptest.NewRecorder()
+        req := httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil)
+        rr := httptest.NewRecorder()
 
 	hub.handleDiagnostics(rr, req)
 
@@ -35,15 +36,24 @@ func TestHandleDiagnosticsReturnsMetricsAndSpectrum(t *testing.T) {
 	if resp.Process.NumGoroutine == 0 {
 		t.Fatal("expected goroutine count to be reported")
 	}
-	if resp.Process.Uptime <= 0 {
-		t.Fatal("expected positive uptime")
-	}
-	if len(resp.Spectrum.Bins) != 4 {
-		t.Fatalf("expected 4 spectrum bins, got %d", len(resp.Spectrum.Bins))
-	}
-	if resp.Spectrum.Source != "test-source" {
-		t.Fatalf("expected spectrum source 'test-source', got %q", resp.Spectrum.Source)
-	}
+        if resp.Process.Uptime <= 0 {
+                t.Fatal("expected positive uptime")
+        }
+        if resp.Process.Samples == 0 {
+                t.Fatal("expected sample count to be populated")
+        }
+        if len(resp.Spectrum.Bins) != 4 {
+                t.Fatalf("expected 4 spectrum bins, got %d", len(resp.Spectrum.Bins))
+        }
+        if resp.Spectrum.Source != "test-source" {
+                t.Fatalf("expected spectrum source 'test-source', got %q", resp.Spectrum.Source)
+        }
+        if resp.Signal.SNR == 0 {
+                t.Fatal("expected signal quality to include snr")
+        }
+        if len(resp.Events) == 0 {
+                t.Fatal("expected event log to be included")
+        }
 }
 
 func TestHandleDiagnosticsMethodNotAllowed(t *testing.T) {

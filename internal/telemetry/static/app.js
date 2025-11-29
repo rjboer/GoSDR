@@ -5,6 +5,7 @@ const tabPanels = document.querySelectorAll('.tab-panel');
 let telemetryActive = true;
 let telemetryStream = null;
 let historyLoaded = false;
+let diagnosticsTimer = null;
 
 function setActiveTab(tabId) {
   tabButtons.forEach((btn) => {
@@ -19,6 +20,7 @@ function setActiveTab(tabId) {
   });
 
   setTelemetryActive(tabId === 'telemetry');
+  toggleDiagnosticsRefresh(tabId === 'debug');
 }
 
 tabButtons.forEach((btn) => {
@@ -209,6 +211,22 @@ const TRACE_ROW_HEIGHT = 36;
 
 // Debug panel elements
 const debugStatus = document.getElementById('debugStatus');
+const diagLastUpdated = document.getElementById('debugLastUpdated');
+const diagUptime = document.getElementById('diagUptime');
+const diagStartTime = document.getElementById('diagStartTime');
+const diagSamples = document.getElementById('diagSamples');
+const diagLastSample = document.getElementById('diagLastSample');
+const diagUpdateRate = document.getElementById('diagUpdateRate');
+const diagCpuLoad = document.getElementById('diagCpuLoad');
+const diagMemAlloc = document.getElementById('diagMemAlloc');
+const diagMemSys = document.getElementById('diagMemSys');
+const diagGoroutines = document.getElementById('diagGoroutines');
+const diagIterationTime = document.getElementById('diagIterationTime');
+const diagSNR = document.getElementById('diagSNR');
+const diagNoiseFloor = document.getElementById('diagNoiseFloor');
+const diagConfidence = document.getElementById('diagConfidence');
+const diagLockState = document.getElementById('diagLockState');
+const eventLogBody = document.getElementById('eventLog');
 const debugPhaseDelay = document.getElementById('debugPhaseDelay');
 const debugMonopulsePhase = document.getElementById('debugMonopulsePhase');
 const debugPeakValue = document.getElementById('debugPeakValue');
@@ -440,23 +458,23 @@ function updateMetrics(snr, confidencePercent, lockState) {
   updateLockBadge(lockState);
 }
 
-function updateLockBadge(state) {
-  if (!lockBadge) return;
+function updateLockBadge(state, badgeEl = lockBadge) {
+  if (!badgeEl) return;
   const normalized = (state || 'searching').toLowerCase();
-  lockBadge.textContent = normalized;
-  lockBadge.classList.remove('locked', 'tracking', 'searching');
+  badgeEl.textContent = normalized;
+  badgeEl.classList.remove('locked', 'tracking', 'searching');
   if (normalized === 'locked') {
-    lockBadge.classList.add('locked');
+    badgeEl.classList.add('locked');
   } else if (normalized === 'tracking') {
-    lockBadge.classList.add('tracking');
+    badgeEl.classList.add('tracking');
   } else {
-    lockBadge.classList.add('searching');
+    badgeEl.classList.add('searching');
   }
 }
 
 function updateDebugPanel(sample) {
   if (!debugStatus) return;
-  const info = sample.debug;
+  const info = sample?.debug ?? sample;
   if (!info) {
     if (!debugStreamEnabled) {
       debugStatus.textContent = 'Debug mode disabled';
@@ -490,6 +508,139 @@ function updateDebugPanel(sample) {
   }
   if (debugPeakBand) {
     debugPeakBand.textContent = bandLabel;
+  }
+}
+
+function formatDuration(ns) {
+  if (!Number.isFinite(ns)) return '--';
+  const totalSeconds = ns / 1e9;
+  if (totalSeconds < 1) return `${(totalSeconds * 1000).toFixed(0)} ms`;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  const hours = Math.floor(minutes / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  return `${minutes}m ${seconds}s`;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '--';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatTimestamp(value) {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleString();
+}
+
+function renderEventLog(events = []) {
+  if (!eventLogBody) return;
+  eventLogBody.innerHTML = '';
+  if (!events.length) {
+    const row = document.createElement('div');
+    row.className = 'event-row';
+    row.innerHTML = '<span>--</span><span>--</span><span>No events yet</span>';
+    eventLogBody.appendChild(row);
+    return;
+  }
+
+  for (let idx = events.length - 1; idx >= 0; idx -= 1) {
+    const evt = events[idx];
+    const row = document.createElement('div');
+    row.className = 'event-row';
+    const timeEl = document.createElement('span');
+    timeEl.textContent = formatTimestamp(evt.timestamp);
+    const levelEl = document.createElement('span');
+    levelEl.textContent = (evt.level || '').toUpperCase();
+    const msgEl = document.createElement('span');
+    msgEl.textContent = evt.message || '';
+    row.append(timeEl, levelEl, msgEl);
+    eventLogBody.appendChild(row);
+  }
+}
+
+function renderDiagnostics(diag) {
+  if (!diag || !diag.process) {
+    if (debugStatus) debugStatus.textContent = 'Diagnostics unavailable';
+    return;
+  }
+
+  if (debugStatus) debugStatus.textContent = 'Diagnostics live';
+  if (diagLastUpdated) diagLastUpdated.textContent = formatTimestamp(diag.process.lastUpdated);
+  if (diagUptime) diagUptime.textContent = formatDuration(diag.process.uptime);
+  if (diagStartTime) diagStartTime.textContent = formatTimestamp(diag.process.startTime);
+  if (diagSamples) diagSamples.textContent = numberFormatter.format(diag.process.samples || 0);
+  if (diagLastSample) diagLastSample.textContent = formatTimestamp(diag.process.lastSample || diag.signal?.updatedAt);
+  if (diagUpdateRate) {
+    diagUpdateRate.textContent = Number.isFinite(diag.process.updateRateHz)
+      ? `${diag.process.updateRateHz.toFixed(2)} Hz`
+      : '--';
+  }
+
+  if (diagCpuLoad) {
+    diagCpuLoad.textContent = Number.isFinite(diag.process.cpuPercent)
+      ? `${diag.process.cpuPercent.toFixed(1)}%`
+      : '--';
+  }
+  if (diagMemAlloc) diagMemAlloc.textContent = formatBytes(diag.process.memoryAllocBytes);
+  if (diagMemSys) diagMemSys.textContent = formatBytes(diag.process.memorySysBytes);
+  if (diagGoroutines) diagGoroutines.textContent = diag.process.numGoroutine ?? '--';
+  if (diagIterationTime) {
+    const last = formatDuration(diag.process.iterationLast);
+    const avg = formatDuration(diag.process.iterationAvg);
+    diagIterationTime.textContent = `${last} / ${avg}`;
+  }
+
+  const signal = diag.signal || {};
+  if (diagSNR) {
+    diagSNR.textContent = Number.isFinite(signal.snr) ? `${signal.snr.toFixed(1)} dB` : '--';
+  }
+  if (diagNoiseFloor) {
+    diagNoiseFloor.textContent = Number.isFinite(signal.noiseFloor)
+      ? `${signal.noiseFloor.toFixed(1)} dBFS`
+      : '--';
+  }
+  if (diagConfidence) {
+    const confPct = Number.isFinite(signal.confidence) ? signal.confidence * 100 : NaN;
+    diagConfidence.textContent = Number.isFinite(confPct) ? `${confPct.toFixed(0)}%` : '--';
+  }
+  updateLockBadge(signal.lockState, diagLockState);
+
+  updateDebugPanel(diag.debug);
+  renderEventLog(diag.events);
+}
+
+function toggleDiagnosticsRefresh(enable) {
+  if (enable) {
+    if (!diagnosticsTimer) {
+      fetchDiagnostics();
+      diagnosticsTimer = setInterval(fetchDiagnostics, 5000);
+    }
+    return;
+  }
+  if (diagnosticsTimer) {
+    clearInterval(diagnosticsTimer);
+    diagnosticsTimer = null;
+  }
+}
+
+async function fetchDiagnostics() {
+  try {
+    const res = await fetch('/api/diagnostics');
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const payload = await res.json();
+    renderDiagnostics(payload);
+  } catch (err) {
+    console.error('diagnostics fetch failed', err);
+    if (debugStatus) {
+      debugStatus.textContent = 'Diagnostics unavailable';
+    }
   }
 }
 
