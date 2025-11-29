@@ -101,11 +101,11 @@ const radarCenterY = radarCanvas.height - 20;
 const radarMaxRadius = radarCenterY - 30;
 
 // Range rings (in cm, for display only)
-const rangeRings = [10, 20, 30];
+const rangeRings = [10, 20, 30, 40, 50];
 
 // Current detection
-let currentAngle = 90; // Start at center (0° in tracker coordinates)
-let currentRange = 20; // Fixed at middle ring
+let currentAngleDeg = 90; // Start at center (0° in tracker coordinates)
+let currentRange = 30; // Fixed at middle ring
 
 function drawRadar() {
   // Clear canvas
@@ -119,7 +119,8 @@ function drawRadar() {
   rangeRings.forEach((range, index) => {
     const radius = radarMaxRadius * (index + 1) / rangeRings.length;
     radarCtx.beginPath();
-    radarCtx.arc(radarCenterX, radarCenterY, radius, Math.PI, 0, false);
+    // Semicircle above the center
+    radarCtx.arc(radarCenterX, radarCenterY, radius, Math.PI, 0, true);
     radarCtx.stroke();
 
     // Range labels
@@ -128,12 +129,17 @@ function drawRadar() {
     radarCtx.fillText(`${range}cm`, radarCenterX + radius + 5, radarCenterY - 5);
   });
 
-  // Draw static angle lines (every 10 degrees)
+  // Draw static angle lines (every 10 degrees in tracker coords: -90..90)
   radarCtx.strokeStyle = '#00ff00';
   radarCtx.lineWidth = 0.5;
 
-  for (let angle = 0; angle <= 180; angle += 10) {
-    const rad = (angle - 90) * Math.PI / 180;
+  for (let angleDeg = -90; angleDeg <= 90; angleDeg += 10) {
+    // Map tracker angle to canvas angle:
+    // 0° (ahead)   -> -90° (up)
+    // +90° (right) ->   0° (right)
+    // -90° (left)  -> -180° (left)
+    const rad = (angleDeg - 90) * Math.PI / 180;
+
     const x = radarCenterX + radarMaxRadius * Math.cos(rad);
     const y = radarCenterY + radarMaxRadius * Math.sin(rad);
 
@@ -142,18 +148,18 @@ function drawRadar() {
     radarCtx.lineTo(x, y);
     radarCtx.stroke();
 
-    // Angle labels at 0°, 45°, 90°, 135°, 180°
-    if (angle % 45 === 0) {
+    // Angle labels at -90°, -45°, 0°, 45°, 90°
+    if (angleDeg % 45 === 0) {
       radarCtx.fillStyle = '#00ff00';
       radarCtx.font = '12px monospace';
       const labelX = radarCenterX + (radarMaxRadius + 15) * Math.cos(rad);
       const labelY = radarCenterY + (radarMaxRadius + 15) * Math.sin(rad);
-      radarCtx.fillText(`${angle}°`, labelX - 10, labelY + 5);
+      radarCtx.fillText(`${angleDeg}°`, labelX - 12, labelY + 4);
     }
   }
 
-  // Draw detection marker (red dot)
-  const detectionRad = (currentAngle - 90) * Math.PI / 180;
+  // Draw detection marker (red dot) using the SAME mapping
+  const detectionRad = (currentAngleDeg - 90) * Math.PI / 180;
   const detectionRadius = radarMaxRadius * (currentRange / rangeRings[rangeRings.length - 1]);
   const detectionX = radarCenterX + detectionRadius * Math.cos(detectionRad);
   const detectionY = radarCenterY + detectionRadius * Math.sin(detectionRad);
@@ -169,15 +175,13 @@ function drawRadar() {
 }
 
 function updateRadar(angleDeg) {
-  // Convert angle from [-90, 90] to [0, 180] for radar display
-  currentAngle = angleDeg + 90;
-
-  // Clamp to valid range
-  if (currentAngle < 0) currentAngle = 0;
-  if (currentAngle > 180) currentAngle = 180;
+  // angleDeg comes in as tracker coords [-90, 90]
+  currentAngleDeg = Math.max(-90, Math.min(90, angleDeg));
 
   drawRadar();
-  radarAngleDisplay.textContent = `Angle: ${angleDeg.toFixed(1)}°`;
+  if (radarAngleDisplay) {
+    radarAngleDisplay.textContent = `Angle: ${currentAngleDeg.toFixed(1)}°`;
+  }
 }
 
 // Initial draw
@@ -437,7 +441,7 @@ function addSample(sample, fromHistory = false) {
   pushPoint(peakChart, timestamp, sample.peak);
   pushPoint(snrChart, timestamp, sample.snr ?? 0);
   const confidencePercent = Math.max(0, Math.min(1, sample.trackingConfidence ?? 0)) * 100;
-pushPoint(confidenceChart, timestamp, confidencePercent);
+  pushPoint(confidenceChart, timestamp, confidencePercent);
 
   // Update radar display
   updateRadar(sample.angleDeg);
