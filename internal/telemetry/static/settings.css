@@ -104,8 +104,36 @@
     color: #9fb3c8;
 }
 
+.status.success {
+    color: #34d399;
+}
+
 .status.error {
     color: #ef4444;
+}
+
+.status.hidden {
+    display: none;
+}
+
+.info-banner {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    border-radius: 8px;
+    border: 1px solid #1f2a3a;
+    background: rgba(52, 211, 153, 0.08);
+    color: #cbd5e1;
+}
+
+.info-banner strong {
+    color: #34d399;
+}
+
+.info-banner.hidden {
+    display: none;
 }
 
 @media (max-width: 720px) {
