@@ -20,35 +20,61 @@
     </nav>
   </header>
   <main>
-    <section class="chart-grid">
-      <div class="chart-panel radar-panel">
-        <h2>Radar Display</h2>
-        <canvas id="radarCanvas" width="400" height="250" aria-label="Radar display"></canvas>
-        <div class="radar-info">
-          <span id="radarAngle">Angle: --</span>
+    <div class="tab-header" role="tablist" aria-label="Telemetry views">
+      <button class="tab-button active" role="tab" aria-selected="true" aria-controls="telemetry" data-tab="telemetry">Telemetry</button>
+      <button class="tab-button" role="tab" aria-selected="false" aria-controls="trace" data-tab="trace">Trace</button>
+      <button class="tab-button" role="tab" aria-selected="false" aria-controls="debug" data-tab="debug">Debug</button>
+      <button class="tab-button" role="tab" aria-selected="false" aria-controls="settings" data-tab="settings">Settings</button>
+    </div>
+    <section id="telemetry" class="tab-panel active" role="tabpanel" aria-label="Telemetry charts">
+      <div class="chart-grid">
+        <div class="chart-panel radar-panel">
+          <h2>Radar Display</h2>
+          <canvas id="radarCanvas" width="400" height="250" aria-label="Radar display"></canvas>
+          <div class="radar-info">
+            <span id="radarAngle">Angle: --</span>
+          </div>
+        </div>
+        <div class="chart-panel">
+          <h2>Steering Angle</h2>
+          <canvas id="angleChart" aria-label="Angle chart"></canvas>
+        </div>
+        <div class="chart-panel">
+          <h2>Peak Level</h2>
+          <canvas id="peakChart" aria-label="Peak chart"></canvas>
         </div>
       </div>
-      <div class="chart-panel">
-        <h2>Steering Angle</h2>
-        <canvas id="angleChart" aria-label="Angle chart"></canvas>
-      </div>
-      <div class="chart-panel">
-        <h2>Peak Level</h2>
-        <canvas id="peakChart" aria-label="Peak chart"></canvas>
+      <div class="history">
+        <h2>Latest samples</h2>
+        <table id="historyTable" aria-label="Telemetry history">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Angle (deg)</th>
+              <th>Peak (dBFS)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
-    <section class="history">
-      <h2>Latest samples</h2>
-      <table id="historyTable" aria-label="Telemetry history">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Angle (deg)</th>
-            <th>Peak (dBFS)</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <section id="trace" class="tab-panel" role="tabpanel" aria-label="Trace view">
+      <div class="placeholder">
+        <h2>Trace</h2>
+        <p>Trace data will appear here when available.</p>
+      </div>
+    </section>
+    <section id="debug" class="tab-panel" role="tabpanel" aria-label="Debug view">
+      <div class="placeholder">
+        <h2>Debug</h2>
+        <p>Debug metrics and logs will be shown in this panel.</p>
+      </div>
+    </section>
+    <section id="settings" class="tab-panel" role="tabpanel" aria-label="Settings view">
+      <div class="placeholder">
+        <h2>Settings</h2>
+        <p>Manage configuration from the <a href="/settings">settings page</a>.</p>
+      </div>
     </section>
   </main>
   <script src="/static/app.js"></script>
