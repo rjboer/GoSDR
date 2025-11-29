@@ -27,7 +27,7 @@
 
 ---
 
-## Priority 3: Enhanced Telemetry (Optional)
+## Priority 3: Enhanced Telemetry 
 
 ### Debug Mode
 - [ ] Add `DebugInfo` struct to telemetry Sample
@@ -174,13 +174,13 @@
 - [ ] Document new features
 
 ---
-### RDF Features future
+### RDF Features future (future/optional)
 - [ ] Multi-frequency scanning
 - [ ] GPS integration for triangulation
 - [ ] Doppler compensation
 - [ ] Multi-path rejection
 - [ ] Bearing display (compass integration)
-- [ ] Spectrum waterfall display
+- [ ] Spectrum waterfall display in a separate tab
 
 ## Expected Results
 
