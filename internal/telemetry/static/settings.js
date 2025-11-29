@@ -22,6 +22,8 @@ const fieldIds = [
   'txGain',
   'sdrBackend',
   'sdrUri',
+  'logLevel',
+  'logFormat',
 ];
 
 const numericFields = new Set([
@@ -64,6 +66,8 @@ const defaults = {
   txGain: -10,
   sdrBackend: 'mock',
   sdrUri: 'ip:192.168.2.1',
+  logLevel: 'warn',
+  logFormat: 'text',
 };
 
 const statusEl = $('status');

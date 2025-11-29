@@ -16,7 +16,7 @@ import (
 
 func main() {
 	const configPath = "config.json"
-	logger := logging.New(logging.Info, logging.Text, os.Stdout).With(logging.Field{Key: "subsystem", Value: "cli"})
+	logger := logging.New(logging.Warn, logging.Text, os.Stdout).With(logging.Field{Key: "subsystem", Value: "cli"})
 	logging.SetDefault(logger)
 
 	persistentCfg, err := loadOrCreateConfig(configPath)
@@ -180,7 +180,7 @@ func parseConfig(args []string, lookup func(string) (string, bool), defaults per
 
 func persistentFromCLI(cfg cliConfig) persistentConfig {
 	if cfg.logLevel == "" {
-		cfg.logLevel = "info"
+		cfg.logLevel = "warn"
 	}
 	if cfg.logFormat == "" {
 		cfg.logFormat = "text"
@@ -258,7 +258,7 @@ func defaultPersistentConfig() persistentConfig {
 		WarmupBuffers:  3,
 		HistoryLimit:   500,
 		WebAddr:        ":8080",
-		LogLevel:       "info",
+		LogLevel:       "warn",
 		LogFormat:      "text",
 	}
 }

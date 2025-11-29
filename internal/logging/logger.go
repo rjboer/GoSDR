@@ -39,9 +39,9 @@ func ParseLevel(s string) (Level, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "debug":
 		return Debug, nil
-	case "info", "":
+	case "info":
 		return Info, nil
-	case "warn", "warning":
+	case "", "warn", "warning":
 		return Warn, nil
 	case "error":
 		return Error, nil
@@ -99,7 +99,7 @@ type Logger interface {
 // Default returns the process-wide logger.
 func Default() Logger {
 	if defaultLogger == nil {
-		defaultLogger = New(Info, Text, io.Discard)
+		defaultLogger = New(Warn, Text, io.Discard)
 	}
 	return defaultLogger
 }

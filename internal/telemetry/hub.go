@@ -37,6 +37,8 @@ type Config struct {
 	TxGain            int     `json:"txGain"`
 	SDRBackend        string  `json:"sdrBackend"`
 	SDRURI            string  `json:"sdrUri"`
+	LogLevel          string  `json:"logLevel"`
+	LogFormat         string  `json:"logFormat"`
 }
 
 const (
@@ -97,6 +99,8 @@ func defaultConfig() Config {
 		TxGain:            -10,
 		SDRBackend:        "mock",
 		SDRURI:            "ip:192.168.2.1",
+		LogLevel:          "warn",
+		LogFormat:         "text",
 	}
 }
 
@@ -120,8 +124,33 @@ func defaultPersistentConfig() persistentConfig {
 		WarmupBuffers:  3,
 		HistoryLimit:   500,
 		WebAddr:        ":8080",
-		LogLevel:       "info",
+		LogLevel:       "warn",
 		LogFormat:      "text",
+	}
+}
+
+func configFromPersistent(stored persistentConfig) Config {
+	return Config{
+		SampleRateHz:      int(stored.SampleRate),
+		RxLoHz:            stored.RxLO,
+		ToneOffsetHz:      stored.ToneOffset,
+		SpacingWavelength: stored.Spacing,
+		NumSamples:        stored.NumSamples,
+		HistoryLimit:      stored.HistoryLimit,
+		TrackingLength:    stored.TrackingLength,
+		PhaseStepDeg:      stored.PhaseStep,
+		ScanStepDeg:       stored.ScanStep,
+		PhaseCalDeg:       stored.PhaseCal,
+		PhaseDeltaDeg:     stored.PhaseDelta,
+		MockPhaseDelta:    stored.PhaseDelta,
+		WarmupBuffers:     stored.WarmupBuffers,
+		RxGain0:           stored.RxGain0,
+		RxGain1:           stored.RxGain1,
+		TxGain:            stored.TxGain,
+		SDRBackend:        stored.SDRBackend,
+		SDRURI:            stored.SDRURI,
+		LogLevel:          stored.LogLevel,
+		LogFormat:         stored.LogFormat,
 	}
 }
 
@@ -218,6 +247,18 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	if cfg.SpacingWavelength <= 0 {
 		return Config{}, errors.New("spacing wavelength must be positive")
 	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = base.LogLevel
+	}
+	if cfg.LogFormat == "" {
+		cfg.LogFormat = base.LogFormat
+	}
+	if _, err := logging.ParseLevel(cfg.LogLevel); err != nil {
+		return Config{}, fmt.Errorf("invalid log level: %w", err)
+	}
+	if _, err := logging.ParseFormat(cfg.LogFormat); err != nil {
+		return Config{}, fmt.Errorf("invalid log format: %w", err)
+	}
 
 	return cfg, nil
 }
@@ -272,8 +313,10 @@ func (h *Hub) persistConfig(cfg Config) error {
 	stored.SDRURI = cfg.SDRURI
 	stored.WarmupBuffers = cfg.WarmupBuffers
 	stored.HistoryLimit = cfg.HistoryLimit
+	stored.LogLevel = cfg.LogLevel
+	stored.LogFormat = cfg.LogFormat
 	if stored.LogLevel == "" {
-		stored.LogLevel = "info"
+		stored.LogLevel = "warn"
 	}
 	if stored.LogFormat == "" {
 		stored.LogFormat = "text"
@@ -301,14 +344,23 @@ type Hub struct {
 
 // NewHub builds a telemetry hub with the provided history limit.
 func NewHub(historyLimit int, logger logging.Logger) *Hub {
+	if logger == nil {
+		logger = logging.Default()
+	}
 	cfg := defaultConfig()
+	if stored, err := loadPersistentConfig(configFilePath); err == nil {
+		if validated, vErr := validateConfig(configFromPersistent(stored), cfg); vErr == nil {
+			cfg = validated
+		} else {
+			logger.Warn("ignoring invalid stored config", logging.Field{Key: "error", Value: vErr})
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		logger.Warn("failed to load persisted config", logging.Field{Key: "error", Value: err})
+	}
 	if historyLimit > 0 {
 		cfg.HistoryLimit = historyLimit
 	}
 	cfg, _ = validateConfig(cfg, defaultConfig())
-	if logger == nil {
-		logger = logging.Default()
-	}
 	return &Hub{
 		historyLimit: cfg.HistoryLimit,
 		subscribers:  make(map[chan Sample]struct{}),

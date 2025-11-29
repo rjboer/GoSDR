@@ -155,6 +155,33 @@
         </div>
       </section>
 
+      <section class="card">
+        <div class="section-heading">
+          <h2>Logging</h2>
+          <p>Control verbosity and output format</p>
+        </div>
+        <div class="field-grid">
+          <label class="field" for="logLevel">
+            <span>Log level</span>
+            <select id="logLevel" name="logLevel">
+              <option value="error">Error</option>
+              <option value="warn">Warn</option>
+              <option value="info">Info</option>
+              <option value="debug">Debug</option>
+            </select>
+            <small>Lower levels emit more verbose output.</small>
+          </label>
+          <label class="field" for="logFormat">
+            <span>Log format</span>
+            <select id="logFormat" name="logFormat">
+              <option value="text">Text</option>
+              <option value="json">JSON</option>
+            </select>
+            <small>Choose human-readable text or structured JSON logs.</small>
+          </label>
+        </div>
+      </section>
+
       <div class="form-actions">
         <button type="submit">Save changes</button>
         <button type="button" id="resetBtn" class="ghost">Reset to defaults</button>
