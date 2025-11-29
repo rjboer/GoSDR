@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 
@@ -80,7 +81,7 @@ func (t *Tracker) Init(ctx context.Context) error {
 	}
 	// Update cached DSP size if needed
 	t.dsp.UpdateSize(t.cfg.NumSamples)
-	return t.sdr.Init(ctx, sdr.Config{
+	if err := t.sdr.Init(ctx, sdr.Config{
 		SampleRate: t.cfg.SampleRate,
 		RxLO:       t.cfg.RxLO,
 		RxGain0:    t.cfg.RxGain0,
@@ -89,7 +90,10 @@ func (t *Tracker) Init(ctx context.Context) error {
 		ToneOffset: t.cfg.ToneOffset,
 		NumSamples: t.cfg.NumSamples,
 		PhaseDelta: t.cfg.PhaseDelta,
-	})
+	}); err != nil {
+		return fmt.Errorf("init SDR: %w", err)
+	}
+	return nil
 }
 
 // Run executes a coarse scan and then a monopulse tracking loop.
@@ -99,7 +103,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 		t.cfg.TrackingLength = 50
 	}
 	if err := t.warmup(ctx); err != nil {
-		return err
+		return fmt.Errorf("warmup: %w", err)
 	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -115,9 +119,10 @@ func (t *Tracker) Run(ctx context.Context) error {
 			// Continue to next iteration
 		}
 
+		iterationStart := time.Now()
 		rx0, rx1, err := t.sdr.RX(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("receive samples: %w", err)
 		}
 		if len(rx0) == 0 || len(rx1) == 0 {
 			t.logger.Warn("received empty buffer", logging.Field{Key: "subsystem", Value: "tracker"})
@@ -126,8 +131,10 @@ func (t *Tracker) Run(ctx context.Context) error {
 
 		// First iteration: coarse scan
 		if iteration == 0 {
+			coarseStart := time.Now()
 			// Use parallel coarse scan with cached DSP
 			delay, theta, peak, monoPhase, peakBin, snr := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
+			coarseDuration := time.Since(coarseStart)
 			t.lastDelay = delay
 			t.appendHistory(theta)
 
@@ -150,15 +157,19 @@ func (t *Tracker) Run(ctx context.Context) error {
 			if t.reporter != nil {
 				t.reporter.Report(theta, peak, snr, confidence, state, debug)
 			}
+			t.logger.Debug("coarse scan iteration", logging.Field{Key: "iteration", Value: iteration}, logging.Field{Key: "duration_ms", Value: coarseDuration.Seconds() * 1000})
 			iteration++
+			t.logger.Debug("iteration complete", logging.Field{Key: "iteration", Value: iteration}, logging.Field{Key: "elapsed_ms", Value: time.Since(iterationStart).Seconds() * 1000})
 			continue
 		}
 
 		// Subsequent iterations: monopulse tracking
 		// Use parallel tracking with cached DSP
+		trackStart := time.Now()
 		var peak, monoPhase, snr float64
 		var peakBin int
 		t.lastDelay, peak, monoPhase, snr, peakBin = dsp.MonopulseTrackParallel(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
+		trackDuration := time.Since(trackStart)
 		theta := dsp.PhaseToTheta(t.lastDelay, t.cfg.RxLO, t.cfg.SpacingWavelength)
 		t.appendHistory(theta)
 
@@ -181,7 +192,9 @@ func (t *Tracker) Run(ctx context.Context) error {
 		if t.reporter != nil {
 			t.reporter.Report(theta, peak, snr, confidence, state, debug)
 		}
+		t.logger.Debug("tracking iteration", logging.Field{Key: "iteration", Value: iteration}, logging.Field{Key: "duration_ms", Value: trackDuration.Seconds() * 1000})
 		iteration++
+		t.logger.Debug("iteration complete", logging.Field{Key: "iteration", Value: iteration}, logging.Field{Key: "elapsed_ms", Value: time.Since(iterationStart).Seconds() * 1000})
 	}
 }
 
@@ -286,9 +299,11 @@ func (t *Tracker) warmup(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
+		warmupStart := time.Now()
 		if _, _, err := t.sdr.RX(ctx); err != nil {
-			return err
+			return fmt.Errorf("warmup RX buffer %d: %w", i, err)
 		}
+		t.logger.Debug("warmup buffer processed", logging.Field{Key: "index", Value: i}, logging.Field{Key: "duration_ms", Value: time.Since(warmupStart).Seconds() * 1000})
 	}
 	return nil
 }

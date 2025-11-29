@@ -30,20 +30,29 @@ func main() {
 		logger.Error("parse config", logging.Field{Key: "error", Value: err})
 		os.Exit(1)
 	}
+	if cfg.verbose {
+		cfg.debugMode = true
+	}
 
-	level, err := logging.ParseLevel(cfg.logLevel)
+	levelStr := cfg.logLevel
+	if cfg.verbose {
+		levelStr = "debug"
+	}
+	level, err := logging.ParseLevel(levelStr)
 	if err != nil {
 		logger.Error("invalid log level", logging.Field{Key: "error", Value: err})
 		os.Exit(1)
 	}
+	cfg.logLevel = levelStr
 	format, err := logging.ParseFormat(cfg.logFormat)
 	if err != nil {
 		logger.Error("invalid log format", logging.Field{Key: "error", Value: err})
 		os.Exit(1)
 	}
 
-	logger = logging.New(level, format, os.Stdout).With(logging.Field{Key: "subsystem", Value: "cli"})
-	logging.SetDefault(logger)
+        logger = logging.New(level, format, os.Stdout).With(logging.Field{Key: "subsystem", Value: "cli"})
+        logging.SetDefault(logger)
+        logStartupBanner(logger, cfg)
 
 	if err := saveConfig(configPath, persistentFromCLI(cfg)); err != nil {
 		logger.Error("save config", logging.Field{Key: "error", Value: err})
@@ -125,6 +134,7 @@ type cliConfig struct {
 	logLevel       string
 	logFormat      string
 	debugMode      bool
+	verbose        bool
 }
 
 type persistentConfig struct {
@@ -151,6 +161,32 @@ type persistentConfig struct {
 	DebugMode      bool    `json:"debug_mode"`
 }
 
+func logStartupBanner(logger logging.Logger, cfg cliConfig) {
+	logger.Info("starting monopulse tracker", logging.Field{Key: "config", Value: map[string]any{
+		"sample_rate":      cfg.sampleRate,
+		"rx_lo":            cfg.rxLO,
+		"rx_gain0":         cfg.rxGain0,
+		"rx_gain1":         cfg.rxGain1,
+		"tx_gain":          cfg.txGain,
+		"tone_offset":      cfg.toneOffset,
+		"spacing":          cfg.spacing,
+		"phase_step":       cfg.phaseStep,
+		"phase_cal":        cfg.phaseCal,
+		"scan_step":        cfg.scanStep,
+		"tracking_length":  cfg.trackingLength,
+		"warmup_buffers":   cfg.warmupBuffers,
+		"history_limit":    cfg.historyLimit,
+		"sdr_backend":      cfg.sdrBackend,
+		"sdr_uri":          cfg.sdrURI,
+		"log_level":        cfg.logLevel,
+		"log_format":       cfg.logFormat,
+		"debug_mode":       cfg.debugMode,
+		"verbose":          cfg.verbose,
+		"web_addr":         cfg.webAddr,
+		"mock_phase_delta": cfg.phaseDelta,
+	}})
+}
+
 func parseConfig(args []string, lookup func(string) (string, bool), defaults persistentConfig) (cliConfig, error) {
 	cfg := cliConfig{}
 	fs := flag.NewFlagSet("monopulse", flag.ContinueOnError)
@@ -175,9 +211,10 @@ func parseConfig(args []string, lookup func(string) (string, bool), defaults per
 	fs.StringVar(&cfg.logLevel, "log-level", envString(lookup, "MONO_LOG_LEVEL", defaults.LogLevel), "Log level (debug|info|warn|error)")
 	fs.StringVar(&cfg.logFormat, "log-format", envString(lookup, "MONO_LOG_FORMAT", defaults.LogFormat), "Log format (text|json)")
 	fs.BoolVar(&cfg.debugMode, "debug-mode", envBool(lookup, "MONO_DEBUG_MODE", defaults.DebugMode), "Include debug telemetry fields")
+	fs.BoolVar(&cfg.verbose, "verbose", envBool(lookup, "MONO_VERBOSE", false), "Enable verbose logging and debug output")
 
 	if err := fs.Parse(args); err != nil {
-		return cliConfig{}, err
+		return cliConfig{}, fmt.Errorf("parse flags: %w", err)
 	}
 	return cfg, nil
 }
@@ -220,17 +257,17 @@ func loadOrCreateConfig(path string) (persistentConfig, error) {
 		if os.IsNotExist(err) {
 			cfg := defaultPersistentConfig()
 			if saveErr := saveConfig(path, cfg); saveErr != nil {
-				return persistentConfig{}, saveErr
+				return persistentConfig{}, fmt.Errorf("create default config: %w", saveErr)
 			}
 			return cfg, nil
 		}
-		return persistentConfig{}, err
+		return persistentConfig{}, fmt.Errorf("open config: %w", err)
 	}
 	defer f.Close()
 
 	var cfg persistentConfig
 	if err := json.NewDecoder(f).Decode(&cfg); err != nil {
-		return persistentConfig{}, err
+		return persistentConfig{}, fmt.Errorf("decode config: %w", err)
 	}
 	return cfg, nil
 }
@@ -238,9 +275,12 @@ func loadOrCreateConfig(path string) (persistentConfig, error) {
 func saveConfig(path string, cfg persistentConfig) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+	return nil
 }
 
 func defaultPersistentConfig() persistentConfig {
