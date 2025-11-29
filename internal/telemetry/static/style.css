@@ -49,7 +49,44 @@ main {
         padding: 1rem 1.5rem;
         display: grid;
         gap: 1rem;
-        grid-template-columns: 2fr 1fr;
+        grid-template-columns: 1fr;
+}
+
+.tab-header {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 0.5rem;
+}
+
+.tab-button {
+        padding: 0.65rem 0.75rem;
+        background: #0c1118;
+        border: 1px solid #1f2a3a;
+        color: #cbd5e1;
+        border-radius: 6px;
+        cursor: pointer;
+        text-align: center;
+        transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.tab-button:hover,
+.tab-button:focus {
+        background: #1f2a3a;
+}
+
+.tab-button.active {
+        background: #2f80ed;
+        color: #fff;
+        border-color: #2f80ed;
+}
+
+.tab-panel {
+        display: none;
+}
+
+.tab-panel.active {
+        display: grid;
+        gap: 1rem;
 }
 
 .settings-layout {
@@ -91,6 +128,13 @@ main {
     padding: 1rem;
     border-radius: 8px;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.placeholder {
+        background: #121926;
+        padding: 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .chart-panel h2 {

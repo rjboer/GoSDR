@@ -1,3 +1,71 @@
+// Tab management
+const tabButtons = document.querySelectorAll('.tab-button');
+const tabPanels = document.querySelectorAll('.tab-panel');
+
+let telemetryActive = true;
+let telemetryStream = null;
+let historyLoaded = false;
+
+function setActiveTab(tabId) {
+  tabButtons.forEach((btn) => {
+    const isActive = btn.dataset.tab === tabId;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive);
+  });
+
+  tabPanels.forEach((panel) => {
+    const isActive = panel.id === tabId;
+    panel.classList.toggle('active', isActive);
+  });
+
+  setTelemetryActive(tabId === 'telemetry');
+}
+
+tabButtons.forEach((btn) => {
+  btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
+});
+
+function setTelemetryActive(isActive) {
+  telemetryActive = isActive;
+  if (telemetryActive) {
+    startTelemetry();
+  } else {
+    stopTelemetry();
+  }
+}
+
+function startTelemetry() {
+  if (!historyLoaded) {
+    fetch('/api/history')
+      .then((res) => res.json())
+      .then((data) => {
+        historyLoaded = true;
+        data.forEach(handleSample);
+      })
+      .catch((err) => console.error('history', err));
+  }
+
+  if (telemetryStream) return;
+
+  telemetryStream = new EventSource('/api/live');
+  telemetryStream.onmessage = (event) => {
+    try {
+      const sample = JSON.parse(event.data);
+      handleSample(sample);
+    } catch (err) {
+      console.error('parse sample', err);
+    }
+  };
+  telemetryStream.onerror = (err) => console.error('sse error', err);
+}
+
+function stopTelemetry() {
+  if (telemetryStream) {
+    telemetryStream.close();
+    telemetryStream = null;
+  }
+}
+
 // Radar Configuration
 const radarCanvas = document.getElementById('radarCanvas');
 const radarCtx = radarCanvas.getContext('2d');
@@ -115,6 +183,11 @@ const MAX_POINTS = 500;
 
 const historyBody = document.querySelector('#historyTable tbody');
 
+function handleSample(sample) {
+  if (!telemetryActive) return;
+  addSample(sample);
+}
+
 function addSample(sample) {
   const timestamp = new Date(sample.timestamp).toLocaleTimeString();
   pushPoint(angleChart, timestamp, sample.angleDeg);
@@ -141,18 +214,9 @@ function pushPoint(chart, label, value) {
   chart.update('none');
 }
 
-fetch('/api/history')
-  .then((res) => res.json())
-  .then((data) => data.forEach(addSample))
-  .catch((err) => console.error('history', err));
+setActiveTab('telemetry');
 
-const source = new EventSource('/api/live');
-source.onmessage = (event) => {
-  try {
-    const sample = JSON.parse(event.data);
-    addSample(sample);
-  } catch (err) {
-    console.error('parse sample', err);
-  }
-};
-source.onerror = (err) => console.error('sse error', err);
+// Manual QA checklist:
+// 1. Load page and confirm Telemetry tab is active with charts and radar visible.
+// 2. Switch to Trace/Debug/Settings tabs and verify Telemetry visuals hide while placeholders render.
+// 3. Return to Telemetry and confirm data resumes updating without console errors.
