@@ -174,8 +174,6 @@
 - [ ] Document new features
 
 ---
-
-
 ### RDF Features future
 - [ ] Multi-frequency scanning
 - [ ] GPS integration for triangulation
