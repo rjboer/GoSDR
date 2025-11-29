@@ -1,46 +1,36 @@
-# Task: Add Settings Page to Web Interface
+# Task: Persistent JSON Configuration System
 
-## Planning
-- [x] Design settings page layout
-- [x] Define configurable parameters
-- [x] Plan API endpoints for settings
+## Phase 1: Configuration File Support
+- [ ] Add `persistentConfig` struct to main.go
+- [ ] Implement `loadOrCreateConfig()` function
+- [ ] Implement `saveConfig()` function
+- [ ] Implement `defaultPersistentConfig()` with web defaults
+- [ ] Update [main()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/main.go#16-21) to load config.json
+- [ ] Change hardcoded defaults (webAddr=":8080", sdrBackend="mock")
+- [ ] Test: First run creates config.json
 
-## Backend Implementation
-- [x] Add settings API endpoints (GET/POST)
-- [x] Add configuration validation
-- [x] Add restart/apply logic (via applyConfig in hub.go)
+## Phase 2: Web Interface Integration
+- [ ] Add SDR fields to `telemetry.Config` struct
+- [ ] Update [settings.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.html) with SDR backend dropdown
+- [ ] Update [settings.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.html) with SDR URI field
+- [ ] Update [settings.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.html) with Mock phase delta field
+- [ ] Update [settings.js](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.js) to include SDR fields
+- [ ] Add show/hide logic for SDR-specific fields
+- [ ] Modify [handleSetConfig](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go#260-289) to save to config.json
+- [ ] Test: Change settings via web, verify persistence
 
-## Frontend Implementation
-- [x] Create settings page HTML
-- [x] Add settings form with controls
-- [x] Add JavaScript for settings management
-- [x] Add CSS styling for settings page
+## Phase 3: Validation & Polish
+- [ ] Add validation for SDR backend values
+- [ ] Add UI feedback for save success/failure
+- [ ] Add "Restart Required" message for SDR changes
+- [ ] Update program_overview.md documentation
+- [ ] Test all scenarios (first run, load, override, web change)
+- [ ] Test SDR backend switching
 
-## Integration
-- [x] Wire settings to tracker configuration
-- [x] Add navigation between pages
-- [x] Test settings persistence (via API)
-- [x] Verify parameter updates (validation in place)
-
-## Verification
-- [x] Run Go unit test suite (`go test ./...`)
-- [x] Test all settings controls (HTML form complete)
-- [x] Verify tracker restarts with new settings (applyConfig implemented)
-- [x] Document settings parameters (help text in HTML)
-
-## Status: ✅ COMPLETE
-
-All settings page components are implemented and functional:
-- Backend API endpoints for GET/POST configuration
-- Configuration validation with sensible limits
-- Complete settings HTML form with all parameters
-- JavaScript for loading/saving settings
-- CSS styling for settings page
-- Navigation between telemetry and settings pages
-
-## Notes
-- Settings are applied via `applyConfig()` in hub.go
-- Configuration changes are validated before being applied
-- Default values are provided for all parameters
-- Help text explains each setting in the UI
-
+## Expected Results
+- ✅ No command-line flags needed to run
+- ✅ Web interface enabled by default
+- ✅ MockSDR selected by default
+- ✅ Settings persist across restarts
+- ✅ SDR backend switchable via web UI
+- ✅ config.json auto-created if missing

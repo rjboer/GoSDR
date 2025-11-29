@@ -1,627 +1,455 @@
-# Settings Page Implementation Plan
+# Persistent Configuration System - Implementation Plan
 
-## Overview
+## Goal
 
-Add a dedicated settings page to the web telemetry interface for configuring all tracker parameters including frequency, sample rate, timing, gains, and tracking parameters.
+Implement a configuration system that:
+1. **Defaults to web interface + MockSDR** (no hardware required)
+2. **Persists settings to JSON file** (`config.json`)
+3. **Allows SDR backend switching** via web settings page
+4. **Auto-creates config file** if it doesn't exist
 
-## Configurable Parameters
+---
 
-### RF Configuration
-- **RX LO Frequency** (Hz) - Receiver local oscillator frequency
-- **TX LO Frequency** (Hz) - Transmitter local oscillator frequency  
-- **Tone Offset** (Hz) - Offset frequency for the transmitted tone
-- **Sample Rate** (Hz) - ADC sample rate
-- **RX Gain 0** (dB) - Receiver channel 0 gain
-- **RX Gain 1** (dB) - Receiver channel 1 gain
-- **TX Gain** (dB) - Transmitter gain
+## User Requirements
 
-### Timing Parameters
-- **Number of Samples** - Samples per RX buffer
-- **Tracking Length** - Number of tracking iterations
-- **Update Interval** (ms) - Time between tracking updates
-- **Warm-up Iterations** - Number of buffers to discard on startup
+> **"I would like that as the default option with no hardware connected, And i would like to switch in the options. the options should be stored in a json the application needs to make."**
 
-### Tracking Parameters
-- **Antenna Spacing** (wavelengths) - Distance between antennas
-- **Phase Step** (degrees) - Monopulse update step size
-- **Scan Step** (degrees) - Coarse scan step size
-- **Phase Calibration** (degrees) - Phase offset calibration
-
-### SDR Backend
-- **Backend Type** - Mock or Pluto
-- **SDR URI** - Connection string for hardware SDR
-- **Mock Phase Delta** (degrees) - Phase offset for MockSDR
+**Translation:**
+- Default: `--sdr-backend=mock --web-addr=:8080`
+- Settings changeable via web interface
+- Settings saved to `config.json`
+- Application creates `config.json` if missing
 
 ---
 
 ## Proposed Changes
 
-### Backend API
+### 1. Configuration File Structure
 
-#### [MODIFY] [hub.go](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go)
+#### [NEW] `config.json` (auto-created)
 
-Add configuration management:
-
-```go
-// Config holds all tracker configuration parameters
-type Config struct {
-    // RF Configuration
-    RxLO       float64 `json:"rxLO"`
-    TxLO       float64 `json:"txLO"`
-    ToneOffset float64 `json:"toneOffset"`
-    SampleRate float64 `json:"sampleRate"`
-    RxGain0    int     `json:"rxGain0"`
-    RxGain1    int     `json:"rxGain1"`
-    TxGain     int     `json:"txGain"`
-    
-    // Timing
-    NumSamples       int `json:"numSamples"`
-    TrackingLength   int `json:"trackingLength"`
-    UpdateInterval   int `json:"updateInterval"` // milliseconds
-    WarmupIterations int `json:"warmupIterations"`
-    
-    // Tracking
-    SpacingWavelength float64 `json:"spacingWavelength"`
-    PhaseStep         float64 `json:"phaseStep"`
-    ScanStep          float64 `json:"scanStep"`
-    PhaseCal          float64 `json:"phaseCal"`
-    
-    // SDR
-    SDRBackend   string  `json:"sdrBackend"`
-    SDRURI       string  `json:"sdrURI"`
-    MockPhaseDelta float64 `json:"mockPhaseDelta"`
-}
-
-// Add to Hub
-type Hub struct {
-    // ... existing fields
-    config Config
-    configMu sync.RWMutex
-}
-
-func (h *Hub) GetConfig() Config {
-    h.configMu.RLock()
-    defer h.configMu.RUnlock()
-    return h.config
-}
-
-func (h *Hub) SetConfig(cfg Config) error {
-    h.configMu.Lock()
-    defer h.configMu.Unlock()
-    
-    // Validate configuration
-    if err := validateConfig(cfg); err != nil {
-        return err
-    }
-    
-    h.config = cfg
-    return nil
-}
-
-func validateConfig(cfg Config) error {
-    if cfg.SampleRate <= 0 || cfg.SampleRate > 30.72e6 {
-        return fmt.Errorf("sample rate must be between 0 and 30.72 MHz")
-    }
-    if cfg.NumSamples <= 0 || cfg.NumSamples > 65536 {
-        return fmt.Errorf("num samples must be between 1 and 65536")
-    }
-    // ... more validation
-    return nil
-}
-
-// Add HTTP handlers
-func (h *Hub) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(h.GetConfig())
-}
-
-func (h *Hub) handleSetConfig(w http.ResponseWriter, r *http.Request) {
-    var cfg Config
-    if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-    
-    if err := h.SetConfig(cfg); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-    
-    w.WriteHeader(http.StatusOK)
+```json
+{
+  "sdr": {
+    "backend": "mock",
+    "uri": "",
+    "mockPhaseDelta": 30.0
+  },
+  "rf": {
+    "sampleRate": 2000000,
+    "rxLO": 2300000000,
+    "rxGain0": 60,
+    "rxGain1": 60,
+    "txGain": -10,
+    "toneOffset": 200000,
+    "spacingWavelength": 0.5
+  },
+  "dsp": {
+    "numSamples": 4096,
+    "trackingLength": 1000,
+    "phaseStep": 1.0,
+    "scanStep": 2.0,
+    "phaseCal": 0.0,
+    "warmupBuffers": 3
+  },
+  "telemetry": {
+    "historyLimit": 500,
+    "webAddr": ":8080"
+  }
 }
 ```
 
-#### [MODIFY] [webserver.go](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/webserver.go)
+**Default Location:** `./config.json` (current directory)
 
-Add settings endpoints:
+---
+
+### 2. Configuration Loading Priority
+
+```
+1. config.json (if exists)
+   ↓
+2. Environment variables (override)
+   ↓
+3. Command-line flags (override)
+   ↓
+4. Hardcoded defaults (fallback)
+```
+
+**Example:**
+```bash
+# Uses config.json
+go run main.go
+
+# Override specific values
+go run main.go --rx-lo=915000000
+
+# Ignore config.json, use env vars
+MONO_SDR_BACKEND=pluto go run main.go
+```
+
+---
+
+### 3. Code Changes
+
+#### [MODIFY] [cmd/monopulse/main.go](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/cmd/monopulse/main.go)
+
+**Add configuration file support:**
 
 ```go
-func NewWebServer(addr string, hub *Hub) *WebServer {
-    mux := http.NewServeMux()
-    mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
-    mux.HandleFunc("/api/history", hub.handleHistory)
-    mux.HandleFunc("/api/live", hub.handleLive)
-    mux.HandleFunc("/api/config", hub.handleGetConfig)      // NEW
-    mux.HandleFunc("/api/config/update", hub.handleSetConfig) // NEW
-    mux.HandleFunc("/settings", func(w http.ResponseWriter, r *http.Request) {
-        http.ServeFileFS(w, r, staticFiles, "static/settings.html")
-    })
-    mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-        http.ServeFileFS(w, r, staticFiles, "static/index.html")
-    })
+const defaultConfigPath = "config.json"
+
+type persistentConfig struct {
+    SDR struct {
+        Backend        string  `json:"backend"`
+        URI            string  `json:"uri"`
+        MockPhaseDelta float64 `json:"mockPhaseDelta"`
+    } `json:"sdr"`
+    RF struct {
+        SampleRate        float64 `json:"sampleRate"`
+        RxLO              float64 `json:"rxLO"`
+        RxGain0           int     `json:"rxGain0"`
+        RxGain1           int     `json:"rxGain1"`
+        TxGain            int     `json:"txGain"`
+        ToneOffset        float64 `json:"toneOffset"`
+        SpacingWavelength float64 `json:"spacingWavelength"`
+    } `json:"rf"`
+    DSP struct {
+        NumSamples     int     `json:"numSamples"`
+        TrackingLength int     `json:"trackingLength"`
+        PhaseStep      float64 `json:"phaseStep"`
+        ScanStep       float64 `json:"scanStep"`
+        PhaseCal       float64 `json:"phaseCal"`
+        WarmupBuffers  int     `json:"warmupBuffers"`
+    } `json:"dsp"`
+    Telemetry struct {
+        HistoryLimit int    `json:"historyLimit"`
+        WebAddr      string `json:"webAddr"`
+    } `json:"telemetry"`
+}
+
+// loadOrCreateConfig loads config.json or creates it with defaults
+func loadOrCreateConfig(path string) (persistentConfig, error) {
+    cfg := defaultPersistentConfig()
     
-    return &WebServer{hub: hub, srv: &http.Server{Addr: addr, Handler: mux}}
+    data, err := os.ReadFile(path)
+    if err != nil {
+        if os.IsNotExist(err) {
+            // Create default config file
+            log.Printf("Config file not found, creating %s with defaults", path)
+            if err := saveConfig(path, cfg); err != nil {
+                return cfg, fmt.Errorf("create config: %w", err)
+            }
+            return cfg, nil
+        }
+        return cfg, fmt.Errorf("read config: %w", err)
+    }
+    
+    if err := json.Unmarshal(data, &cfg); err != nil {
+        return cfg, fmt.Errorf("parse config: %w", err)
+    }
+    
+    log.Printf("Loaded configuration from %s", path)
+    return cfg, nil
+}
+
+// saveConfig writes configuration to JSON file
+func saveConfig(path string, cfg persistentConfig) error {
+    data, err := json.MarshalIndent(cfg, "", "  ")
+    if err != nil {
+        return err
+    }
+    return os.WriteFile(path, data, 0644)
+}
+
+// defaultPersistentConfig returns defaults with web interface enabled
+func defaultPersistentConfig() persistentConfig {
+    var cfg persistentConfig
+    
+    // SDR defaults (MockSDR)
+    cfg.SDR.Backend = "mock"
+    cfg.SDR.URI = ""
+    cfg.SDR.MockPhaseDelta = 30.0
+    
+    // RF defaults
+    cfg.RF.SampleRate = 2e6
+    cfg.RF.RxLO = 2.3e9
+    cfg.RF.RxGain0 = 60
+    cfg.RF.RxGain1 = 60
+    cfg.RF.TxGain = -10
+    cfg.RF.ToneOffset = 200e3
+    cfg.RF.SpacingWavelength = 0.5
+    
+    // DSP defaults
+    cfg.DSP.NumSamples = 4096
+    cfg.DSP.TrackingLength = 1000
+    cfg.DSP.PhaseStep = 1.0
+    cfg.DSP.ScanStep = 2.0
+    cfg.DSP.PhaseCal = 0.0
+    cfg.DSP.WarmupBuffers = 3
+    
+    // Telemetry defaults (WEB ENABLED BY DEFAULT)
+    cfg.Telemetry.HistoryLimit = 500
+    cfg.Telemetry.WebAddr = ":8080"
+    
+    return cfg
+}
+```
+
+**Update main() to use persistent config:**
+
+```go
+func main() {
+    // Load or create config.json
+    persistCfg, err := loadOrCreateConfig(defaultConfigPath)
+    if err != nil {
+        log.Printf("Warning: %v, using defaults", err)
+        persistCfg = defaultPersistentConfig()
+    }
+    
+    // Parse CLI flags (override config.json)
+    cfg, err := parseConfig(os.Args[1:], os.LookupEnv, persistCfg)
+    if err != nil {
+        log.Fatalf("parse config: %v", err)
+    }
+    
+    // ... rest of main()
 }
 ```
 
 ---
 
-### Frontend
+#### [MODIFY] [internal/telemetry/hub.go](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go)
 
-#### [NEW] [settings.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.html)
+**Add SDR backend to Config struct:**
+
+```go
+type Config struct {
+    // SDR Configuration
+    SDRBackend     string  `json:"sdrBackend"`     // NEW
+    SDRURI         string  `json:"sdrUri"`         // NEW
+    MockPhaseDelta float64 `json:"mockPhaseDelta"` // NEW
+    
+    // RF Configuration
+    SampleRate        float64 `json:"sampleRate"`
+    RxLO              float64 `json:"rxLO"`
+    // ... existing fields
+}
+```
+
+**Update handleSetConfig to save to file:**
+
+```go
+func (h *Hub) handleSetConfig(w http.ResponseWriter, r *http.Request) {
+    var incoming Config
+    if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+    
+    cfg, err := validateConfig(incoming, h.config)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+    
+    // Apply to hub
+    h.applyConfig(cfg)
+    
+    // Save to config.json
+    if err := saveConfigToFile("config.json", cfg); err != nil {
+        log.Printf("Warning: failed to save config: %v", err)
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(cfg)
+}
+```
+
+---
+
+#### [MODIFY] [internal/telemetry/static/settings.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.html)
+
+**Add SDR backend selection:**
 
 ```html
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Settings - GoSDR</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <link rel="stylesheet" href="/static/settings.css" />
-</head>
-<body>
-  <header>
-    <h1>⚙️ GoSDR Settings</h1>
-    <nav>
-      <a href="/" class="nav-link">← Back to Dashboard</a>
-    </nav>
-  </header>
-  <main class="settings-main">
-    <form id="settingsForm">
-      
-      <!-- RF Configuration -->
-      <section class="settings-section">
-        <h2>RF Configuration</h2>
-        <div class="settings-grid">
-          <div class="form-group">
-            <label for="rxLO">RX LO Frequency (Hz)</label>
-            <input type="number" id="rxLO" name="rxLO" step="1000000" required>
-            <span class="help-text">Receiver local oscillator (e.g., 2.3 GHz)</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="toneOffset">Tone Offset (Hz)</label>
-            <input type="number" id="toneOffset" name="toneOffset" step="1000" required>
-            <span class="help-text">Transmitted tone offset (e.g., 200 kHz)</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="sampleRate">Sample Rate (Hz)</label>
-            <input type="number" id="sampleRate" name="sampleRate" step="100000" required>
-            <span class="help-text">ADC sample rate (max 30.72 MHz)</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="rxGain0">RX Gain 0 (dB)</label>
-            <input type="number" id="rxGain0" name="rxGain0" min="-10" max="73" required>
-          </div>
-          
-          <div class="form-group">
-            <label for="rxGain1">RX Gain 1 (dB)</label>
-            <input type="number" id="rxGain1" name="rxGain1" min="-10" max="73" required>
-          </div>
-          
-          <div class="form-group">
-            <label for="txGain">TX Gain (dB)</label>
-            <input type="number" id="txGain" name="txGain" min="-89" max="0" required>
-          </div>
-        </div>
-      </section>
-      
-      <!-- Timing Parameters -->
-      <section class="settings-section">
-        <h2>Timing Parameters</h2>
-        <div class="settings-grid">
-          <div class="form-group">
-            <label for="numSamples">Number of Samples</label>
-            <input type="number" id="numSamples" name="numSamples" step="256" required>
-            <span class="help-text">Samples per RX buffer (power of 2)</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="trackingLength">Tracking Length</label>
-            <input type="number" id="trackingLength" name="trackingLength" required>
-            <span class="help-text">Number of tracking iterations</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="updateInterval">Update Interval (ms)</label>
-            <input type="number" id="updateInterval" name="updateInterval" min="1" max="1000" required>
-            <span class="help-text">Time between tracking updates</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="warmupIterations">Warm-up Iterations</label>
-            <input type="number" id="warmupIterations" name="warmupIterations" min="0" max="100" required>
-            <span class="help-text">Buffers to discard on startup</span>
-          </div>
-        </div>
-      </section>
-      
-      <!-- Tracking Parameters -->
-      <section class="settings-section">
-        <h2>Tracking Parameters</h2>
-        <div class="settings-grid">
-          <div class="form-group">
-            <label for="spacingWavelength">Antenna Spacing (λ)</label>
-            <input type="number" id="spacingWavelength" name="spacingWavelength" step="0.01" required>
-            <span class="help-text">Fraction of wavelength (typically 0.5)</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="phaseStep">Phase Step (degrees)</label>
-            <input type="number" id="phaseStep" name="phaseStep" step="0.1" required>
-            <span class="help-text">Monopulse update step size</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="scanStep">Scan Step (degrees)</label>
-            <input type="number" id="scanStep" name="scanStep" step="0.5" required>
-            <span class="help-text">Coarse scan step size</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="phaseCal">Phase Calibration (degrees)</label>
-            <input type="number" id="phaseCal" name="phaseCal" step="0.1" required>
-            <span class="help-text">Phase offset calibration</span>
-          </div>
-        </div>
-      </section>
-      
-      <!-- SDR Backend -->
-      <section class="settings-section">
-        <h2>SDR Backend</h2>
-        <div class="settings-grid">
-          <div class="form-group">
-            <label for="sdrBackend">Backend Type</label>
-            <select id="sdrBackend" name="sdrBackend" required>
-              <option value="mock">Mock (Simulation)</option>
-              <option value="pluto">Pluto (Hardware)</option>
-            </select>
-          </div>
-          
-          <div class="form-group">
-            <label for="sdrURI">SDR URI</label>
-            <input type="text" id="sdrURI" name="sdrURI" placeholder="ip:192.168.2.1">
-            <span class="help-text">Connection string for hardware SDR</span>
-          </div>
-          
-          <div class="form-group">
-            <label for="mockPhaseDelta">Mock Phase Delta (degrees)</label>
-            <input type="number" id="mockPhaseDelta" name="mockPhaseDelta" step="1">
-            <span class="help-text">Phase offset for MockSDR testing</span>
-          </div>
-        </div>
-      </section>
-      
-      <!-- Actions -->
-      <div class="settings-actions">
-        <button type="button" id="resetBtn" class="btn btn-secondary">Reset to Defaults</button>
-        <button type="submit" class="btn btn-primary">Save Settings</button>
-      </div>
-      
-      <div id="statusMessage" class="status-message"></div>
-    </form>
-  </main>
-  <script src="/static/settings.js"></script>
-</body>
-</html>
+<section class="settings-section">
+  <h2>SDR Backend</h2>
+  
+  <div class="form-field">
+    <label for="sdrBackend">Backend Type</label>
+    <select id="sdrBackend">
+      <option value="mock">Mock (Simulation)</option>
+      <option value="pluto">Pluto (Hardware)</option>
+    </select>
+    <small>Select SDR backend. Mock requires no hardware.</small>
+  </div>
+  
+  <div class="form-field">
+    <label for="sdrUri">SDR URI</label>
+    <input type="text" id="sdrUri" placeholder="ip:192.168.2.1">
+    <small>Connection URI for hardware SDR (e.g., ip:192.168.2.1)</small>
+  </div>
+  
+  <div class="form-field">
+    <label for="mockPhaseDelta">Mock Phase Delta (°)</label>
+    <input type="number" id="mockPhaseDelta" step="0.1">
+    <small>Simulated angle for MockSDR (degrees)</small>
+  </div>
+</section>
 ```
 
-#### [NEW] [settings.css](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.css)
+---
 
-```css
-.settings-main {
-  max-width: 1200px;
-  margin: 0 auto;
-}
+#### [MODIFY] [internal/telemetry/static/settings.js](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.js)
 
-nav {
-  display: inline-block;
-}
-
-.nav-link {
-  color: #2f80ed;
-  text-decoration: none;
-  font-size: 0.9rem;
-}
-
-.nav-link:hover {
-  text-decoration: underline;
-}
-
-.settings-section {
-  background: #121926;
-  padding: 1.5rem;
-  border-radius: 8px;
-  margin-bottom: 1.5rem;
-}
-
-.settings-section h2 {
-  margin: 0 0 1rem 0;
-  color: #cbd5e1;
-  font-size: 1.25rem;
-}
-
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 1.5rem;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-}
-
-.form-group label {
-  margin-bottom: 0.25rem;
-  color: #9fb3c8;
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.form-group input,
-.form-group select {
-  padding: 0.5rem;
-  background: #0c1118;
-  border: 1px solid #1f2a3a;
-  border-radius: 4px;
-  color: #e4e9f0;
-  font-size: 0.875rem;
-}
-
-.form-group input:focus,
-.form-group select:focus {
-  outline: none;
-  border-color: #2f80ed;
-}
-
-.help-text {
-  margin-top: 0.25rem;
-  font-size: 0.75rem;
-  color: #64748b;
-  font-style: italic;
-}
-
-.settings-actions {
-  display: flex;
-  gap: 1rem;
-  justify-content: flex-end;
-  margin-top: 2rem;
-}
-
-.btn {
-  padding: 0.75rem 1.5rem;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-primary {
-  background: #2f80ed;
-  color: white;
-}
-
-.btn-primary:hover {
-  background: #1d6fd8;
-}
-
-.btn-secondary {
-  background: #475569;
-  color: white;
-}
-
-.btn-secondary:hover {
-  background: #334155;
-}
-
-.status-message {
-  margin-top: 1rem;
-  padding: 0.75rem;
-  border-radius: 4px;
-  text-align: center;
-  font-size: 0.875rem;
-  display: none;
-}
-
-.status-message.success {
-  display: block;
-  background: #10b98133;
-  color: #10b981;
-  border: 1px solid #10b981;
-}
-
-.status-message.error {
-  display: block;
-  background: #ef444433;
-  color: #ef4444;
-  border: 1px solid #ef4444;
-}
-```
-
-#### [NEW] [settings.js](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.js)
+**Add SDR backend fields:**
 
 ```javascript
-const form = document.getElementById('settingsForm');
-const statusMessage = document.getElementById('statusMessage');
+const fieldIds = [
+  'sdrBackend',      // NEW
+  'sdrUri',          // NEW
+  'mockPhaseDelta',  // NEW
+  'sampleRate',
+  // ... existing fields
+];
 
-// Default configuration
-const defaultConfig = {
-  rxLO: 2.3e9,
-  txLO: 2.3e9,
-  toneOffset: 200e3,
-  sampleRate: 2e6,
-  rxGain0: 40,
-  rxGain1: 40,
-  txGain: -3,
-  numSamples: 4096,
-  trackingLength: 1000,
-  updateInterval: 10,
-  warmupIterations: 20,
-  spacingWavelength: 0.5,
-  phaseStep: 1.0,
-  scanStep: 2.0,
-  phaseCal: 0.0,
+const defaults = {
   sdrBackend: 'mock',
-  sdrURI: '',
-  mockPhaseDelta: 30.0
+  sdrUri: '',
+  mockPhaseDelta: 30.0,
+  sampleRate: 2000000,
+  // ... existing defaults
 };
 
-// Load current configuration
-async function loadConfig() {
-  try {
-    const response = await fetch('/api/config');
-    const config = await response.json();
-    populateForm(config);
-  } catch (err) {
-    console.error('Failed to load config:', err);
-    populateForm(defaultConfig);
-  }
-}
-
-// Populate form with configuration
-function populateForm(config) {
-  for (const [key, value] of Object.entries(config)) {
-    const input = form.elements[key];
-    if (input) {
-      input.value = value;
-    }
-  }
-}
-
-// Save configuration
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  
-  const formData = new FormData(form);
-  const config = {};
-  
-  for (const [key, value] of formData.entries()) {
-    const input = form.elements[key];
-    if (input.type === 'number') {
-      config[key] = parseFloat(value) || parseInt(value);
-    } else {
-      config[key] = value;
-    }
-  }
-  
-  try {
-    const response = await fetch('/api/config/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config)
-    });
-    
-    if (response.ok) {
-      showStatus('Settings saved successfully!', 'success');
-    } else {
-      const error = await response.text();
-      showStatus(`Error: ${error}`, 'error');
-    }
-  } catch (err) {
-    showStatus(`Failed to save: ${err.message}`, 'error');
-  }
+// Show/hide SDR-specific fields based on backend
+document.getElementById('sdrBackend').addEventListener('change', (e) => {
+  const isMock = e.target.value === 'mock';
+  document.getElementById('sdrUri').disabled = isMock;
+  document.getElementById('mockPhaseDelta').disabled = !isMock;
 });
-
-// Reset to defaults
-document.getElementById('resetBtn').addEventListener('click', () => {
-  if (confirm('Reset all settings to defaults?')) {
-    populateForm(defaultConfig);
-  }
-});
-
-// Show status message
-function showStatus(message, type) {
-  statusMessage.textContent = message;
-  statusMessage.className = `status-message ${type}`;
-  
-  setTimeout(() => {
-    statusMessage.className = 'status-message';
-  }, 5000);
-}
-
-// Initialize
-loadConfig();
 ```
 
-#### [MODIFY] [index.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/index.html)
+---
 
-Add navigation link:
+### 4. Runtime SDR Switching
 
-```html
-<header>
-  <h1>GoSDR Monopulse Tracker</h1>
-  <nav>
-    <a href="/settings" class="nav-link">⚙️ Settings</a>
-  </nav>
-  <p>Live steering angle and peak telemetry</p>
-</header>
+> **Note:** Switching SDR backend at runtime requires tracker restart
+
+**Options:**
+
+**Option A: Restart Required (Simple)**
 ```
+User changes SDR backend → Save to config.json → Show message:
+"Configuration saved. Please restart the application for changes to take effect."
+```
+
+**Option B: Hot Reload (Complex)**
+```
+User changes SDR backend → Save to config.json → Stop tracker → 
+Reinitialize with new backend → Start tracker
+```
+
+**Recommendation:** Start with Option A (restart required), implement Option B later if needed.
 
 ---
 
 ## Implementation Steps
 
-1. **Backend** (30 min)
-   - Add Config struct to hub.go
-   - Add validation function
-   - Add GET/POST handlers
-   - Update webserver routes
+### Phase 1: Configuration File Support
+1. Add `persistentConfig` struct to [main.go](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/main.go)
+2. Implement `loadOrCreateConfig()` and `saveConfig()`
+3. Update [main()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/cmd/monopulse/main.go#17-52) to load `config.json`
+4. Change defaults: `webAddr=":8080"`, `sdrBackend="mock"`
+5. Test: Run without flags, verify `config.json` created
 
-2. **Frontend HTML** (20 min)
-   - Create settings.html
-   - Add all form fields
-   - Add navigation
+### Phase 2: Web Interface Integration
+6. Add SDR fields to `telemetry.Config`
+7. Update [settings.html](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.html) with SDR backend dropdown
+8. Update [settings.js](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/static/settings.js) to handle SDR fields
+9. Modify [handleSetConfig](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go#260-289) to save to `config.json`
+10. Test: Change settings via web, verify saved to file
 
-3. **Frontend CSS** (15 min)
-   - Create settings.css
-   - Style form layout
-   - Add responsive design
+### Phase 3: Validation & Polish
+11. Add validation for SDR backend values
+12. Add UI feedback for save success/failure
+13. Add "Restart Required" message for SDR changes
+14. Update documentation
+15. Test all scenarios
 
-4. **Frontend JS** (20 min)
-   - Create settings.js
-   - Load/save configuration
-   - Form validation
+---
 
-5. **Integration** (15 min)
-   - Add navigation to index.html
-   - Test settings flow
-   - Verify persistence
+## Testing Plan
 
-**Total Time**: ~100 minutes
+### Test Cases
+
+**1. First Run (No config.json)**
+```bash
+go run main.go
+# Expected: Creates config.json with defaults
+# Expected: Web interface at http://localhost:8080
+# Expected: MockSDR running
+```
+
+**2. Load Existing Config**
+```bash
+# Edit config.json manually
+go run main.go
+# Expected: Uses values from config.json
+```
+
+**3. CLI Override**
+```bash
+go run main.go --rx-lo=915000000
+# Expected: Uses config.json + overrides RX LO
+```
+
+**4. Web Settings Change**
+```
+1. Open http://localhost:8080/settings
+2. Change "Sample Rate" to 1000000
+3. Click "Save changes"
+# Expected: config.json updated
+# Expected: Success message shown
+```
+
+**5. SDR Backend Switch**
+```
+1. Open settings
+2. Change backend from "Mock" to "Pluto"
+3. Enter URI: "ip:192.168.2.1"
+4. Save
+# Expected: config.json updated
+# Expected: Message: "Restart required"
+```
 
 ---
 
 ## Success Criteria
 
-- [ ] Settings page accessible from dashboard
-- [ ] All parameters configurable via web UI
-- [ ] Settings persist across page reloads
-- [ ] Validation prevents invalid values
-- [ ] Reset to defaults works
-- [ ] Save confirmation displayed
-- [ ] Responsive design on mobile
+- [ ] `config.json` auto-created on first run
+- [ ] Default: web interface enabled, MockSDR selected
+- [ ] Settings persist across restarts
+- [ ] Web interface can change all settings
+- [ ] SDR backend switchable via web UI
+- [ ] CLI flags override config file
+- [ ] Clear user feedback on save/errors
 
 ---
 
 ## Future Enhancements
 
-1. **Live restart**: Apply settings without manual tracker restart
-2. **Presets**: Save/load configuration presets
-3. **Import/Export**: JSON configuration file support
-4. **Advanced mode**: Show/hide advanced parameters
-5. **Validation feedback**: Real-time field validation
+1. **Multiple Config Profiles**
+   - Save/load named configurations
+   - Quick switch between setups
+
+2. **Hot Reload**
+   - Apply some settings without restart
+   - Restart tracker automatically for SDR changes
+
+3. **Config Validation UI**
+   - Real-time validation feedback
+   - Prevent invalid configurations
+
+4. **Import/Export**
+   - Export config as JSON
+   - Import from file or URL
