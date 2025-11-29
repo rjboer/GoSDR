@@ -1,0 +1,20 @@
+{
+  "sample_rate": 9036000,
+  "rx_lo": 2300000001,
+  "rx_gain0": 0,
+  "rx_gain1": 0,
+  "tx_gain": -10,
+  "tone_offset": 200000,
+  "num_samples": 512,
+  "tracking_length": 50,
+  "phase_step": 1.01,
+  "phase_cal": 0,
+  "scan_step": 2.01,
+  "spacing_wavelength": 0.5,
+  "phase_delta": 30,
+  "sdr_backend": "mock",
+  "sdr_uri": "",
+  "warmup_buffers": 3,
+  "history_limit": 500,
+  "web_addr": ":8080"
+}

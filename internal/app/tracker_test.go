@@ -43,7 +43,10 @@ func TestTrackerConvergesWithMock(t *testing.T) {
 	if err := tracker.Init(ctx); err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	if err := tracker.Run(ctx); err != nil {
+
+	// Tracker now runs continuously, so it will timeout
+	err := tracker.Run(ctx)
+	if err != nil && err != context.DeadlineExceeded {
 		t.Fatalf("run failed: %v", err)
 	}
 
@@ -57,7 +60,8 @@ func TestTrackerConvergesWithMock(t *testing.T) {
 		t.Fatalf("expected delay near %.2f got %.2f", expectedDelay, finalDelay)
 	}
 
-	if got := len(tracker.AngleHistory()); got != cfg.TrackingLength {
-		t.Fatalf("expected %d history entries got %d", cfg.TrackingLength, got)
+	// History should have at least some entries (not exact count since continuous)
+	if got := len(tracker.AngleHistory()); got < 10 {
+		t.Fatalf("expected at least 10 history entries got %d", got)
 	}
 }

@@ -82,6 +82,7 @@ func (t *Tracker) Init(ctx context.Context) error {
 }
 
 // Run executes a coarse scan and then a monopulse tracking loop.
+// Runs continuously until context is canceled.
 func (t *Tracker) Run(ctx context.Context) error {
 	if t.cfg.TrackingLength == 0 {
 		t.cfg.TrackingLength = 50
@@ -91,14 +92,18 @@ func (t *Tracker) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	for i := 0; i < t.cfg.TrackingLength; i++ {
-		if i > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-ticker.C:
-			}
+
+	// Run continuously
+	iteration := 0
+	for {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// Continue to next iteration
 		}
+
 		rx0, rx1, err := t.sdr.RX(ctx)
 		if err != nil {
 			return err
@@ -107,7 +112,9 @@ func (t *Tracker) Run(ctx context.Context) error {
 			log.Printf("received empty buffer")
 			continue
 		}
-		if i == 0 {
+
+		// First iteration: coarse scan
+		if iteration == 0 {
 			// Use parallel coarse scan with cached DSP
 			delay, theta, peak := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
 			t.lastDelay = delay
@@ -115,13 +122,11 @@ func (t *Tracker) Run(ctx context.Context) error {
 			if t.reporter != nil {
 				t.reporter.Report(theta, peak)
 			}
+			iteration++
 			continue
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+
+		// Subsequent iterations: monopulse tracking
 		// Use parallel tracking with cached DSP
 		var peak float64
 		t.lastDelay, peak = dsp.MonopulseTrackParallel(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
@@ -130,8 +135,8 @@ func (t *Tracker) Run(ctx context.Context) error {
 		if t.reporter != nil {
 			t.reporter.Report(theta, peak)
 		}
+		iteration++
 	}
-	return nil
 }
 
 // LastDelay returns the most recent phase delay used by the tracker.

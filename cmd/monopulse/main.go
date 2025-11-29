@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/rjboer/GoSDR/internal/app"
 	"github.com/rjboer/GoSDR/internal/sdr"
@@ -37,12 +36,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("select backend: %v", err)
 	}
-	reporters := []telemetry.Reporter{telemetry.StdoutReporter{}}
+	// Only use web telemetry (no stdout spam)
+	var reporters []telemetry.Reporter
 	if cfg.webAddr != "" {
 		hub := telemetry.NewHub(cfg.historyLimit)
 		reporters = append(reporters, hub)
 		go telemetry.NewWebServer(cfg.webAddr, hub).Start(ctx)
-		log.Printf("web telemetry listening on %s", cfg.webAddr)
+		log.Printf("Web interface: http://localhost%s", cfg.webAddr)
+	} else {
+		// Fallback to stdout if no web interface
+		reporters = append(reporters, telemetry.StdoutReporter{})
 	}
 
 	tracker := app.NewTracker(backend, telemetry.MultiReporter(reporters), app.Config{
@@ -67,9 +70,9 @@ func main() {
 		log.Fatalf("init tracker: %v", err)
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.trackingLength)*50*time.Millisecond)
-	defer cancel()
-	if err := tracker.Run(runCtx); err != nil {
+	// Run continuously (no timeout)
+	log.Printf("Starting tracker (Ctrl+C to stop)...")
+	if err := tracker.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("run tracker: %v", err)
 	}
 }
