@@ -20,96 +20,137 @@
     </nav>
   </header>
   <main>
-    <h2>Peak Level</h2>
-    <canvas id="peakChart" aria-label="Peak chart"></canvas>
+    <div class="tab-header" role="tablist" aria-label="Telemetry views">
+      <button class="tab-button active" role="tab" aria-selected="true" aria-controls="telemetry"
+        data-tab="telemetry">Telemetry</button>
+      <button class="tab-button" role="tab" aria-selected="false" aria-controls="trace" data-tab="trace">Trace</button>
+      <button class="tab-button" role="tab" aria-selected="false" aria-controls="debug" data-tab="debug">Debug</button>
+      <button class="tab-button" role="tab" aria-selected="false" aria-controls="settings"
+        data-tab="settings">Settings</button>
     </div>
-    <div class="chart-panel">
-      <h2>SNR</h2>
-      <canvas id="snrChart" aria-label="SNR chart"></canvas>
-    </div>
-    <div class="chart-panel">
-      <h2>Tracking Confidence</h2>
-      <canvas id="confidenceChart" aria-label="Confidence chart"></canvas>
-    </div>
-    </div>
-    <div class="info-grid">
-      <div class="chart-panel summary-panel">
-        <h2>Settings Summary</h2>
-        <div class="summary-grid">
-          <div class="summary-card">
-            <p class="muted">SDR backend</p>
-            <div id="summaryBackend" class="metric-value">--</div>
-          </div>
-          <div class="summary-card">
-            <p class="muted">RX LO</p>
-            <div id="summaryRxLo" class="metric-value">--</div>
-          </div>
-          <div class="summary-card">
-            <p class="muted">Tone offset</p>
-            <div id="summaryToneOffset" class="metric-value">--</div>
-          </div>
-          <div class="summary-card">
-            <p class="muted">Sample rate</p>
-            <div id="summarySampleRate" class="metric-value">--</div>
-          </div>
-          <div class="summary-card">
-            <p class="muted">FFT size</p>
-            <div id="summaryFftSize" class="metric-value">--</div>
+    <section id="telemetry" class="tab-panel active" role="tabpanel" aria-label="Telemetry charts">
+      <div class="chart-grid">
+        <div class="chart-panel radar-panel">
+          <h2>Radar Display</h2>
+          <canvas id="radarCanvas" width="400" height="250" aria-label="Radar display"></canvas>
+          <div class="radar-info">
+            <span id="radarAngle">Angle: --</span>
           </div>
         </div>
+        <div class="chart-panel">
+          <h2>Steering Angle</h2>
+          <canvas id="angleChart" aria-label="Angle chart"></canvas>
+        </div>
+        <div class="chart-panel">
+          <h2>Peak Level</h2>
+          <canvas id="peakChart" aria-label="Peak chart"></canvas>
+        </div>
+        <div class="chart-panel">
+          <h2>SNR</h2>
+          <canvas id="snrChart" aria-label="SNR chart"></canvas>
+        </div>
+        <div class="chart-panel">
+          <h2>Tracking Confidence</h2>
+          <canvas id="confidenceChart" aria-label="Confidence chart"></canvas>
+        </div>
       </div>
-      <div class="chart-panel stats-panel">
-        <h2>Live Statistics</h2>
-        <div class="stats-grid">
-          <div class="stat-group">
-            <div class="stat-heading">Angle (deg)</div>
-            <div class="stat-cards">
-              <div class="summary-card">
-                <p class="muted">Avg</p>
-                <div id="angleAvg" class="metric-value">--</div>
-              </div>
-              <div class="summary-card">
-                <p class="muted">Std dev</p>
-                <div id="angleStd" class="metric-value">--</div>
-              </div>
-              <div class="summary-card">
-                <p class="muted">Min</p>
-                <div id="angleMin" class="metric-value">--</div>
-              </div>
-              <div class="summary-card">
-                <p class="muted">Max</p>
-                <div id="angleMax" class="metric-value">--</div>
-              </div>
+      <div class="info-grid">
+        <div class="chart-panel summary-panel">
+          <h2>Settings Summary</h2>
+          <div class="summary-grid">
+            <div class="summary-card">
+              <p class="muted">SDR backend</p>
+              <div id="summaryBackend" class="metric-value">--</div>
             </div>
-          </div>
-          <div class="stat-group">
-            <div class="stat-heading">Peak (dBFS)</div>
-            <div class="stat-cards">
-              <div class="summary-card">
-                <p class="muted">Avg</p>
-                <div id="peakAvg" class="metric-value">--</div>
-              </div>
-              <div class="summary-card">
-                <p class="muted">Std dev</p>
-                <div id="peakStd" class="metric-value">--</div>
-              </div>
-              <div class="summary-card">
-                <p class="muted">Min</p>
-                <div id="peakMin" class="metric-value">--</div>
-              </div>
-              <div class="summary-card">
-                <p class="muted">Max</p>
-                <div id="peakMax" class="metric-value">--</div>
-              </div>
+            <div class="summary-card">
+              <p class="muted">RX LO</p>
+              <div id="summaryRxLo" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Tone offset</p>
+              <div id="summaryToneOffset" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Sample rate</p>
+              <div id="summarySampleRate" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">FFT size</p>
+              <div id="summaryFftSize" class="metric-value">--</div>
             </div>
           </div>
         </div>
-        <div class="update-rate">
-          <p class="muted">Update rate</p>
-          <div id="updateRate" class="metric-value">--</div>
+        <div class="chart-panel stats-panel">
+          <h2>Live Statistics</h2>
+          <div class="stats-grid">
+            <div class="stat-group">
+              <div class="stat-heading">Angle (deg)</div>
+              <div class="stat-cards">
+                <div class="summary-card">
+                  <p class="muted">Avg</p>
+                  <div id="angleAvg" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Std dev</p>
+                  <div id="angleStd" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Min</p>
+                  <div id="angleMin" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Max</p>
+                  <div id="angleMax" class="metric-value">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="stat-group">
+              <div class="stat-heading">Peak (dBFS)</div>
+              <div class="stat-cards">
+                <div class="summary-card">
+                  <p class="muted">Avg</p>
+                  <div id="peakAvg" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Std dev</p>
+                  <div id="peakStd" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Min</p>
+                  <div id="peakMin" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Max</p>
+                  <div id="peakMax" class="metric-value">--</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="update-rate">
+            <p class="muted">Update rate</p>
+            <div id="updateRate" class="metric-value">--</div>
+          </div>
+        </div>
+
+        <!-- New cluster for SNR / Confidence / Lock -->
+        <div class="chart-panel quality-panel">
+          <h2>Signal Quality</h2>
+          <div class="summary-grid">
+            <div class="summary-card">
+              <p class="muted">SNR</p>
+              <div id="snrValue" class="metric-value">-- dB</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Confidence</p>
+              <div id="confidenceValue" class="metric-value">--%</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Lock</p>
+              <div id="lockBadge" class="lock-badge">searching</div>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
     </section>
     <section id="trace" class="tab-panel" role="tabpanel" aria-label="Trace view">
       <div class="chart-panel trace-panel">
@@ -253,7 +294,7 @@
         </div>
       </div>
     </section>
-    <section id="settings" class="tab-panel" role="tabpanel" aria-label="Settings view">
+    <section id="placeholder" class="tab-panel" role="tabpanel" aria-label="Settings view">
       <div class="placeholder">
         <h2>Settings</h2>
         <p>Manage configuration from the <a href="/settings">settings page</a>.</p>

@@ -101,11 +101,18 @@ const radarCenterY = radarCanvas.height - 20;
 const radarMaxRadius = radarCenterY - 30;
 
 // Range rings (in cm, for display only)
-const rangeRings = [10, 20, 30, 40, 50];
+// Define a maximum range (in cm) and create 5 evenly spaced rings
+const MAX_RANGE_CM = 100;          // total radar range in cm (must be divisible by 5)
+const NUM_RANGE_RINGS = 5;         // number of rings
+const rangeRings = Array.from(
+  { length: NUM_RANGE_RINGS },
+  (_, i) => (MAX_RANGE_CM / NUM_RANGE_RINGS) * (i + 1)
+);
 
 // Current detection
-let currentAngleDeg = 90; // Start at center (0° in tracker coordinates)
-let currentRange = 30; // Fixed at middle ring
+// Tracker coordinates: -90° (left) .. 0° (ahead/top) .. +90° (right)
+let currentAngleDeg = 0;                 // start pointing straight ahead
+let currentRange = MAX_RANGE_CM / 2;     // start at mid-range
 
 function drawRadar() {
   // Clear canvas
@@ -116,17 +123,19 @@ function drawRadar() {
   radarCtx.strokeStyle = '#00ff00';
   radarCtx.lineWidth = 1;
 
-  rangeRings.forEach((range, index) => {
-    const radius = radarMaxRadius * (index + 1) / rangeRings.length;
+  rangeRings.forEach((range) => {
+    // radius proportional to the actual range value
+    const radius = radarMaxRadius * (range / MAX_RANGE_CM);
+
     radarCtx.beginPath();
     // Semicircle above the center
-    radarCtx.arc(radarCenterX, radarCenterY, radius, Math.PI, 0, true);
+    radarCtx.arc(radarCenterX, radarCenterY, radius, Math.PI, 0, false);
     radarCtx.stroke();
 
     // Range labels
     radarCtx.fillStyle = '#00ff00';
     radarCtx.font = '10px monospace';
-    radarCtx.fillText(`${range}cm`, radarCenterX + radius + 5, radarCenterY - 5);
+    radarCtx.fillText(`${range}`, radarCenterX + radius + 5, radarCenterY - 5);
   });
 
   // Draw static angle lines (every 10 degrees in tracker coords: -90..90)
@@ -158,9 +167,9 @@ function drawRadar() {
     }
   }
 
-  // Draw detection marker (red dot) using the SAME mapping
+  // Draw detection marker (red dot) using the SAME mapping & scaling
   const detectionRad = (currentAngleDeg - 90) * Math.PI / 180;
-  const detectionRadius = radarMaxRadius * (currentRange / rangeRings[rangeRings.length - 1]);
+  const detectionRadius = radarMaxRadius * (currentRange / MAX_RANGE_CM);
   const detectionX = radarCenterX + detectionRadius * Math.cos(detectionRad);
   const detectionY = radarCenterY + detectionRadius * Math.sin(detectionRad);
 
