@@ -27,10 +27,8 @@ tabButtons.forEach((btn) => {
 
 function setTelemetryActive(isActive) {
   telemetryActive = isActive;
-  if (telemetryActive) {
+  if (!telemetryStream) {
     startTelemetry();
-  } else {
-    stopTelemetry();
   }
 }
 
@@ -206,6 +204,8 @@ const snrChart = createChart('snrChart', 'SNR (dB)', '#27ae60', 'dB');
 const confidenceChart = createChart('confidenceChart', 'Confidence (%)', '#f59e0b', 'Percent');
 
 const MAX_POINTS = 100;
+const TRACE_MAX_ROWS = 500;
+const TRACE_ROW_HEIGHT = 36;
 
 // Debug panel elements
 const debugStatus = document.getElementById('debugStatus');
@@ -221,6 +221,153 @@ const statsState = {
   intervals: [],
   lastUpdate: null,
 };
+
+const traceViewport = document.getElementById('traceViewport');
+const traceVirtualList = document.getElementById('traceVirtualList');
+const tracePauseBtn = document.getElementById('tracePauseBtn');
+const traceClearBtn = document.getElementById('traceClearBtn');
+const traceCountEl = document.getElementById('traceCount');
+const traceStatusEl = document.getElementById('traceStatus');
+const traceExportFormat = document.getElementById('traceExportFormat');
+const traceCopyBtn = document.getElementById('traceCopyBtn');
+const traceDownloadBtn = document.getElementById('traceDownloadBtn');
+const traceState = {
+  buffer: [],
+  paused: false,
+};
+
+function updateTraceSummary() {
+  if (traceCountEl) {
+    traceCountEl.textContent = `${traceState.buffer.length} / ${TRACE_MAX_ROWS}`;
+  }
+  if (traceStatusEl) {
+    traceStatusEl.textContent = traceState.paused ? 'paused' : 'live';
+    traceStatusEl.classList.toggle('paused', traceState.paused);
+  }
+  if (tracePauseBtn) {
+    tracePauseBtn.textContent = traceState.paused ? 'Resume' : 'Pause';
+  }
+}
+
+function setTracePaused(paused) {
+  traceState.paused = paused;
+  updateTraceSummary();
+}
+
+function clearTraceHistory() {
+  traceState.buffer = [];
+  renderTraceRows();
+  updateTraceSummary();
+}
+
+function formatTraceTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '--';
+  }
+  return date.toLocaleTimeString();
+}
+
+function renderTraceRows() {
+  if (!traceVirtualList || !traceViewport) return;
+  const total = traceState.buffer.length;
+  const viewportHeight = traceViewport.clientHeight || 0;
+  const scrollTop = traceViewport.scrollTop;
+  const start = Math.floor(scrollTop / TRACE_ROW_HEIGHT);
+  const visibleCount = Math.ceil(viewportHeight / TRACE_ROW_HEIGHT) + 5;
+  const end = Math.min(total, start + visibleCount);
+
+  traceVirtualList.innerHTML = '';
+  traceVirtualList.style.height = `${total * TRACE_ROW_HEIGHT}px`;
+
+  for (let i = start; i < end; i += 1) {
+    const entry = traceState.buffer[i];
+    const row = document.createElement('div');
+    row.className = 'trace-row';
+    if (i % 2 === 1) {
+      row.classList.add('trace-row-alt');
+    }
+    row.style.top = `${i * TRACE_ROW_HEIGHT}px`;
+    row.style.height = `${TRACE_ROW_HEIGHT}px`;
+    row.setAttribute('role', 'row');
+    row.innerHTML = `
+      <div role="cell">${formatTraceTimestamp(entry.timestamp)}</div>
+      <div role="cell">${Number.isFinite(entry.angleDeg) ? entry.angleDeg.toFixed(2) : '--'}</div>
+      <div role="cell">${Number.isFinite(entry.peak) ? entry.peak.toFixed(2) : '--'}</div>
+    `;
+    traceVirtualList.appendChild(row);
+  }
+}
+
+function isTraceNearBottom() {
+  if (!traceViewport) return true;
+  const { scrollTop, scrollHeight, clientHeight } = traceViewport;
+  return scrollHeight - (scrollTop + clientHeight) < TRACE_ROW_HEIGHT * 1.5;
+}
+
+function scrollTraceToBottom() {
+  if (!traceViewport) return;
+  traceViewport.scrollTop = traceViewport.scrollHeight;
+}
+
+function addTraceSample(sample) {
+  if (!traceVirtualList || traceState.paused) return;
+  const entry = {
+    timestamp: sample.timestamp,
+    angleDeg: sample.angleDeg,
+    peak: sample.peak,
+  };
+  traceState.buffer.push(entry);
+  if (traceState.buffer.length > TRACE_MAX_ROWS) {
+    traceState.buffer.splice(0, traceState.buffer.length - TRACE_MAX_ROWS);
+  }
+
+  const stickToBottom = isTraceNearBottom();
+  renderTraceRows();
+  updateTraceSummary();
+  if (stickToBottom) {
+    scrollTraceToBottom();
+  }
+}
+
+function serializeTrace(format) {
+  if (format === 'json') {
+    return JSON.stringify(traceState.buffer, null, 2);
+  }
+
+  const header = 'timestamp,angleDeg,peak';
+  const rows = traceState.buffer.map((entry) => {
+    const angle = Number.isFinite(entry.angleDeg) ? entry.angleDeg.toFixed(4) : '';
+    const peak = Number.isFinite(entry.peak) ? entry.peak.toFixed(4) : '';
+    const ts = entry.timestamp ?? '';
+    return `${ts},${angle},${peak}`;
+  });
+  return [header, ...rows].join('\n');
+}
+
+async function handleTraceCopy() {
+  if (!navigator.clipboard) {
+    console.warn('Clipboard API unavailable');
+    return;
+  }
+  const format = traceExportFormat?.value || 'csv';
+  const payload = serializeTrace(format);
+  await navigator.clipboard.writeText(payload);
+}
+
+function handleTraceDownload() {
+  const format = traceExportFormat?.value || 'csv';
+  const payload = serializeTrace(format);
+  const blob = new Blob([payload], { type: format === 'json' ? 'application/json' : 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = format === 'json' ? 'trace.json' : 'trace.csv';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 const CONFIG_REFRESH_MS = 5000;
 
@@ -261,6 +408,7 @@ function processPendingSample(timestamp) {
 }
 
 function handleSample(sample, fromHistory = false) {
+  addTraceSample(sample);
   if (!telemetryActive) return;
   addSample(sample, fromHistory);
 }
@@ -271,7 +419,7 @@ function addSample(sample, fromHistory = false) {
   pushPoint(peakChart, timestamp, sample.peak);
   pushPoint(snrChart, timestamp, sample.snr ?? 0);
   const confidencePercent = Math.max(0, Math.min(1, sample.trackingConfidence ?? 0)) * 100;
-  pushPoint(confidenceChart, timestamp, confidencePercent);
+pushPoint(confidenceChart, timestamp, confidencePercent);
 
   // Update radar display
   updateRadar(sample.angleDeg);
@@ -477,6 +625,25 @@ function pushPoint(chart, label, value) {
 
 refreshConfigSummary();
 setInterval(refreshConfigSummary, CONFIG_REFRESH_MS);
+
+if (traceViewport) {
+  traceViewport.addEventListener('scroll', renderTraceRows);
+}
+if (tracePauseBtn) {
+  tracePauseBtn.addEventListener('click', () => setTracePaused(!traceState.paused));
+}
+if (traceClearBtn) {
+  traceClearBtn.addEventListener('click', clearTraceHistory);
+}
+if (traceCopyBtn) {
+  traceCopyBtn.addEventListener('click', handleTraceCopy);
+}
+if (traceDownloadBtn) {
+  traceDownloadBtn.addEventListener('click', handleTraceDownload);
+}
+
+updateTraceSummary();
+renderTraceRows();
 
 setActiveTab('telemetry');
 
