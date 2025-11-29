@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"runtime/metrics"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -378,6 +380,12 @@ type ProcessMetrics struct {
 	MemoryTotalAlloc uint64        `json:"memoryTotalAllocBytes"`
 	MemorySys        uint64        `json:"memorySysBytes"`
 	NumGoroutine     int           `json:"numGoroutine"`
+	CPUPercent       float64       `json:"cpuPercent"`
+	Samples          int64         `json:"samples"`
+	UpdateRateHz     float64       `json:"updateRateHz"`
+	LastSample       time.Time     `json:"lastSample"`
+	IterationLast    time.Duration `json:"iterationLast"`
+	IterationAvg     time.Duration `json:"iterationAvg"`
 }
 
 // SpectrumSnapshot represents the latest FFT power bins.
@@ -387,10 +395,29 @@ type SpectrumSnapshot struct {
 	Source    string    `json:"source,omitempty"`
 }
 
+// SignalQuality summarizes the latest tracking quality metrics.
+type SignalQuality struct {
+	SNR        float64   `json:"snr"`
+	Confidence float64   `json:"confidence"`
+	LockState  LockState `json:"lockState"`
+	NoiseFloor float64   `json:"noiseFloor"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+}
+
+// DiagnosticEvent captures a notable runtime change for operator insight.
+type DiagnosticEvent struct {
+	Timestamp time.Time `json:"timestamp"`
+	Level     string    `json:"level"`
+	Message   string    `json:"message"`
+}
+
 // Diagnostics bundles runtime metrics and spectrum data.
 type Diagnostics struct {
-	Process  ProcessMetrics   `json:"process"`
-	Spectrum SpectrumSnapshot `json:"spectrum"`
+	Process  ProcessMetrics    `json:"process"`
+	Spectrum SpectrumSnapshot  `json:"spectrum"`
+	Signal   SignalQuality     `json:"signal"`
+	Debug    *DebugInfo        `json:"debug,omitempty"`
+	Events   []DiagnosticEvent `json:"events"`
 }
 
 // HealthStatus surfaces overall process health.
@@ -412,6 +439,16 @@ type Hub struct {
 	process        ProcessMetrics
 	latestSpectrum *SpectrumSnapshot
 	mockSpectrum   SpectrumSnapshot
+	totalSamples   int64
+	lastSample     *Sample
+	lastReportTime time.Time
+	iterationAvg   time.Duration
+	iterationLast  time.Duration
+	lastCPUSeconds float64
+	lastCPUTick    time.Time
+	events         []DiagnosticEvent
+	eventLimit     int
+	lastLockState  LockState
 }
 
 // NewHub builds a telemetry hub with the provided history limit.
@@ -439,9 +476,11 @@ func NewHub(historyLimit int, logger logging.Logger) *Hub {
 		config:       cfg,
 		logger:       logger.With(logging.Field{Key: "subsystem", Value: "telemetry"}),
 		startTime:    time.Now(),
+		eventLimit:   100,
 	}
 	h.mockSpectrum = mockSpectrumSnapshot()
 	h.process = h.collectProcessMetrics()
+	h.recordEvent("info", "telemetry hub initialized")
 	return h
 }
 
@@ -458,6 +497,22 @@ func (h *Hub) Report(angleDeg float64, peak float64, snr float64, confidence flo
 	}
 
 	h.mu.Lock()
+	if h.lastSample != nil && h.lastSample.LockState != sample.LockState {
+		h.recordEventLocked("info", fmt.Sprintf("lock state changed to %s", sample.LockState))
+	}
+	h.totalSamples++
+	if !h.lastReportTime.IsZero() {
+		h.iterationLast = sample.Timestamp.Sub(h.lastReportTime)
+		if h.iterationAvg == 0 {
+			h.iterationAvg = h.iterationLast
+		} else {
+			const alpha = 0.2
+			h.iterationAvg = time.Duration((1-alpha)*float64(h.iterationAvg) + alpha*float64(h.iterationLast))
+		}
+	}
+	h.lastReportTime = sample.Timestamp
+	h.lastSample = &sample
+	h.lastLockState = sample.LockState
 	h.history = append(h.history, sample)
 	if len(h.history) > h.historyLimit {
 		h.history = h.history[len(h.history)-h.historyLimit:]
@@ -469,6 +524,20 @@ func (h *Hub) Report(angleDeg float64, peak float64, snr float64, confidence flo
 		}
 	}
 	h.mu.Unlock()
+}
+
+func (h *Hub) recordEvent(level, message string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.recordEventLocked(level, message)
+}
+
+func (h *Hub) recordEventLocked(level, message string) {
+	event := DiagnosticEvent{Timestamp: time.Now(), Level: level, Message: message}
+	h.events = append(h.events, event)
+	if len(h.events) > h.eventLimit {
+		h.events = h.events[len(h.events)-h.eventLimit:]
+	}
 }
 
 // History returns a copy of stored telemetry samples.
@@ -490,6 +559,9 @@ func (h *Hub) UpdateSpectrumSnapshot(bins []float64, source string) {
 	}
 
 	h.mu.Lock()
+	if h.latestSpectrum == nil || h.latestSpectrum.Source != source {
+		h.recordEventLocked("info", fmt.Sprintf("spectrum source switched to %s", source))
+	}
 	h.latestSpectrum = snapshot
 	h.mu.Unlock()
 }
@@ -534,6 +606,7 @@ func (h *Hub) applyConfig(cfg Config) {
 	if len(h.history) > h.historyLimit {
 		h.history = h.history[len(h.history)-h.historyLimit:]
 	}
+	h.recordEventLocked("info", "configuration updated")
 }
 
 func (h *Hub) collectProcessMetrics() ProcessMetrics {
@@ -542,16 +615,52 @@ func (h *Hub) collectProcessMetrics() ProcessMetrics {
 
 	h.mu.RLock()
 	start := h.startTime
+	samples := h.totalSamples
+	lastSample := h.lastSample
+	iterationAvg := h.iterationAvg
+	iterationLast := h.iterationLast
+	prevCPUSeconds := h.lastCPUSeconds
+	prevCPUTick := h.lastCPUTick
 	h.mu.RUnlock()
+
+	now := time.Now()
+	cpuSeconds := readProcessCPUSeconds()
+	cpuPercent := 0.0
+	if !prevCPUTick.IsZero() {
+		wall := now.Sub(prevCPUTick).Seconds()
+		deltaCPU := cpuSeconds - prevCPUSeconds
+		if wall > 0 && deltaCPU >= 0 {
+			cpuPercent = (deltaCPU / wall) * 100
+		}
+	}
+
+	h.mu.Lock()
+	h.lastCPUSeconds = cpuSeconds
+	h.lastCPUTick = now
+	h.mu.Unlock()
+
+	updateRate := 0.0
+	uptimeSeconds := now.Sub(start).Seconds()
+	if uptimeSeconds > 0 {
+		updateRate = float64(samples) / uptimeSeconds
+	}
 
 	metrics := ProcessMetrics{
 		StartTime:        start,
-		LastUpdated:      time.Now(),
-		Uptime:           time.Since(start),
+		LastUpdated:      now,
+		Uptime:           now.Sub(start),
 		MemoryAlloc:      mem.Alloc,
 		MemoryTotalAlloc: mem.TotalAlloc,
 		MemorySys:        mem.Sys,
 		NumGoroutine:     runtime.NumGoroutine(),
+		CPUPercent:       cpuPercent,
+		Samples:          samples,
+		UpdateRateHz:     updateRate,
+		IterationAvg:     iterationAvg,
+		IterationLast:    iterationLast,
+	}
+	if lastSample != nil {
+		metrics.LastSample = lastSample.Timestamp
 	}
 
 	h.mu.Lock()
@@ -588,6 +697,59 @@ func mockSpectrumSnapshot() SpectrumSnapshot {
 		Source:    "mock",
 		Bins:      []float64{-80, -60, -40, -20, 0, -20, -40, -60},
 	}
+}
+
+func readProcessCPUSeconds() float64 {
+	samples := []metrics.Sample{{Name: "/process/cpu-seconds"}}
+	metrics.Read(samples)
+	if len(samples) == 0 {
+		return 0
+	}
+	if samples[0].Value.Kind() == metrics.KindFloat64 {
+		return samples[0].Value.Float64()
+	}
+	return 0
+}
+
+func estimateNoiseFloor(bins []float64) float64 {
+	if len(bins) == 0 {
+		return 0
+	}
+	values := append([]float64(nil), bins...)
+	sort.Float64s(values)
+	cutoff := len(values) * 4 / 5
+	if cutoff < 1 {
+		cutoff = 1
+	}
+	values = values[:cutoff]
+	sum := 0.0
+	for _, v := range values {
+		sum += v
+	}
+	return sum / float64(len(values))
+}
+
+func (h *Hub) signalQuality(snapshot SpectrumSnapshot) SignalQuality {
+	h.mu.RLock()
+	last := h.lastSample
+	h.mu.RUnlock()
+
+	quality := SignalQuality{NoiseFloor: estimateNoiseFloor(snapshot.Bins), LockState: LockStateSearching}
+	if last != nil {
+		quality.SNR = last.SNR
+		quality.Confidence = last.Confidence
+		quality.LockState = last.LockState
+		quality.UpdatedAt = last.Timestamp
+	}
+	return quality
+}
+
+func (h *Hub) recentEvents() []DiagnosticEvent {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make([]DiagnosticEvent, len(h.events))
+	copy(out, h.events)
+	return out
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
@@ -687,9 +849,24 @@ func (h *Hub) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	spectrum := h.spectrumSnapshot()
+	process := h.collectProcessMetrics()
+	signal := h.signalQuality(spectrum)
+
+	var debugCopy *DebugInfo
+	h.mu.RLock()
+	if h.lastSample != nil && h.lastSample.Debug != nil {
+		dc := *h.lastSample.Debug
+		debugCopy = &dc
+	}
+	h.mu.RUnlock()
+
 	response := Diagnostics{
-		Process:  h.collectProcessMetrics(),
-		Spectrum: h.spectrumSnapshot(),
+		Process:  process,
+		Spectrum: spectrum,
+		Signal:   signal,
+		Debug:    debugCopy,
+		Events:   h.recentEvents(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
