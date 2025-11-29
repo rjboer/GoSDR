@@ -40,7 +40,7 @@ function startTelemetry() {
       .then((res) => res.json())
       .then((data) => {
         historyLoaded = true;
-        data.forEach(handleSample);
+        data.forEach((sample) => handleSample(sample, true));
       })
       .catch((err) => console.error('history', err));
   }
@@ -74,6 +74,26 @@ const radarAngleDisplay = document.getElementById('radarAngle');
 const snrDisplay = document.getElementById('snrValue');
 const confidenceDisplay = document.getElementById('confidenceValue');
 const lockBadge = document.getElementById('lockBadge');
+const summaryBackend = document.getElementById('summaryBackend');
+const summaryRxLo = document.getElementById('summaryRxLo');
+const summaryToneOffset = document.getElementById('summaryToneOffset');
+const summarySampleRate = document.getElementById('summarySampleRate');
+const summaryFftSize = document.getElementById('summaryFftSize');
+const updateRateDisplay = document.getElementById('updateRate');
+const angleStatsEls = {
+  avg: document.getElementById('angleAvg'),
+  std: document.getElementById('angleStd'),
+  min: document.getElementById('angleMin'),
+  max: document.getElementById('angleMax'),
+};
+const peakStatsEls = {
+  avg: document.getElementById('peakAvg'),
+  std: document.getElementById('peakStd'),
+  min: document.getElementById('peakMin'),
+  max: document.getElementById('peakMax'),
+};
+
+const numberFormatter = new Intl.NumberFormat('en-US');
 
 // Radar dimensions
 const radarCenterX = radarCanvas.width / 2;
@@ -187,8 +207,6 @@ const confidenceChart = createChart('confidenceChart', 'Confidence (%)', '#f59e0
 
 const MAX_POINTS = 100;
 
-const historyBody = document.querySelector('#historyTable tbody');
-
 // Debug panel elements
 const debugStatus = document.getElementById('debugStatus');
 const debugPhaseDelay = document.getElementById('debugPhaseDelay');
@@ -197,6 +215,14 @@ const debugPeakValue = document.getElementById('debugPeakValue');
 const debugPeakBin = document.getElementById('debugPeakBin');
 const debugPeakBand = document.getElementById('debugPeakBand');
 let debugStreamEnabled = false;
+const statsState = {
+  angle: [],
+  peak: [],
+  intervals: [],
+  lastUpdate: null,
+};
+
+const CONFIG_REFRESH_MS = 5000;
 
 // Rate limiting for SSE updates (10 Hz cap + animation frame batching)
 const FRAME_INTERVAL_MS = 100;
@@ -234,12 +260,12 @@ function processPendingSample(timestamp) {
   }
 }
 
-function handleSample(sample) {
+function handleSample(sample, fromHistory = false) {
   if (!telemetryActive) return;
-  addSample(sample);
+  addSample(sample, fromHistory);
 }
 
-function addSample(sample) {
+function addSample(sample, fromHistory = false) {
   const timestamp = new Date(sample.timestamp).toLocaleTimeString();
   pushPoint(angleChart, timestamp, sample.angleDeg);
   pushPoint(peakChart, timestamp, sample.peak);
@@ -252,13 +278,7 @@ function addSample(sample) {
   updateMetrics(sample.snr, confidencePercent, sample.lockState);
 
   updateDebugPanel(sample);
-
-  const row = document.createElement('tr');
-  row.innerHTML = `<td>${timestamp}</td><td>${sample.angleDeg.toFixed(2)}</td><td>${sample.peak.toFixed(2)}</td><td>${(sample.snr ?? 0).toFixed(2)}</td><td>${confidencePercent.toFixed(0)}%</td><td>${sample.lockState || 'searching'}</td>`;
-  historyBody.prepend(row);
-  while (historyBody.children.length > MAX_POINTS) {
-    historyBody.removeChild(historyBody.lastChild);
-  }
+  updateStats(sample, fromHistory);
 }
 
 function updateMetrics(snr, confidencePercent, lockState) {
@@ -325,6 +345,126 @@ function updateDebugPanel(sample) {
   }
 }
 
+function renderStatValue(el, value, precision = 2) {
+  if (!el) return;
+  if (!Number.isFinite(value)) {
+    el.textContent = '--';
+    return;
+  }
+  el.textContent = value.toFixed(precision);
+}
+
+function computeStats(values) {
+  if (!values.length) {
+    return null;
+  }
+  const count = values.length;
+  const sum = values.reduce((acc, v) => acc + v, 0);
+  const avg = sum / count;
+  const variance = values.reduce((acc, v) => acc + (v - avg) ** 2, 0) / count;
+  return {
+    avg,
+    std: Math.sqrt(variance),
+    min: Math.min(...values),
+    max: Math.max(...values),
+  };
+}
+
+function recordStatValue(bucket, value) {
+  if (!Number.isFinite(value)) return;
+  bucket.push(value);
+  if (bucket.length > MAX_POINTS) {
+    bucket.shift();
+  }
+}
+
+function updateStats(sample, fromHistory) {
+  recordStatValue(statsState.angle, sample.angleDeg);
+  recordStatValue(statsState.peak, sample.peak);
+
+  const angleStats = computeStats(statsState.angle);
+  if (angleStats) {
+    renderStatValue(angleStatsEls.avg, angleStats.avg, 2);
+    renderStatValue(angleStatsEls.std, angleStats.std, 2);
+    renderStatValue(angleStatsEls.min, angleStats.min, 2);
+    renderStatValue(angleStatsEls.max, angleStats.max, 2);
+  }
+
+  const peakStats = computeStats(statsState.peak);
+  if (peakStats) {
+    renderStatValue(peakStatsEls.avg, peakStats.avg, 2);
+    renderStatValue(peakStatsEls.std, peakStats.std, 2);
+    renderStatValue(peakStatsEls.min, peakStats.min, 2);
+    renderStatValue(peakStatsEls.max, peakStats.max, 2);
+  }
+
+  if (!fromHistory) {
+    updateUpdateRate();
+  }
+}
+
+function updateUpdateRate() {
+  const now = performance.now();
+  if (statsState.lastUpdate !== null) {
+    const interval = now - statsState.lastUpdate;
+    statsState.intervals.push(interval);
+    if (statsState.intervals.length > MAX_POINTS) {
+      statsState.intervals.shift();
+    }
+    const sum = statsState.intervals.reduce((acc, v) => acc + v, 0);
+    const avgInterval = sum / statsState.intervals.length;
+    const rateHz = avgInterval > 0 ? 1000 / avgInterval : 0;
+    if (updateRateDisplay) {
+      updateRateDisplay.textContent = `${rateHz.toFixed(1)} Hz`;
+    }
+  }
+  statsState.lastUpdate = now;
+}
+
+function formatHz(value) {
+  if (!Number.isFinite(value)) return '--';
+  const abs = Math.abs(value);
+  if (abs >= 1e9) return `${(value / 1e9).toFixed(2)} GHz`;
+  if (abs >= 1e6) return `${(value / 1e6).toFixed(2)} MHz`;
+  if (abs >= 1e3) return `${(value / 1e3).toFixed(2)} kHz`;
+  return `${numberFormatter.format(value)} Hz`;
+}
+
+function formatSamples(value) {
+  if (!Number.isFinite(value)) return '--';
+  return numberFormatter.format(value);
+}
+
+function updateSummaryPanel(cfg) {
+  if (!cfg) return;
+  if (summaryBackend) {
+    summaryBackend.textContent = cfg.sdrBackend || '--';
+  }
+  if (summaryRxLo) {
+    summaryRxLo.textContent = formatHz(cfg.rxLoHz);
+  }
+  if (summaryToneOffset) {
+    summaryToneOffset.textContent = formatHz(cfg.toneOffsetHz);
+  }
+  if (summarySampleRate) {
+    summarySampleRate.textContent = formatHz(cfg.sampleRateHz);
+  }
+  if (summaryFftSize) {
+    summaryFftSize.textContent = formatSamples(cfg.numSamples);
+  }
+}
+
+async function refreshConfigSummary() {
+  try {
+    const res = await fetch('/api/config');
+    if (!res.ok) return;
+    const cfg = await res.json();
+    updateSummaryPanel(cfg);
+  } catch (err) {
+    console.error('config summary', err);
+  }
+}
+
 function pushPoint(chart, label, value) {
   chart.data.labels.push(label);
   chart.data.datasets[0].data.push(value);
@@ -335,10 +475,13 @@ function pushPoint(chart, label, value) {
   chart.update('none');
 }
 
+refreshConfigSummary();
+setInterval(refreshConfigSummary, CONFIG_REFRESH_MS);
+
 setActiveTab('telemetry');
 
 // Manual QA checklist:
 // 1. Load page and confirm Telemetry tab is active with charts and radar visible.
 // 2. Switch to Trace/Debug/Settings tabs and verify Telemetry visuals hide while placeholders render.
 // 3. Return to Telemetry and confirm data resumes updating without console errors.
-// 4. Let more than 100 samples stream in and confirm charts/history cap at 100, scroll smoothly, and Chrome shows no performance warnings.
+// 4. Let more than 100 samples stream in and confirm chart/stat windows cap at 100, scroll smoothly, and Chrome shows no performance warnings.
