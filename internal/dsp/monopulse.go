@@ -17,6 +17,7 @@ type scanResult struct {
 	phase     float64
 	peak      float64
 	monoPhase float64
+	peakBin   int
 	ok        bool
 }
 
@@ -40,21 +41,23 @@ func binRange(n, start, end int) (int, int) {
 
 // peakInBand returns the maximum value of db in [start,end).
 // ok is false if the band is empty or db is empty.
-func peakInBand(db []float64, start, end int) (peak float64, ok bool) {
+// bin reports the index of the peak within db (or 0 if unavailable).
+func peakInBand(db []float64, start, end int) (peak float64, bin int, ok bool) {
 	s, e := binRange(len(db), start, end)
 	if s == e {
-		return 0, false
+		return 0, 0, false
 	}
 	peak = -math.MaxFloat64
 	for i := s; i < e; i++ {
 		if db[i] > peak {
 			peak = db[i]
+			bin = i
 		}
 	}
 	if peak == -math.MaxFloat64 {
-		return 0, false
+		return 0, bin, false
 	}
-	return peak, true
+	return peak, bin, true
 }
 
 // MonopulsePhase correlates sum and delta FFT bins and returns the resulting phase (radians).
@@ -205,10 +208,10 @@ func CoarseScan(
 		monoPhase := MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
 		// monoPhase := MonopulsePhaseRatio(sumFFT, deltaFFT, startBin, endBin)
 
-		peak, ok := peakInBand(sumDBFS, startBin, endBin)
+		peak, _, ok := peakInBand(sumDBFS, startBin, endBin)
 		if !ok {
 			// fall back to full-band search
-			peak, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
+			peak, _, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
 		}
 		if !ok {
 			continue
@@ -271,9 +274,9 @@ func MonopulseTrack(
 	monoPhase := MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
 	// monoPhase := MonopulsePhaseRatio(sumFFT, deltaFFT, startBin, endBin)
 
-	peak, ok := peakInBand(sumDBFS, startBin, endBin)
+	peak, _, ok := peakInBand(sumDBFS, startBin, endBin)
 	if !ok {
-		peak, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
+		peak, _, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
 	}
 	if !ok {
 		peak = 0
@@ -299,7 +302,7 @@ func doPhaseScan(
 	startBin, endBin int,
 	dsp *CachedDSP,
 	adjusted, sumBuf, deltaBuf []complex64,
-) (peak float64, monoPhase float64, ok bool) {
+) (peak float64, monoPhase float64, peakBin int, ok bool) {
 	phaseRad := (phase + phaseCal) * degToRad
 	phaseFactor := complex64(cmplx.Exp(complex(0, phaseRad)))
 
@@ -310,18 +313,18 @@ func doPhaseScan(
 	deltaFFT, _ := dsp.FFTAndDBFS(deltaBuf)
 
 	if len(sumDBFS) == 0 || len(sumFFT) == 0 || len(deltaFFT) == 0 {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 
 	// Choose correlation or ratio-based monopulse:
 	monoPhase = MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
 	// monoPhase = MonopulsePhaseRatio(sumFFT, deltaFFT, startBin, endBin)
 
-	peak, ok = peakInBand(sumDBFS, startBin, endBin)
+	peak, peakBin, ok = peakInBand(sumDBFS, startBin, endBin)
 	if !ok {
-		peak, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
+		peak, peakBin, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
 	}
-	return peak, monoPhase, ok
+	return peak, monoPhase, peakBin, ok
 }
 
 // CoarseScanParallel performs coarse scan with parallel FFT processing using a worker pool.
@@ -335,7 +338,7 @@ func CoarseScanParallel(
 	freqHz float64,
 	spacingWavelength float64,
 	dsp *CachedDSP,
-) (bestDelay float64, bestTheta float64, peakDBFS float64) {
+) (bestDelay float64, bestTheta float64, peakDBFS float64, monoPhase float64, peakBin int) {
 	if stepDeg == 0 {
 		stepDeg = 2
 	}
@@ -345,7 +348,7 @@ func CoarseScanParallel(
 		n = len(rx1)
 	}
 	if n == 0 {
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 
 	// Build the phase grid.
@@ -354,7 +357,7 @@ func CoarseScanParallel(
 		phases = append(phases, phase)
 	}
 	if len(phases) == 0 {
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 
 	numWorkers := runtime.NumCPU()
@@ -373,7 +376,7 @@ func CoarseScanParallel(
 			deltaBuf := make([]complex64, n)
 
 			for phase := range jobs {
-				peak, monoPhase, ok := doPhaseScan(
+				peak, monoPhase, peakBin, ok := doPhaseScan(
 					phase, rx0, rx1, n, phaseCal,
 					startBin, endBin, dsp,
 					adjusted, sumBuf, deltaBuf,
@@ -382,6 +385,7 @@ func CoarseScanParallel(
 					phase:     phase,
 					peak:      peak,
 					monoPhase: monoPhase,
+					peakBin:   peakBin,
 					ok:        ok,
 				}
 			}
@@ -398,6 +402,7 @@ func CoarseScanParallel(
 
 	peakDBFS = -math.MaxFloat64
 	bestMonoPhase := math.MaxFloat64
+	bestPeakBin := 0
 
 	// Collect results.
 	for range phases {
@@ -410,13 +415,14 @@ func CoarseScanParallel(
 			bestDelay = res.phase
 			bestTheta = PhaseToTheta(res.phase, freqHz, spacingWavelength)
 			bestMonoPhase = res.monoPhase
+			bestPeakBin = res.peakBin
 		}
 	}
 
 	if peakDBFS == -math.MaxFloat64 {
 		peakDBFS = 0
 	}
-	return bestDelay, bestTheta, peakDBFS
+	return bestDelay, bestTheta, peakDBFS, bestMonoPhase, bestPeakBin
 }
 
 // --------- Tracking (parallel FFTs for a single step) ---------
@@ -430,13 +436,13 @@ func MonopulseTrackParallel(
 	startBin, endBin int,
 	phaseStep float64,
 	dsp *CachedDSP,
-) (float64, float64) {
+) (float64, float64, float64, int) {
 	n := len(rx0)
 	if len(rx1) < n {
 		n = len(rx1)
 	}
 	if n == 0 {
-		return lastDelay, 0
+		return lastDelay, 0, 0, 0
 	}
 
 	adjusted := make([]complex64, n)
@@ -468,15 +474,15 @@ func MonopulseTrackParallel(
 	wg.Wait()
 
 	if len(sumDBFS) == 0 || len(sumFFT) == 0 || len(deltaFFT) == 0 {
-		return lastDelay, 0
+		return lastDelay, 0, 0, 0
 	}
 
 	monoPhase := MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
 	// monoPhase := MonopulsePhaseRatio(sumFFT, deltaFFT, startBin, endBin)
 
-	peak, ok := peakInBand(sumDBFS, startBin, endBin)
+	peak, peakBin, ok := peakInBand(sumDBFS, startBin, endBin)
 	if !ok {
-		peak, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
+		peak, peakBin, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
 	}
 	if !ok {
 		peak = 0
@@ -488,5 +494,5 @@ func MonopulseTrackParallel(
 	} else if monoPhase < -monoDeadbandRad {
 		newDelay = lastDelay - phaseStep
 	}
-	return newDelay, peak
+	return newDelay, peak, monoPhase, peakBin
 }

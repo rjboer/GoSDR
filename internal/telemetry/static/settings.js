@@ -24,6 +24,7 @@ const fieldIds = [
   'sdrUri',
   'logLevel',
   'logFormat',
+  'debugMode',
 ];
 
 const numericFields = new Set([
@@ -45,6 +46,8 @@ const numericFields = new Set([
   'rxGain1',
   'txGain',
 ]);
+
+const booleanFields = new Set(['debugMode']);
 
 const defaults = {
   sampleRateHz: 2000000,
@@ -68,6 +71,7 @@ const defaults = {
   sdrUri: 'ip:192.168.2.1',
   logLevel: 'warn',
   logFormat: 'text',
+  debugMode: false,
 };
 
 const statusEl = $('status');
@@ -116,7 +120,11 @@ function applyConfig(cfg) {
     if (merged[id] === undefined || merged[id] === null) return;
     const el = $(id);
     if (!el) return;
-    el.value = merged[id];
+    if (el.type === 'checkbox' || booleanFields.has(id)) {
+      el.checked = Boolean(merged[id]);
+    } else {
+      el.value = merged[id];
+    }
   });
   updateBackendState();
 }
@@ -145,6 +153,10 @@ function collectPayload() {
   fieldIds.forEach((id) => {
     const el = $(id);
     if (!el) return;
+    if (el.type === 'checkbox' || booleanFields.has(id)) {
+      payload[id] = el.checked;
+      return;
+    }
     const value = el.value;
     payload[id] = numericFields.has(id) ? Number(value) : value;
   });

@@ -10,13 +10,14 @@ import (
 
 	"github.com/rjboer/GoSDR/internal/logging"
 	"github.com/rjboer/GoSDR/internal/sdr"
+	"github.com/rjboer/GoSDR/internal/telemetry"
 )
 
 type recordingReporter struct {
 	angles []float64
 }
 
-func (r *recordingReporter) Report(angleDeg float64, _ float64) {
+func (r *recordingReporter) Report(angleDeg float64, _ float64, _ *telemetry.DebugInfo) {
 	r.angles = append(r.angles, angleDeg)
 }
 
