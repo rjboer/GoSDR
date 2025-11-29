@@ -194,8 +194,14 @@
     <section id="debug" class="tab-panel" role="tabpanel" aria-label="Debug view">
       <div class="debug-panel" aria-live="polite">
         <div class="debug-header">
-          <h2>Debug telemetry</h2>
-          <p id="debugStatus" class="muted">Waiting for diagnostics…</p>
+          <div>
+            <h2>Debug telemetry</h2>
+            <p id="debugStatus" class="muted">Waiting for diagnostics…</p>
+          </div>
+          <div class="health-summary">
+            <span id="healthStatusBadge" class="status-badge">--</span>
+            <span class="muted">Version <span id="diagVersion">--</span></span>
+          </div>
         </div>
         <div class="debug-sections">
           <div class="debug-section">
@@ -223,23 +229,48 @@
           </div>
           <div class="debug-section">
             <div class="debug-section-header">
+              <h3>Health Checks</h3>
+              <span class="muted" id="healthReason">--</span>
+            </div>
+            <div id="healthChecks" class="health-checks"></div>
+          </div>
+          <div class="debug-section">
+            <div class="debug-section-header">
               <h3>Performance</h3>
             </div>
             <div class="debug-grid">
               <div class="debug-card">
-                <h4>CPU load</h4>
+                <div class="debug-card-header">
+                  <h4>CPU load</h4>
+                  <span class="status-badge" id="cpuStatusBadge">--</span>
+                </div>
                 <div class="debug-value" id="diagCpuLoad">--</div>
                 <p class="muted">recent process usage</p>
               </div>
               <div class="debug-card">
-                <h4>Memory</h4>
+                <div class="debug-card-header">
+                  <h4>Memory</h4>
+                  <span class="status-badge" id="memoryStatusBadge">--</span>
+                </div>
                 <div class="debug-value" id="diagMemAlloc">--</div>
+                <p class="muted">RSS <span id="diagMemRss">--</span></p>
                 <p class="muted">Total reserved <span id="diagMemSys">--</span></p>
               </div>
               <div class="debug-card">
-                <h4>Goroutines</h4>
+                <div class="debug-card-header">
+                  <h4>Goroutines</h4>
+                  <span class="status-badge" id="goroutineStatusBadge">--</span>
+                </div>
                 <div class="debug-value" id="diagGoroutines">--</div>
                 <p class="muted">Iteration <span id="diagIterationTime">--</span></p>
+              </div>
+              <div class="debug-card">
+                <div class="debug-card-header">
+                  <h4>Threads</h4>
+                  <span class="status-badge" id="threadStatusBadge">--</span>
+                </div>
+                <div class="debug-value" id="diagThreads">--</div>
+                <p class="muted">OS threads in use</p>
               </div>
             </div>
           </div>

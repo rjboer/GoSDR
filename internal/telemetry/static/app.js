@@ -6,6 +6,8 @@ let telemetryActive = true;
 let telemetryStream = null;
 let historyLoaded = false;
 let diagnosticsTimer = null;
+let metricsStream = null;
+let healthTimer = null;
 
 function setActiveTab(tabId) {
   tabButtons.forEach((btn) => {
@@ -222,8 +224,20 @@ const MAX_POINTS = 100;
 const TRACE_MAX_ROWS = 500;
 const TRACE_ROW_HEIGHT = 36;
 
+const METRIC_THRESHOLDS = {
+  cpu: { warn: 75, critical: 90 },
+  memAlloc: { warn: 512 * 1024 * 1024, critical: 800 * 1024 * 1024 },
+  memRss: { warn: 600 * 1024 * 1024, critical: 900 * 1024 * 1024 },
+  goroutines: { warn: 500, critical: 1000 },
+  threads: { warn: 150, critical: 250 },
+};
+
 // Debug panel elements
 const debugStatus = document.getElementById('debugStatus');
+const healthStatusBadge = document.getElementById('healthStatusBadge');
+const diagVersion = document.getElementById('diagVersion');
+const healthReason = document.getElementById('healthReason');
+const healthChecks = document.getElementById('healthChecks');
 const diagLastUpdated = document.getElementById('debugLastUpdated');
 const diagUptime = document.getElementById('diagUptime');
 const diagStartTime = document.getElementById('diagStartTime');
@@ -233,8 +247,14 @@ const diagUpdateRate = document.getElementById('diagUpdateRate');
 const diagCpuLoad = document.getElementById('diagCpuLoad');
 const diagMemAlloc = document.getElementById('diagMemAlloc');
 const diagMemSys = document.getElementById('diagMemSys');
+const diagMemRss = document.getElementById('diagMemRss');
 const diagGoroutines = document.getElementById('diagGoroutines');
+const diagThreads = document.getElementById('diagThreads');
 const diagIterationTime = document.getElementById('diagIterationTime');
+const cpuStatusBadge = document.getElementById('cpuStatusBadge');
+const memoryStatusBadge = document.getElementById('memoryStatusBadge');
+const goroutineStatusBadge = document.getElementById('goroutineStatusBadge');
+const threadStatusBadge = document.getElementById('threadStatusBadge');
 const diagSNR = document.getElementById('diagSNR');
 const diagNoiseFloor = document.getElementById('diagNoiseFloor');
 const diagConfidence = document.getElementById('diagConfidence');
@@ -485,6 +505,24 @@ function updateLockBadge(state, badgeEl = lockBadge) {
   }
 }
 
+function severityFor(value, limits) {
+  if (!limits) return 'ok';
+  const { warn, critical } = limits;
+  if (Number.isFinite(critical) && value >= critical) return 'critical';
+  if (Number.isFinite(warn) && value >= warn) return 'warn';
+  return 'ok';
+}
+
+function setStatusBadge(el, severity, label) {
+  if (!el) return;
+  const normalized = severity || 'ok';
+  el.classList.remove('ok', 'warn', 'critical', 'degraded');
+  if (normalized) {
+    el.classList.add(normalized);
+  }
+  el.textContent = label || normalized || '--';
+}
+
 function updateDebugPanel(sample) {
   if (!debugStatus) return;
   const info = sample?.debug ?? sample;
@@ -578,39 +616,53 @@ function renderEventLog(events = []) {
   }
 }
 
-function renderDiagnostics(diag) {
-  if (!diag || !diag.process) {
-    if (debugStatus) debugStatus.textContent = 'Diagnostics unavailable';
-    return;
-  }
+function renderProcessMetrics(process) {
+  if (!process) return;
 
-  if (debugStatus) debugStatus.textContent = 'Diagnostics live';
-  if (diagLastUpdated) diagLastUpdated.textContent = formatTimestamp(diag.process.lastUpdated);
-  if (diagUptime) diagUptime.textContent = formatDuration(diag.process.uptime);
-  if (diagStartTime) diagStartTime.textContent = formatTimestamp(diag.process.startTime);
-  if (diagSamples) diagSamples.textContent = numberFormatter.format(diag.process.samples || 0);
-  if (diagLastSample) diagLastSample.textContent = formatTimestamp(diag.process.lastSample || diag.signal?.updatedAt);
+  if (diagLastUpdated) diagLastUpdated.textContent = formatTimestamp(process.lastUpdated);
+  if (diagUptime) diagUptime.textContent = formatDuration(process.uptime);
+  if (diagStartTime) diagStartTime.textContent = formatTimestamp(process.startTime);
+  if (diagSamples) diagSamples.textContent = numberFormatter.format(process.samples || 0);
+  if (diagLastSample) diagLastSample.textContent = formatTimestamp(process.lastSample);
   if (diagUpdateRate) {
-    diagUpdateRate.textContent = Number.isFinite(diag.process.updateRateHz)
-      ? `${diag.process.updateRateHz.toFixed(2)} Hz`
+    diagUpdateRate.textContent = Number.isFinite(process.updateRateHz)
+      ? `${process.updateRateHz.toFixed(2)} Hz`
       : '--';
   }
 
-  if (diagCpuLoad) {
-    diagCpuLoad.textContent = Number.isFinite(diag.process.cpuPercent)
-      ? `${diag.process.cpuPercent.toFixed(1)}%`
-      : '--';
-  }
-  if (diagMemAlloc) diagMemAlloc.textContent = formatBytes(diag.process.memoryAllocBytes);
-  if (diagMemSys) diagMemSys.textContent = formatBytes(diag.process.memorySysBytes);
-  if (diagGoroutines) diagGoroutines.textContent = diag.process.numGoroutine ?? '--';
+  const cpuLabel = Number.isFinite(process.cpuPercent) ? `${process.cpuPercent.toFixed(1)}%` : '--';
+  if (diagCpuLoad) diagCpuLoad.textContent = cpuLabel;
+  setStatusBadge(cpuStatusBadge, severityFor(process.cpuPercent, METRIC_THRESHOLDS.cpu), cpuLabel);
+
+  if (diagMemAlloc) diagMemAlloc.textContent = formatBytes(process.memoryAllocBytes);
+  if (diagMemSys) diagMemSys.textContent = formatBytes(process.memorySysBytes);
+  if (diagMemRss) diagMemRss.textContent = formatBytes(process.memoryRssBytes);
+  const memSeverity = severityFor(process.memoryAllocBytes, METRIC_THRESHOLDS.memAlloc);
+  const rssSeverity = severityFor(process.memoryRssBytes, METRIC_THRESHOLDS.memRss);
+  const memoryBadgeSeverity = rssSeverity !== 'ok' ? rssSeverity : memSeverity;
+  setStatusBadge(memoryStatusBadge, memoryBadgeSeverity, memoryBadgeSeverity);
+
+  if (diagGoroutines) diagGoroutines.textContent = process.numGoroutine ?? '--';
+  if (diagThreads) diagThreads.textContent = process.numThreads ?? '--';
+  setStatusBadge(
+    goroutineStatusBadge,
+    severityFor(process.numGoroutine, METRIC_THRESHOLDS.goroutines),
+    Number.isFinite(process.numGoroutine) ? process.numGoroutine.toString() : '--'
+  );
+  setStatusBadge(
+    threadStatusBadge,
+    severityFor(process.numThreads, METRIC_THRESHOLDS.threads),
+    Number.isFinite(process.numThreads) ? process.numThreads.toString() : '--'
+  );
+
   if (diagIterationTime) {
-    const last = formatDuration(diag.process.iterationLast);
-    const avg = formatDuration(diag.process.iterationAvg);
+    const last = formatDuration(process.iterationLast);
+    const avg = formatDuration(process.iterationAvg);
     diagIterationTime.textContent = `${last} / ${avg}`;
   }
+}
 
-  const signal = diag.signal || {};
+function renderSignalQuality(signal = {}) {
   if (diagSNR) {
     diagSNR.textContent = Number.isFinite(signal.snr) ? `${signal.snr.toFixed(1)} dB` : '--';
   }
@@ -624,9 +676,93 @@ function renderDiagnostics(diag) {
     diagConfidence.textContent = Number.isFinite(confPct) ? `${confPct.toFixed(0)}%` : '--';
   }
   updateLockBadge(signal.lockState, diagLockState);
+}
 
+function renderHealthStatus(health) {
+  if (!health) return;
+  const status = health.status || 'ok';
+  setStatusBadge(healthStatusBadge, status, status);
+  if (diagVersion && health.version) {
+    diagVersion.textContent = health.version;
+  }
+  if (healthReason) {
+    healthReason.textContent = health.reason || 'All systems nominal';
+  }
+
+  if (!healthChecks) return;
+  healthChecks.innerHTML = '';
+  const checks = Array.isArray(health.checks) ? health.checks : [];
+  if (!checks.length) {
+    const empty = document.createElement('div');
+    empty.className = 'health-check muted';
+    empty.textContent = 'No recent checks';
+    healthChecks.appendChild(empty);
+    return;
+  }
+
+  checks.forEach((check) => {
+    const row = document.createElement('div');
+    row.className = 'health-check';
+    const detail = document.createElement('div');
+    detail.className = 'health-check-detail';
+    const name = document.createElement('div');
+    name.textContent = check.name || 'check';
+    const desc = document.createElement('small');
+    desc.textContent = check.detail || '';
+    detail.append(name, desc);
+
+    const badge = document.createElement('span');
+    badge.className = 'status-badge';
+    setStatusBadge(badge, check.status || 'ok', check.status || 'ok');
+
+    row.append(detail, badge);
+    healthChecks.appendChild(row);
+  });
+}
+
+function renderDiagnostics(diag) {
+  if (!diag || !diag.process) {
+    if (debugStatus) debugStatus.textContent = 'Diagnostics unavailable';
+    return;
+  }
+
+  if (debugStatus) debugStatus.textContent = 'Diagnostics live';
+  if (diagVersion && diag.version) diagVersion.textContent = diag.version;
+  if (diag.health) renderHealthStatus(diag.health);
+
+  const process = { ...diag.process, lastSample: diag.process.lastSample || diag.signal?.updatedAt };
+  renderProcessMetrics(process);
+  renderSignalQuality(diag.signal || {});
   updateDebugPanel(diag.debug);
   renderEventLog(diag.events);
+}
+
+function startMetricsStream() {
+  if (metricsStream) return;
+  metricsStream = new EventSource('/api/diagnostics/metrics');
+  metricsStream.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.process) {
+        renderProcessMetrics(payload.process);
+      }
+      if (payload.health) {
+        renderHealthStatus(payload.health);
+      }
+    } catch (err) {
+      console.error('metrics stream parse', err);
+    }
+  };
+  metricsStream.onerror = () => {
+    stopMetricsStream();
+  };
+}
+
+function stopMetricsStream() {
+  if (metricsStream) {
+    metricsStream.close();
+    metricsStream = null;
+  }
 }
 
 function toggleDiagnosticsRefresh(enable) {
@@ -635,12 +771,22 @@ function toggleDiagnosticsRefresh(enable) {
       fetchDiagnostics();
       diagnosticsTimer = setInterval(fetchDiagnostics, 5000);
     }
+    if (!healthTimer) {
+      fetchHealth();
+      healthTimer = setInterval(fetchHealth, 10000);
+    }
+    startMetricsStream();
     return;
   }
   if (diagnosticsTimer) {
     clearInterval(diagnosticsTimer);
     diagnosticsTimer = null;
   }
+  if (healthTimer) {
+    clearInterval(healthTimer);
+    healthTimer = null;
+  }
+  stopMetricsStream();
 }
 
 async function fetchDiagnostics() {
@@ -654,6 +800,17 @@ async function fetchDiagnostics() {
     if (debugStatus) {
       debugStatus.textContent = 'Diagnostics unavailable';
     }
+  }
+}
+
+async function fetchHealth() {
+  try {
+    const res = await fetch('/api/diagnostics/health');
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const payload = await res.json();
+    renderHealthStatus(payload);
+  } catch (err) {
+    console.error('health fetch failed', err);
   }
 }
 

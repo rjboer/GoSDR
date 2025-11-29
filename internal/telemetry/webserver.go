@@ -29,6 +29,7 @@ func NewWebServer(addr string, hub *Hub, logger logging.Logger) *WebServer {
 	mux.HandleFunc("/api/history", hub.handleHistory)
 	mux.HandleFunc("/api/live", hub.handleLive)
 	mux.HandleFunc("/api/diagnostics", hub.handleDiagnostics)
+	mux.HandleFunc("/api/diagnostics/metrics", hub.handleMetricsStream)
 	mux.HandleFunc("/api/diagnostics/health", hub.handleHealth)
 	mux.HandleFunc("/api/diagnostics/spectrum", hub.handleSpectrumSnapshot)
 	mux.HandleFunc("/api/config", hub.handleGetConfig)

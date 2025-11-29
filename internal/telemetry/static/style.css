@@ -166,6 +166,35 @@ main {
     background: #1f2a3a;
 }
 
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    background: #1f2937;
+    color: #e5e7eb;
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.status-badge.ok {
+    background: #15803d;
+    color: #ecfdf3;
+}
+
+.status-badge.warn,
+.status-badge.degraded {
+    background: #f59e0b;
+    color: #0f172a;
+}
+
+.status-badge.critical {
+    background: #dc2626;
+    color: #fef2f2;
+}
+
 .chart-panel {
     background: #121926;
     padding: 1rem;
@@ -315,6 +344,12 @@ main {
         align-items: baseline;
 }
 
+.health-summary {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+}
+
 .debug-sections {
         display: flex;
         flex-direction: column;
@@ -341,6 +376,13 @@ main {
         margin-top: 0.75rem;
 }
 
+.debug-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+}
+
 .debug-card {
         background: #0c1118;
         border: 1px solid #1f2a3a;
@@ -364,6 +406,33 @@ main {
 .muted {
         color: #9fb3c8;
         font-size: 0.95rem;
+}
+
+.health-checks {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 0.75rem;
+}
+
+.health-check {
+        background: #0c1118;
+        border: 1px solid #1f2a3a;
+        border-radius: 8px;
+        padding: 0.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+}
+
+.health-check .health-check-detail {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+}
+
+.health-check small {
+        color: #9fb3c8;
 }
 
 .event-log {
