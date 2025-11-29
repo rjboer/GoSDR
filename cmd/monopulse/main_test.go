@@ -6,7 +6,8 @@ import (
 )
 
 func TestParseConfigDefaults(t *testing.T) {
-	cfg, err := parseConfig([]string{}, func(string) (string, bool) { return "", false })
+	defaults := defaultPersistentConfig()
+	cfg, err := parseConfig([]string{}, func(string) (string, bool) { return "", false }, defaults)
 	if err != nil {
 		t.Fatalf("parseConfig failed: %v", err)
 	}
@@ -28,7 +29,8 @@ func TestParseConfigEnvOverrides(t *testing.T) {
 		return v, ok
 	}
 
-	cfg, err := parseConfig([]string{"--phase-step", "2"}, lookup)
+	defaults := defaultPersistentConfig()
+	cfg, err := parseConfig([]string{"--phase-step", "2"}, lookup, defaults)
 	if err != nil {
 		t.Fatalf("parseConfig failed: %v", err)
 	}

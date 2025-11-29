@@ -2,10 +2,10 @@ package app
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/rjboer/GoSDR/internal/dsp"
+	"github.com/rjboer/GoSDR/internal/logging"
 	"github.com/rjboer/GoSDR/internal/sdr"
 	"github.com/rjboer/GoSDR/internal/telemetry"
 )
@@ -33,6 +33,7 @@ type Config struct {
 type Tracker struct {
 	sdr       sdr.SDR
 	reporter  telemetry.Reporter
+	logger    logging.Logger
 	cfg       Config
 	startBin  int
 	endBin    int
@@ -41,10 +42,14 @@ type Tracker struct {
 	dsp       *dsp.CachedDSP // Cached DSP resources for performance
 }
 
-func NewTracker(backend sdr.SDR, reporter telemetry.Reporter, cfg Config) *Tracker {
+func NewTracker(backend sdr.SDR, reporter telemetry.Reporter, logger logging.Logger, cfg Config) *Tracker {
+	if logger == nil {
+		logger = logging.Default()
+	}
 	return &Tracker{
 		sdr:      backend,
 		reporter: reporter,
+		logger:   logger,
 		cfg:      cfg,
 		dsp:      dsp.NewCachedDSP(cfg.NumSamples),
 	}
@@ -109,7 +114,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 			return err
 		}
 		if len(rx0) == 0 || len(rx1) == 0 {
-			log.Printf("received empty buffer")
+			t.logger.Warn("received empty buffer", logging.Field{Key: "subsystem", Value: "tracker"})
 			continue
 		}
 

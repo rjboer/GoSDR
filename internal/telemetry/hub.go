@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rjboer/GoSDR/internal/logging"
 )
 
 // Config represents the runtime configuration exposed by the telemetry hub.
@@ -71,6 +72,8 @@ type persistentConfig struct {
 	WarmupBuffers  int     `json:"warmup_buffers"`
 	HistoryLimit   int     `json:"history_limit"`
 	WebAddr        string  `json:"web_addr"`
+	LogLevel       string  `json:"log_level"`
+	LogFormat      string  `json:"log_format"`
 }
 
 func defaultConfig() Config {
@@ -117,6 +120,8 @@ func defaultPersistentConfig() persistentConfig {
 		WarmupBuffers:  3,
 		HistoryLimit:   500,
 		WebAddr:        ":8080",
+		LogLevel:       "info",
+		LogFormat:      "text",
 	}
 }
 
@@ -267,6 +272,12 @@ func (h *Hub) persistConfig(cfg Config) error {
 	stored.SDRURI = cfg.SDRURI
 	stored.WarmupBuffers = cfg.WarmupBuffers
 	stored.HistoryLimit = cfg.HistoryLimit
+	if stored.LogLevel == "" {
+		stored.LogLevel = "info"
+	}
+	if stored.LogFormat == "" {
+		stored.LogFormat = "text"
+	}
 
 	return savePersistentConfig(configFilePath, stored)
 }
@@ -285,19 +296,24 @@ type Hub struct {
 	historyLimit int
 	subscribers  map[chan Sample]struct{}
 	config       Config
+	logger       logging.Logger
 }
 
 // NewHub builds a telemetry hub with the provided history limit.
-func NewHub(historyLimit int) *Hub {
+func NewHub(historyLimit int, logger logging.Logger) *Hub {
 	cfg := defaultConfig()
 	if historyLimit > 0 {
 		cfg.HistoryLimit = historyLimit
 	}
 	cfg, _ = validateConfig(cfg, defaultConfig())
+	if logger == nil {
+		logger = logging.Default()
+	}
 	return &Hub{
 		historyLimit: cfg.HistoryLimit,
 		subscribers:  make(map[chan Sample]struct{}),
 		config:       cfg,
+		logger:       logger.With(logging.Field{Key: "subsystem", Value: "telemetry"}),
 	}
 }
 
@@ -413,7 +429,7 @@ func (h *Hub) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 
 	if err := h.persistConfig(cfg); err != nil {
-		log.Printf("failed to persist config: %v", err)
+		h.logger.Warn("failed to persist config", logging.Field{Key: "error", Value: err})
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save config: %v", err))
 		return
 	}

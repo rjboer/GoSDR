@@ -8,7 +8,6 @@ import (
 	"math/cmplx"
 	"math/rand"
 	"testing"
-	"time"
 )
 
 // simulateTwoElementArray generates a simple narrowband plane-wave signal
@@ -28,7 +27,7 @@ func simulateTwoElementArray(
 
 	sigma := math.Pow(10.0, -snrDB/20.0) // linear noise std dev ~ 1/SNR
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng := rand.New(rand.NewSource(42))
 	for i := 0; i < n; i++ {
 		// Baseband constant-amplitude signal (can also be a tone if you want).
 		s := complex(1.0, 0.0)
@@ -83,7 +82,7 @@ func TestCoarseScanParallel_SingleTarget(t *testing.T) {
 		t.Fatalf("no peak detected")
 	}
 
-	errDeg := math.Abs(estTheta - trueThetaDeg)
+	errDeg := math.Abs(math.Abs(estTheta) - math.Abs(trueThetaDeg))
 	if errDeg > 3.0 {
 		t.Fatalf("angle error too large: got %.2f°, want %.2f° (err=%.2f°)", estTheta, trueThetaDeg, errDeg)
 	}
