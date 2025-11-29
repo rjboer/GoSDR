@@ -1,9 +1,26 @@
 ## `README.md`
 
+A couple of days ago I saw a script from Jon Kraft about beamforming and direction of arrival tracking using an Pluto SDR. 
+As i have a pluto+ SDR I enjoyed this inmensly. 
+
+So I decided to create a golang version of Jon's idea because it is more easily portable (executables). 
+While I was at it, i thought about also adding a configuration page in there. 
+
+
+
 ```markdown
 # Go Monopulse DOA Tracker (AD9361 / Pluto)
 
-A Go port of a Python script that implements a real-time **monopulse direction-of-arrival (DOA) tracker** using an **AD9361-based SDR** (e.g. ADALM-Pluto / FMCOMMS).
+A Go port (with some twists) of a Python script that implements a real-time **monopulse direction-of-arrival (DOA) tracker** using an **AD9361-based SDR** (e.g. ADALM-Pluto / FMCOMMS).
+
+I own a **Pluto+ SDR** myself, so I really enjoyed going through it.
+
+That inspired me to build a **Go version** of Jon’s idea, since Go makes it easy to create portable executables, and it could do with some improvements.  
+While I was at it, I also decided to add a **web-based configuration page** and some extra structure/functionalities around the DSP and telemetry.
+
+---
+
+## What this application does
 
 The application:
 
@@ -13,35 +30,38 @@ The application:
 - Runs a coarse **phase scan** to estimate the initial direction of arrival.
 - Uses a **monopulse tracking loop** to follow angle changes over time.
 - Logs the **steering angle vs time**, and can be extended to provide real-time visualization.
+- Exposes a **web UI** for configuration and monitoring (because tweaking parameters in a browser is just nicer).
 
 ---
 
-## Background
+## Background & Motivation
 
 The original Python script:
 
 - Uses `adi` (Analog Devices IIO bindings), `numpy`, and `pyqtgraph`.
 - Configures an AD9361 at:
-  - LO: `rx_lo = 2.3e9` Hz
-  - Sample rate: `2e6` samples/s
+  - LO: `rx_lo = 2.3e9` Hz  
+  - Sample rate: `2e6` samples/s  
   - Tone offset: `fc0 = 200e3` Hz
 - Sets antenna spacing to half wavelength (`d = 0.5 * λ`).
 - Computes the DOA from the phase difference between the two RX channels:
-  - Coarse scan: sweep synthetic phase delay from −180° to +180°.
-  - Tracking: monopulse error (phase of Σ/Δ correlation) drives a phase-delay update loop.
+  - **Coarse scan**: sweep synthetic phase delay from −180° to +180°.  
+  - **Tracking**: monopulse error (phase of Σ/Δ correlation) drives a phase-delay update loop.
 
-This Go project recreates that behaviour with an emphasis on:
+I loved the concept and wanted:
+
+1. A **single static binary** I can drop onto different machines (Linux, Windows, etc.) without wrestling with Python environments.
+2. A codebase where the **DSP, geometry, and hardware access** are clearly separated and easy to play with.
+3. A small **web interface** to configure and observe the tracker without touching config files or command-line flags every time.
+
+This Go project recreates the original behaviour with an emphasis on:
 
 - Clear DSP and geometry math.
 - Testability (mock SDR input).
-- Clean separation between hardware access and algorithms.
+- Clean separation between hardware access, algorithms, and the UI.
+- Easy portability via Go executables.
 
 ---
-
-
-
-
-
 
 ## Project Structure
 
