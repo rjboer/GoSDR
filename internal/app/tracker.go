@@ -38,10 +38,16 @@ type Tracker struct {
 	endBin    int
 	lastDelay float64
 	history   []float64
+	dsp       *dsp.CachedDSP // Cached DSP resources for performance
 }
 
 func NewTracker(backend sdr.SDR, reporter telemetry.Reporter, cfg Config) *Tracker {
-	return &Tracker{sdr: backend, reporter: reporter, cfg: cfg}
+	return &Tracker{
+		sdr:      backend,
+		reporter: reporter,
+		cfg:      cfg,
+		dsp:      dsp.NewCachedDSP(cfg.NumSamples),
+	}
 }
 
 // Init configures the SDR and precomputes FFT bin indices.
@@ -61,6 +67,8 @@ func (t *Tracker) Init(ctx context.Context) error {
 	if t.cfg.HistoryLimit == 0 {
 		t.cfg.HistoryLimit = t.cfg.TrackingLength
 	}
+	// Update cached DSP size if needed
+	t.dsp.UpdateSize(t.cfg.NumSamples)
 	return t.sdr.Init(ctx, sdr.Config{
 		SampleRate: t.cfg.SampleRate,
 		RxLO:       t.cfg.RxLO,
@@ -91,7 +99,8 @@ func (t *Tracker) Run(ctx context.Context) error {
 			continue
 		}
 		if i == 0 {
-			delay, theta, peak := dsp.CoarseScan(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength)
+			// Use parallel coarse scan with cached DSP
+			delay, theta, peak := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
 			t.lastDelay = delay
 			t.appendHistory(theta)
 			if t.reporter != nil {
@@ -104,8 +113,9 @@ func (t *Tracker) Run(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
+		// Use parallel tracking with cached DSP
 		var peak float64
-		t.lastDelay, peak = dsp.MonopulseTrack(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep)
+		t.lastDelay, peak = dsp.MonopulseTrackParallel(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
 		theta := dsp.PhaseToTheta(t.lastDelay, t.cfg.RxLO, t.cfg.SpacingWavelength)
 		t.appendHistory(theta)
 		if t.reporter != nil {

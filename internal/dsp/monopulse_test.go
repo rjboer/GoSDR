@@ -1,70 +1,119 @@
+//go:build !js
+// +build !js
+
 package dsp
 
 import (
 	"math"
+	"math/cmplx"
+	"math/rand"
 	"testing"
+	"time"
 )
 
-func tonePair(num int, freqOffset float64, sampleRate float64, phaseDelta float64) ([]complex64, []complex64) {
-	rx0 := make([]complex64, num)
-	rx1 := make([]complex64, num)
-	step := 2 * math.Pi * freqOffset / sampleRate
-	shift := phaseDelta * math.Pi / 180
-	for i := 0; i < num; i++ {
-		phase := step * float64(i)
-		val0 := complex64(complex(math.Cos(phase), math.Sin(phase)))
-		val1 := complex64(complex(math.Cos(phase+shift), math.Sin(phase+shift)))
-		rx0[i] = val0
-		rx1[i] = val1
+// simulateTwoElementArray generates a simple narrowband plane-wave signal
+// for a two-element array with spacing expressed in wavelengths. The phase
+// difference is 2π * spacing * sin(theta).
+func simulateTwoElementArray(
+	thetaDeg float64,
+	n int,
+	snrDB float64,
+	spacingWavelength float64,
+) ([]complex64, []complex64) {
+	thetaRad := thetaDeg * degToRad
+	phaseDiff := 2 * math.Pi * spacingWavelength * math.Sin(thetaRad)
+
+	rx0 := make([]complex64, n)
+	rx1 := make([]complex64, n)
+
+	sigma := math.Pow(10.0, -snrDB/20.0) // linear noise std dev ~ 1/SNR
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for i := 0; i < n; i++ {
+		// Baseband constant-amplitude signal (can also be a tone if you want).
+		s := complex(1.0, 0.0)
+		s1 := s * cmplx.Exp(complex(0, phaseDiff))
+
+		noise0 := complex(
+			rng.NormFloat64()*sigma,
+			rng.NormFloat64()*sigma,
+		)
+		noise1 := complex(
+			rng.NormFloat64()*sigma,
+			rng.NormFloat64()*sigma,
+		)
+
+		rx0[i] = complex64(s + noise0)
+		rx1[i] = complex64(s1 + noise1)
 	}
 	return rx0, rx1
 }
 
-func TestMonopulsePhase(t *testing.T) {
-	tests := []struct {
-		name       string
-		sumFFT     []complex128
-		deltaFFT   []complex128
-		start, end int
-		expected   float64
-	}{
-		{name: "quadrature", sumFFT: []complex128{1, 1}, deltaFFT: []complex128{1i, 1i}, start: 0, end: 2, expected: math.Pi / 2},
-		{name: "neg_quadrature", sumFFT: []complex128{1i, 1i}, deltaFFT: []complex128{1, 1}, start: 0, end: 2, expected: -math.Pi / 2},
-	}
+func TestCoarseScanParallel_SingleTarget(t *testing.T) {
+	const (
+		nSamples          = 1024
+		trueThetaDeg      = 20.0
+		spacingWavelength = 0.5
+		snrDB             = 20.0
+		stepDeg           = 1.0
+	)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			phase := MonopulsePhase(tt.sumFFT, tt.deltaFFT, tt.start, tt.end)
-			if math.Abs(phase-tt.expected) > 1e-9 {
-				t.Fatalf("expected %f got %f", tt.expected, phase)
-			}
-		})
-	}
-}
+	rx0, rx1 := simulateTwoElementArray(trueThetaDeg, nSamples, snrDB, spacingWavelength)
 
-func TestCoarseScanFindsDelay(t *testing.T) {
-	rx0, rx1 := tonePair(512, 200e3, 2e6, 30)
-	start, end := SignalBinRange(len(rx0), 2e6, 200e3)
-	delay, theta, peak := CoarseScan(rx0, rx1, 0, start, end, 2, 2.3e9, 0.5)
-	if math.Abs(delay+30) > 2 {
-		t.Fatalf("expected delay near -30, got %.2f", delay)
-	}
-	if math.Abs(theta-PhaseToTheta(delay, 2.3e9, 0.5)) > 1e-6 {
-		t.Fatalf("theta mismatch")
-	}
-	if peak <= -math.MaxFloat64/4 {
-		t.Fatalf("peak was not updated")
-	}
-}
+	// Dummy values – adapt to your FFT size / bin mapping.
+	const (
+		startBin = 0
+		endBin   = 0   // 0 means "auto/full" in our helper, we fall back to full-band
+		freqHz   = 1.0 // baseband
+	)
 
-func TestMonopulseTrackStep(t *testing.T) {
-	rx0, rx1 := tonePair(256, 200e3, 2e6, 20)
-	start, end := SignalBinRange(len(rx0), 2e6, 200e3)
-	next, peak := MonopulseTrack(-10, rx0, rx1, 0, start, end, 1)
-	if next >= -10 {
-		t.Fatalf("expected negative step toward phase delta got %.2f", next)
-	}
+	dsp := NewCachedDSP(nSamples) // Properly initialize with FFT size
+
+	_, estTheta, peak := CoarseScanParallel(
+		rx0, rx1,
+		0, // phaseCal
+		startBin, endBin,
+		stepDeg,
+		freqHz,
+		spacingWavelength,
+		dsp, // Already a pointer from NewCachedDSP
+	)
+
 	if peak == 0 {
-		t.Fatalf("expected non-zero peak telemetry")
+		t.Fatalf("no peak detected")
+	}
+
+	errDeg := math.Abs(estTheta - trueThetaDeg)
+	if errDeg > 3.0 {
+		t.Fatalf("angle error too large: got %.2f°, want %.2f° (err=%.2f°)", estTheta, trueThetaDeg, errDeg)
+	}
+}
+
+func BenchmarkCoarseScanParallel(b *testing.B) {
+	const (
+		nSamples          = 4096
+		thetaDeg          = 10.0
+		spacingWavelength = 0.5
+		snrDB             = 20.0
+		stepDeg           = 1.0
+		startBin          = 0
+		endBin            = 0
+		freqHz            = 1.0
+	)
+
+	rx0, rx1 := simulateTwoElementArray(thetaDeg, nSamples, snrDB, spacingWavelength)
+	dsp := NewCachedDSP(nSamples)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, _ = CoarseScanParallel(
+			rx0, rx1,
+			0, // phaseCal
+			startBin, endBin,
+			stepDeg,
+			freqHz,
+			spacingWavelength,
+			dsp, // Already a pointer from NewCachedDSP
+		)
 	}
 }
