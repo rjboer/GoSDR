@@ -66,21 +66,83 @@
           <canvas id="confidenceChart" aria-label="Confidence chart"></canvas>
         </div>
       </div>
-      <div class="history">
-        <h2>Latest samples</h2>
-        <table id="historyTable" aria-label="Telemetry history">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Angle (deg)</th>
-              <th>Peak (dBFS)</th>
-              <th>SNR (dB)</th>
-              <th>Confidence</th>
-              <th>Lock</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+      <div class="info-grid">
+        <div class="chart-panel summary-panel">
+          <h2>Settings Summary</h2>
+          <div class="summary-grid">
+            <div class="summary-card">
+              <p class="muted">SDR backend</p>
+              <div id="summaryBackend" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">RX LO</p>
+              <div id="summaryRxLo" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Tone offset</p>
+              <div id="summaryToneOffset" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Sample rate</p>
+              <div id="summarySampleRate" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">FFT size</p>
+              <div id="summaryFftSize" class="metric-value">--</div>
+            </div>
+          </div>
+        </div>
+        <div class="chart-panel stats-panel">
+          <h2>Live Statistics</h2>
+          <div class="stats-grid">
+            <div class="stat-group">
+              <div class="stat-heading">Angle (deg)</div>
+              <div class="stat-cards">
+                <div class="summary-card">
+                  <p class="muted">Avg</p>
+                  <div id="angleAvg" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Std dev</p>
+                  <div id="angleStd" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Min</p>
+                  <div id="angleMin" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Max</p>
+                  <div id="angleMax" class="metric-value">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="stat-group">
+              <div class="stat-heading">Peak (dBFS)</div>
+              <div class="stat-cards">
+                <div class="summary-card">
+                  <p class="muted">Avg</p>
+                  <div id="peakAvg" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Std dev</p>
+                  <div id="peakStd" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Min</p>
+                  <div id="peakMin" class="metric-value">--</div>
+                </div>
+                <div class="summary-card">
+                  <p class="muted">Max</p>
+                  <div id="peakMax" class="metric-value">--</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="update-rate">
+            <p class="muted">Update rate</p>
+            <div id="updateRate" class="metric-value">--</div>
+          </div>
+        </div>
       </div>
     </section>
     <section id="trace" class="tab-panel" role="tabpanel" aria-label="Trace view">
