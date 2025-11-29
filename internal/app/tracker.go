@@ -89,7 +89,16 @@ func (t *Tracker) Run(ctx context.Context) error {
 	if err := t.warmup(ctx); err != nil {
 		return err
 	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for i := 0; i < t.cfg.TrackingLength; i++ {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+		}
 		rx0, rx1, err := t.sdr.RX(ctx)
 		if err != nil {
 			return err
@@ -121,7 +130,6 @@ func (t *Tracker) Run(ctx context.Context) error {
 		if t.reporter != nil {
 			t.reporter.Report(theta, peak)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	return nil
 }
