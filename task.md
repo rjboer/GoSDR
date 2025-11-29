@@ -30,16 +30,16 @@
 ## Priority 3: Enhanced Telemetry 
 
 ### Debug Mode
-- [ ] Add `DebugInfo` struct to telemetry Sample
-- [ ] Capture phase delay, monopulse phase in debug mode
-- [ ] Add `--debug-mode` flag
-- [ ] Add debug panel to web UI
+- [x] Add `DebugInfo` struct to telemetry Sample
+- [x] Capture phase delay, monopulse phase in debug mode
+- [x] Add `--debug-mode` flag
+- [x] Add debug panel to web UI
 
 ### Signal Quality Metrics
-- [ ] Implement SNR estimation
-- [ ] Add tracking confidence calculation
-- [ ] Add lock status (searching/tracking/locked)
-- [ ] Display quality metrics in web UI
+- [x] Implement SNR estimation
+- [x] Add tracking confidence calculation
+- [x] Add lock status (searching/tracking/locked)
+- [x] Display quality metrics in web UI
 
 
 
@@ -58,19 +58,19 @@
 ## Phase 2: Telemetry Tab Improvements ⏱️ 2-3 hours
 
 ### Remove Table
-- [ ] Remove latest samples table HTML
-- [ ] Remove table update JavaScript logic
+- [x] Remove latest samples table HTML
+- [x] Remove table update JavaScript logic
 
 ### Add Settings Display
-- [ ] Create current settings summary panel
-- [ ] Display SDR backend, frequency, sample rate, FFT size
-- [ ] Update display when settings change
+- [x] Create current settings summary panel
+- [x] Display SDR backend, frequency, sample rate, FFT size
+- [x] Update display when settings change
 
 ### Add Statistics Panel
-- [ ] Implement statistics calculation (avg, std dev, min/max)
-- [ ] Display angle statistics
-- [ ] Display peak level statistics  
-- [ ] Show current update rate
+- [x] Implement statistics calculation (avg, std dev, min/max)
+- [x] Display angle statistics
+- [x] Display peak level statistics
+- [x] Show current update rate
 
 ### Fix Chart Data Accumulation
 - [x] Implement `MAX_CHART_POINTS = 100` limit
@@ -90,23 +90,23 @@
 ## Phase 3: Raw Trace Tab ⏱️ 2-3 hours
 
 ### Build Table View
-- [ ] Create trace tab HTML section
-- [ ] Implement scrollable table with fixed header
-- [ ] Add columns: Timestamp, Angle, Peak
-- [ ] Implement virtual scrolling (render only visible rows)
-- [ ] Limit to 500 samples max
+- [x] Create trace tab HTML section
+- [x] Implement scrollable table with fixed header
+- [x] Add columns: Timestamp, Angle, Peak
+- [x] Implement virtual scrolling (render only visible rows)
+- [x] Limit to 500 samples max
 
 ### Controls
-- [ ] Add Pause/Resume button
-- [ ] Add Clear History button
-- [ ] Add sample count display
-- [ ] Implement pause functionality
+- [x] Add Pause/Resume button
+- [x] Add Clear History button
+- [x] Add sample count display
+- [x] Implement pause functionality
 
 ### Export Features
-- [ ] Implement CSV export
-- [ ] Implement JSON export
-- [ ] Add Copy to Clipboard button
-- [ ] Add Download as File button
+- [x] Implement CSV export
+- [x] Implement JSON export
+- [x] Add Copy to Clipboard button
+- [x] Add Download as File button
 
 ---
 
@@ -117,16 +117,16 @@
 - [x] Create `/api/diagnostics/health` endpoint
 - [x] Implement system metrics collection (uptime, CPU, memory)
 - [x] Add goroutine count tracking
-- [ ] Implement signal quality estimation (SNR, confidence)
+- [x] Implement signal quality estimation (SNR, confidence)
 
 ### Frontend Debug UI
-- [ ] Create debug tab HTML
-- [ ] Add System Status section (status, uptime, samples, update rate)
-- [ ] Add Performance section (CPU, memory, goroutines, iteration time)
-- [ ] Add Signal Quality section (SNR, confidence, lock status, noise floor)
-- [ ] Add Debug Info section (phase delay, monopulse phase, peaks)
-- [ ] Add Event Log viewer (last 100 events)
-- [ ] Implement auto-refresh (5 second interval)
+- [x] Create debug tab HTML
+- [x] Add System Status section (status, uptime, samples, update rate)
+- [x] Add Performance section (CPU, memory, goroutines, iteration time)
+- [x] Add Signal Quality section (SNR, confidence, lock status, noise floor)
+- [x] Add Debug Info section (phase delay, monopulse phase, peaks)
+- [x] Add Event Log viewer (last 100 events)
+- [x] Implement auto-refresh (5 second interval)
 
 ---
 
