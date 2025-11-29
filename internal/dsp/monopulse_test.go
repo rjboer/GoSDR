@@ -68,10 +68,10 @@ func TestCoarseScanParallel_SingleTarget(t *testing.T) {
 
 	dsp := NewCachedDSP(nSamples) // Properly initialize with FFT size
 
-	_, estTheta, peak := CoarseScanParallel(
-		rx0, rx1,
-		0, // phaseCal
-		startBin, endBin,
+_, estTheta, peak, _, _ := CoarseScanParallel(
+rx0, rx1,
+0, // phaseCal
+startBin, endBin,
 		stepDeg,
 		freqHz,
 		spacingWavelength,
@@ -104,11 +104,11 @@ func BenchmarkCoarseScanParallel(b *testing.B) {
 	dsp := NewCachedDSP(nSamples)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _, _ = CoarseScanParallel(
-			rx0, rx1,
-			0, // phaseCal
-			startBin, endBin,
+for i := 0; i < b.N; i++ {
+_, _, _, _, _ = CoarseScanParallel(
+rx0, rx1,
+0, // phaseCal
+startBin, endBin,
 			stepDeg,
 			freqHz,
 			spacingWavelength,

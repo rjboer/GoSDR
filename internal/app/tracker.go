@@ -27,6 +27,7 @@ type Config struct {
 	PhaseDelta        float64
 	WarmupBuffers     int
 	HistoryLimit      int
+	DebugMode         bool
 }
 
 // Tracker wires SDR input into the DSP monopulse tracking loop.
@@ -121,11 +122,25 @@ func (t *Tracker) Run(ctx context.Context) error {
 		// First iteration: coarse scan
 		if iteration == 0 {
 			// Use parallel coarse scan with cached DSP
-			delay, theta, peak := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
+			delay, theta, peak, monoPhase, peakBin := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
 			t.lastDelay = delay
 			t.appendHistory(theta)
+
+			var debug *telemetry.DebugInfo
+			if t.cfg.DebugMode {
+				debug = &telemetry.DebugInfo{
+					PhaseDelayDeg:     delay,
+					MonopulsePhaseRad: monoPhase,
+					Peak: telemetry.PeakDebug{
+						Value: peak,
+						Bin:   peakBin,
+						Band:  [2]int{t.startBin, t.endBin},
+					},
+				}
+			}
+
 			if t.reporter != nil {
-				t.reporter.Report(theta, peak)
+				t.reporter.Report(theta, peak, debug)
 			}
 			iteration++
 			continue
@@ -133,12 +148,27 @@ func (t *Tracker) Run(ctx context.Context) error {
 
 		// Subsequent iterations: monopulse tracking
 		// Use parallel tracking with cached DSP
-		var peak float64
-		t.lastDelay, peak = dsp.MonopulseTrackParallel(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
+		var peak, monoPhase float64
+		var peakBin int
+		t.lastDelay, peak, monoPhase, peakBin = dsp.MonopulseTrackParallel(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
 		theta := dsp.PhaseToTheta(t.lastDelay, t.cfg.RxLO, t.cfg.SpacingWavelength)
 		t.appendHistory(theta)
+
+		var debug *telemetry.DebugInfo
+		if t.cfg.DebugMode {
+			debug = &telemetry.DebugInfo{
+				PhaseDelayDeg:     t.lastDelay,
+				MonopulsePhaseRad: monoPhase,
+				Peak: telemetry.PeakDebug{
+					Value: peak,
+					Bin:   peakBin,
+					Band:  [2]int{t.startBin, t.endBin},
+				},
+			}
+		}
+
 		if t.reporter != nil {
-			t.reporter.Report(theta, peak)
+			t.reporter.Report(theta, peak, debug)
 		}
 		iteration++
 	}

@@ -87,6 +87,7 @@ func main() {
 		PhaseDelta:        cfg.phaseDelta,
 		WarmupBuffers:     cfg.warmupBuffers,
 		HistoryLimit:      cfg.historyLimit,
+		DebugMode:         cfg.debugMode,
 	})
 
 	if err := tracker.Init(ctx); err != nil {
@@ -123,6 +124,7 @@ type cliConfig struct {
 	webAddr        string
 	logLevel       string
 	logFormat      string
+	debugMode      bool
 }
 
 type persistentConfig struct {
@@ -146,6 +148,7 @@ type persistentConfig struct {
 	WebAddr        string  `json:"web_addr"`
 	LogLevel       string  `json:"log_level"`
 	LogFormat      string  `json:"log_format"`
+	DebugMode      bool    `json:"debug_mode"`
 }
 
 func parseConfig(args []string, lookup func(string) (string, bool), defaults persistentConfig) (cliConfig, error) {
@@ -171,6 +174,7 @@ func parseConfig(args []string, lookup func(string) (string, bool), defaults per
 	fs.StringVar(&cfg.webAddr, "web-addr", envString(lookup, "MONO_WEB_ADDR", defaults.WebAddr), "Optional web telemetry listen address (e.g. :8080)")
 	fs.StringVar(&cfg.logLevel, "log-level", envString(lookup, "MONO_LOG_LEVEL", defaults.LogLevel), "Log level (debug|info|warn|error)")
 	fs.StringVar(&cfg.logFormat, "log-format", envString(lookup, "MONO_LOG_FORMAT", defaults.LogFormat), "Log format (text|json)")
+	fs.BoolVar(&cfg.debugMode, "debug-mode", envBool(lookup, "MONO_DEBUG_MODE", defaults.DebugMode), "Include debug telemetry fields")
 
 	if err := fs.Parse(args); err != nil {
 		return cliConfig{}, err
@@ -206,6 +210,7 @@ func persistentFromCLI(cfg cliConfig) persistentConfig {
 		WebAddr:        cfg.webAddr,
 		LogLevel:       cfg.logLevel,
 		LogFormat:      cfg.logFormat,
+		DebugMode:      cfg.debugMode,
 	}
 }
 
@@ -260,6 +265,7 @@ func defaultPersistentConfig() persistentConfig {
 		WebAddr:        ":8080",
 		LogLevel:       "warn",
 		LogFormat:      "text",
+		DebugMode:      false,
 	}
 }
 
@@ -284,6 +290,15 @@ func envInt(lookup func(string) (string, bool), key string, def int) int {
 func envString(lookup func(string) (string, bool), key, def string) string {
 	if val, ok := lookup(key); ok {
 		return val
+	}
+	return def
+}
+
+func envBool(lookup func(string) (string, bool), key string, def bool) bool {
+	if val, ok := lookup(key); ok {
+		if parsed, err := strconv.ParseBool(val); err == nil {
+			return parsed
+		}
 	}
 	return def
 }

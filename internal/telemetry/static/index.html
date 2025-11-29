@@ -65,9 +65,23 @@
       </div>
     </section>
     <section id="debug" class="tab-panel" role="tabpanel" aria-label="Debug view">
-      <div class="placeholder">
-        <h2>Debug</h2>
-        <p>Debug metrics and logs will be shown in this panel.</p>
+      <div class="debug-panel" aria-live="polite">
+        <div class="debug-header">
+          <h2>Debug telemetry</h2>
+          <p id="debugStatus" class="muted">Waiting for debug data…</p>
+        </div>
+        <div class="debug-grid">
+          <div class="debug-card">
+            <h3>Phase</h3>
+            <div class="debug-value" id="debugPhaseDelay">--</div>
+            <p class="muted">Monopulse phase: <span id="debugMonopulsePhase">--</span> rad</p>
+          </div>
+          <div class="debug-card">
+            <h3>Peak</h3>
+            <div class="debug-value" id="debugPeakValue">--</div>
+            <p class="muted">Bin <span id="debugPeakBin">--</span> in band <span id="debugPeakBand">--</span></p>
+          </div>
+        </div>
       </div>
     </section>
     <section id="settings" class="tab-panel" role="tabpanel" aria-label="Settings view">

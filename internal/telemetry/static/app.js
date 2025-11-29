@@ -184,6 +184,15 @@ const MAX_POINTS = 100;
 
 const historyBody = document.querySelector('#historyTable tbody');
 
+// Debug panel elements
+const debugStatus = document.getElementById('debugStatus');
+const debugPhaseDelay = document.getElementById('debugPhaseDelay');
+const debugMonopulsePhase = document.getElementById('debugMonopulsePhase');
+const debugPeakValue = document.getElementById('debugPeakValue');
+const debugPeakBin = document.getElementById('debugPeakBin');
+const debugPeakBand = document.getElementById('debugPeakBand');
+let debugStreamEnabled = false;
+
 // Rate limiting for SSE updates (10 Hz cap + animation frame batching)
 const FRAME_INTERVAL_MS = 100;
 let pendingSample = null;
@@ -233,11 +242,52 @@ function addSample(sample) {
   // Update radar display
   updateRadar(sample.angleDeg);
 
+  updateDebugPanel(sample);
+
   const row = document.createElement('tr');
   row.innerHTML = `<td>${timestamp}</td><td>${sample.angleDeg.toFixed(2)}</td><td>${sample.peak.toFixed(2)}</td>`;
   historyBody.prepend(row);
   while (historyBody.children.length > MAX_POINTS) {
     historyBody.removeChild(historyBody.lastChild);
+  }
+}
+
+function updateDebugPanel(sample) {
+  if (!debugStatus) return;
+  const info = sample.debug;
+  if (!info) {
+    if (!debugStreamEnabled) {
+      debugStatus.textContent = 'Debug mode disabled';
+    }
+    return;
+  }
+
+  debugStreamEnabled = true;
+  debugStatus.textContent = 'Live debug mode enabled';
+
+  const safeBand = Array.isArray(info.peak?.band) ? info.peak.band : [];
+  const bandLabel = safeBand.length === 2 ? `[${safeBand[0]}, ${safeBand[1]})` : '--';
+
+  if (debugPhaseDelay) {
+    debugPhaseDelay.textContent = Number.isFinite(info.phaseDelayDeg)
+      ? `${info.phaseDelayDeg.toFixed(2)}°`
+      : '--';
+  }
+  if (debugMonopulsePhase) {
+    debugMonopulsePhase.textContent = Number.isFinite(info.monopulsePhaseRad)
+      ? info.monopulsePhaseRad.toFixed(3)
+      : '--';
+  }
+  if (debugPeakValue) {
+    debugPeakValue.textContent = Number.isFinite(info.peak?.value)
+      ? `${info.peak.value.toFixed(2)} dBFS`
+      : '--';
+  }
+  if (debugPeakBin) {
+    debugPeakBin.textContent = Number.isFinite(info.peak?.bin) ? info.peak.bin : '--';
+  }
+  if (debugPeakBand) {
+    debugPeakBand.textContent = bandLabel;
   }
 }
 

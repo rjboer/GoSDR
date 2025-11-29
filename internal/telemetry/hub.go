@@ -40,6 +40,7 @@ type Config struct {
 	SDRURI            string  `json:"sdrUri"`
 	LogLevel          string  `json:"logLevel"`
 	LogFormat         string  `json:"logFormat"`
+	DebugMode         bool    `json:"debugMode"`
 }
 
 const (
@@ -77,6 +78,7 @@ type persistentConfig struct {
 	WebAddr        string  `json:"web_addr"`
 	LogLevel       string  `json:"log_level"`
 	LogFormat      string  `json:"log_format"`
+	DebugMode      bool    `json:"debug_mode"`
 }
 
 func defaultConfig() Config {
@@ -102,6 +104,7 @@ func defaultConfig() Config {
 		SDRURI:            "ip:192.168.2.1",
 		LogLevel:          "warn",
 		LogFormat:         "text",
+		DebugMode:         false,
 	}
 }
 
@@ -127,6 +130,7 @@ func defaultPersistentConfig() persistentConfig {
 		WebAddr:        ":8080",
 		LogLevel:       "warn",
 		LogFormat:      "text",
+		DebugMode:      false,
 	}
 }
 
@@ -152,6 +156,7 @@ func configFromPersistent(stored persistentConfig) Config {
 		SDRURI:            stored.SDRURI,
 		LogLevel:          stored.LogLevel,
 		LogFormat:         stored.LogFormat,
+		DebugMode:         stored.DebugMode,
 	}
 }
 
@@ -316,6 +321,7 @@ func (h *Hub) persistConfig(cfg Config) error {
 	stored.HistoryLimit = cfg.HistoryLimit
 	stored.LogLevel = cfg.LogLevel
 	stored.LogFormat = cfg.LogFormat
+	stored.DebugMode = cfg.DebugMode
 	if stored.LogLevel == "" {
 		stored.LogLevel = "warn"
 	}
@@ -328,9 +334,24 @@ func (h *Hub) persistConfig(cfg Config) error {
 
 // Sample captures a single telemetry point for visualization.
 type Sample struct {
-	Timestamp time.Time `json:"timestamp"`
-	AngleDeg  float64   `json:"angleDeg"`
-	Peak      float64   `json:"peak"`
+	Timestamp time.Time  `json:"timestamp"`
+	AngleDeg  float64    `json:"angleDeg"`
+	Peak      float64    `json:"peak"`
+	Debug     *DebugInfo `json:"debug,omitempty"`
+}
+
+// DebugInfo captures optional DSP internals for troubleshooting.
+type DebugInfo struct {
+	PhaseDelayDeg     float64   `json:"phaseDelayDeg"`
+	MonopulsePhaseRad float64   `json:"monopulsePhaseRad"`
+	Peak              PeakDebug `json:"peak"`
+}
+
+// PeakDebug enriches peak measurements with FFT bin context.
+type PeakDebug struct {
+	Value float64 `json:"value"`
+	Bin   int     `json:"bin"`
+	Band  [2]int  `json:"band"`
 }
 
 // ProcessMetrics captures runtime state for diagnostics.
@@ -410,8 +431,16 @@ func NewHub(historyLimit int, logger logging.Logger) *Hub {
 }
 
 // Report implements Reporter and records a new telemetry sample.
-func (h *Hub) Report(angleDeg float64, peak float64) {
+func (h *Hub) Report(angleDeg float64, peak float64, debug *DebugInfo) {
 	sample := Sample{Timestamp: time.Now(), AngleDeg: angleDeg, Peak: peak}
+	if debug != nil {
+		h.mu.RLock()
+		debugEnabled := h.config.DebugMode
+		h.mu.RUnlock()
+		if debugEnabled {
+			sample.Debug = debug
+		}
+	}
 
 	h.mu.Lock()
 	h.history = append(h.history, sample)
@@ -476,10 +505,10 @@ func (h *Hub) Subscribe() (chan Sample, func()) {
 type MultiReporter []Reporter
 
 // Report forwards telemetry to each configured reporter.
-func (m MultiReporter) Report(angleDeg float64, peak float64) {
+func (m MultiReporter) Report(angleDeg float64, peak float64, debug *DebugInfo) {
 	for _, r := range m {
 		if r != nil {
-			r.Report(angleDeg, peak)
+			r.Report(angleDeg, peak, debug)
 		}
 	}
 }
