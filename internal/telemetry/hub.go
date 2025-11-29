@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -332,14 +333,49 @@ type Sample struct {
 	Peak      float64   `json:"peak"`
 }
 
+// ProcessMetrics captures runtime state for diagnostics.
+type ProcessMetrics struct {
+	StartTime        time.Time     `json:"startTime"`
+	LastUpdated      time.Time     `json:"lastUpdated"`
+	Uptime           time.Duration `json:"uptime"`
+	MemoryAlloc      uint64        `json:"memoryAllocBytes"`
+	MemoryTotalAlloc uint64        `json:"memoryTotalAllocBytes"`
+	MemorySys        uint64        `json:"memorySysBytes"`
+	NumGoroutine     int           `json:"numGoroutine"`
+}
+
+// SpectrumSnapshot represents the latest FFT power bins.
+type SpectrumSnapshot struct {
+	Timestamp time.Time `json:"timestamp"`
+	Bins      []float64 `json:"bins"`
+	Source    string    `json:"source,omitempty"`
+}
+
+// Diagnostics bundles runtime metrics and spectrum data.
+type Diagnostics struct {
+	Process  ProcessMetrics   `json:"process"`
+	Spectrum SpectrumSnapshot `json:"spectrum"`
+}
+
+// HealthStatus surfaces overall process health.
+type HealthStatus struct {
+	Status  string         `json:"status"`
+	Process ProcessMetrics `json:"process"`
+	Reason  string         `json:"reason,omitempty"`
+}
+
 // Hub collects history and fan-outs telemetry updates to subscribers.
 type Hub struct {
-	mu           sync.RWMutex
-	history      []Sample
-	historyLimit int
-	subscribers  map[chan Sample]struct{}
-	config       Config
-	logger       logging.Logger
+	mu             sync.RWMutex
+	history        []Sample
+	historyLimit   int
+	subscribers    map[chan Sample]struct{}
+	config         Config
+	logger         logging.Logger
+	startTime      time.Time
+	process        ProcessMetrics
+	latestSpectrum *SpectrumSnapshot
+	mockSpectrum   SpectrumSnapshot
 }
 
 // NewHub builds a telemetry hub with the provided history limit.
@@ -361,12 +397,16 @@ func NewHub(historyLimit int, logger logging.Logger) *Hub {
 		cfg.HistoryLimit = historyLimit
 	}
 	cfg, _ = validateConfig(cfg, defaultConfig())
-	return &Hub{
+	h := &Hub{
 		historyLimit: cfg.HistoryLimit,
 		subscribers:  make(map[chan Sample]struct{}),
 		config:       cfg,
 		logger:       logger.With(logging.Field{Key: "subsystem", Value: "telemetry"}),
+		startTime:    time.Now(),
 	}
+	h.mockSpectrum = mockSpectrumSnapshot()
+	h.process = h.collectProcessMetrics()
+	return h
 }
 
 // Report implements Reporter and records a new telemetry sample.
@@ -394,6 +434,20 @@ func (h *Hub) History() []Sample {
 	out := make([]Sample, len(h.history))
 	copy(out, h.history)
 	return out
+}
+
+// UpdateSpectrumSnapshot stores the latest FFT bins for diagnostics.
+func (h *Hub) UpdateSpectrumSnapshot(bins []float64, source string) {
+	copyBins := append([]float64(nil), bins...)
+	snapshot := &SpectrumSnapshot{
+		Timestamp: time.Now(),
+		Bins:      copyBins,
+		Source:    source,
+	}
+
+	h.mu.Lock()
+	h.latestSpectrum = snapshot
+	h.mu.Unlock()
 }
 
 // ConfigSnapshot returns the latest validated configuration.
@@ -435,6 +489,60 @@ func (h *Hub) applyConfig(cfg Config) {
 	h.historyLimit = cfg.HistoryLimit
 	if len(h.history) > h.historyLimit {
 		h.history = h.history[len(h.history)-h.historyLimit:]
+	}
+}
+
+func (h *Hub) collectProcessMetrics() ProcessMetrics {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	h.mu.RLock()
+	start := h.startTime
+	h.mu.RUnlock()
+
+	metrics := ProcessMetrics{
+		StartTime:        start,
+		LastUpdated:      time.Now(),
+		Uptime:           time.Since(start),
+		MemoryAlloc:      mem.Alloc,
+		MemoryTotalAlloc: mem.TotalAlloc,
+		MemorySys:        mem.Sys,
+		NumGoroutine:     runtime.NumGoroutine(),
+	}
+
+	h.mu.Lock()
+	h.process = metrics
+	h.mu.Unlock()
+
+	return metrics
+}
+
+func (h *Hub) spectrumSnapshot() SpectrumSnapshot {
+	h.mu.RLock()
+	snapshot := h.latestSpectrum
+	mock := h.mockSpectrum
+	h.mu.RUnlock()
+
+	if snapshot == nil {
+		return SpectrumSnapshot{
+			Timestamp: mock.Timestamp,
+			Bins:      append([]float64(nil), mock.Bins...),
+			Source:    mock.Source,
+		}
+	}
+
+	return SpectrumSnapshot{
+		Timestamp: snapshot.Timestamp,
+		Bins:      append([]float64(nil), snapshot.Bins...),
+		Source:    snapshot.Source,
+	}
+}
+
+func mockSpectrumSnapshot() SpectrumSnapshot {
+	return SpectrumSnapshot{
+		Timestamp: time.Now(),
+		Source:    "mock",
+		Bins:      []float64{-80, -60, -40, -20, 0, -20, -40, -60},
 	}
 }
 
@@ -527,4 +635,46 @@ func (h *Hub) handleLive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (h *Hub) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	response := Diagnostics{
+		Process:  h.collectProcessMetrics(),
+		Spectrum: h.spectrumSnapshot(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (h *Hub) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	spectrum := h.spectrumSnapshot()
+	status := "ok"
+	reason := ""
+	if spectrum.Source == "mock" {
+		status = "degraded"
+		reason = "serving mock diagnostics"
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(HealthStatus{Status: status, Process: h.collectProcessMetrics(), Reason: reason})
+}
+
+func (h *Hub) handleSpectrumSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(h.spectrumSnapshot())
 }

@@ -28,6 +28,9 @@ func NewWebServer(addr string, hub *Hub, logger logging.Logger) *WebServer {
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 	mux.HandleFunc("/api/history", hub.handleHistory)
 	mux.HandleFunc("/api/live", hub.handleLive)
+	mux.HandleFunc("/api/diagnostics", hub.handleDiagnostics)
+	mux.HandleFunc("/api/diagnostics/health", hub.handleHealth)
+	mux.HandleFunc("/api/diagnostics/spectrum", hub.handleSpectrumSnapshot)
 	mux.HandleFunc("/api/config", hub.handleGetConfig)
 	mux.HandleFunc("/api/config/update", hub.handleSetConfig)
 	mux.HandleFunc("/settings", func(w http.ResponseWriter, r *http.Request) {
