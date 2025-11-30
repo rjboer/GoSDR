@@ -350,15 +350,73 @@ func (h *Hub) persistConfig(cfg Config) error {
 	return savePersistentConfig(configFilePath, stored)
 }
 
-// Sample captures a single telemetry point for visualization.
-type Sample struct {
-	Timestamp  time.Time  `json:"timestamp"`
+// TrackSample captures telemetry for a single tracked source.
+type TrackSample struct {
 	AngleDeg   float64    `json:"angleDeg"`
 	Peak       float64    `json:"peak"`
 	SNR        float64    `json:"snr"`
 	Confidence float64    `json:"trackingConfidence"`
 	LockState  LockState  `json:"lockState"`
 	Debug      *DebugInfo `json:"debug,omitempty"`
+}
+
+// Sample captures a telemetry point for visualization. For multi-track data the
+// top-level fields mirror the first track, while Tracks contains the full
+// collection.
+type Sample struct {
+	Timestamp  time.Time     `json:"timestamp"`
+	AngleDeg   float64       `json:"angleDeg"`
+	Peak       float64       `json:"peak"`
+	SNR        float64       `json:"snr"`
+	Confidence float64       `json:"trackingConfidence"`
+	LockState  LockState     `json:"lockState"`
+	Debug      *DebugInfo    `json:"debug,omitempty"`
+	Tracks     []TrackSample `json:"tracks,omitempty"`
+}
+
+// MultiTrackSample captures a telemetry update with multiple tracks.
+type MultiTrackSample struct {
+	Timestamp time.Time     `json:"timestamp"`
+	Tracks    []TrackSample `json:"tracks"`
+}
+
+func sampleFromMultiTrack(multi MultiTrackSample) Sample {
+	sample := Sample{
+		Timestamp: multi.Timestamp,
+		Tracks:    cloneTracks(multi.Tracks),
+	}
+
+	if sample.Timestamp.IsZero() {
+		sample.Timestamp = time.Now()
+	}
+
+	if len(sample.Tracks) > 0 {
+		primary := sample.Tracks[0]
+		sample.AngleDeg = primary.AngleDeg
+		sample.Peak = primary.Peak
+		sample.SNR = primary.SNR
+		sample.Confidence = primary.Confidence
+		sample.LockState = primary.LockState
+		sample.Debug = primary.Debug
+	}
+
+	return sample
+}
+
+func cloneTracks(tracks []TrackSample) []TrackSample {
+	if len(tracks) == 0 {
+		return nil
+	}
+
+	out := make([]TrackSample, len(tracks))
+	copy(out, tracks)
+	return out
+}
+
+func cloneSample(sample Sample) Sample {
+	clone := sample
+	clone.Tracks = cloneTracks(sample.Tracks)
+	return clone
 }
 
 // DebugInfo captures optional DSP internals for troubleshooting.
@@ -506,14 +564,35 @@ func NewHub(historyLimit int, logger logging.Logger) *Hub {
 
 // Report implements Reporter and records a new telemetry sample.
 func (h *Hub) Report(angleDeg float64, peak float64, snr float64, confidence float64, state LockState, debug *DebugInfo) {
-	sample := Sample{Timestamp: time.Now(), AngleDeg: angleDeg, Peak: peak, SNR: snr, Confidence: confidence, LockState: state}
-	if debug != nil {
-		h.mu.RLock()
-		debugEnabled := h.config.DebugMode
-		h.mu.RUnlock()
-		if debugEnabled {
-			sample.Debug = debug
+	h.ReportMultiTrack(MultiTrackSample{
+		Timestamp: time.Now(),
+		Tracks: []TrackSample{{
+			AngleDeg:   angleDeg,
+			Peak:       peak,
+			SNR:        snr,
+			Confidence: confidence,
+			LockState:  state,
+			Debug:      debug,
+		}},
+	})
+}
+
+// ReportMultiTrack records a telemetry update that can include multiple tracks.
+func (h *Hub) ReportMultiTrack(multi MultiTrackSample) {
+	sample := sampleFromMultiTrack(multi)
+	if len(sample.Tracks) == 0 {
+		return
+	}
+
+	h.mu.RLock()
+	debugEnabled := h.config.DebugMode
+	h.mu.RUnlock()
+
+	if !debugEnabled {
+		for i := range sample.Tracks {
+			sample.Tracks[i].Debug = nil
 		}
+		sample.Debug = nil
 	}
 
 	h.mu.Lock()
@@ -533,6 +612,7 @@ func (h *Hub) Report(angleDeg float64, peak float64, snr float64, confidence flo
 	h.lastReportTime = sample.Timestamp
 	h.lastSample = &sample
 	h.lastLockState = sample.LockState
+	sample.Tracks = cloneTracks(sample.Tracks)
 	h.history = append(h.history, sample)
 	if len(h.history) > h.historyLimit {
 		h.history = h.history[len(h.history)-h.historyLimit:]
@@ -565,7 +645,9 @@ func (h *Hub) History() []Sample {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	out := make([]Sample, len(h.history))
-	copy(out, h.history)
+	for i, sample := range h.history {
+		out[i] = cloneSample(sample)
+	}
 	return out
 }
 
@@ -616,6 +698,15 @@ func (m MultiReporter) Report(angleDeg float64, peak float64, snr float64, confi
 	for _, r := range m {
 		if r != nil {
 			r.Report(angleDeg, peak, snr, confidence, state, debug)
+		}
+	}
+}
+
+// ReportMultiTrack forwards multi-track telemetry to each configured reporter.
+func (m MultiReporter) ReportMultiTrack(sample MultiTrackSample) {
+	for _, r := range m {
+		if r != nil {
+			r.ReportMultiTrack(sample)
 		}
 	}
 }
