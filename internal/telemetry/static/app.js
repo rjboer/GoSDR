@@ -95,6 +95,8 @@ const peakStatsEls = {
   max: document.getElementById('peakMax'),
 };
 
+let configSnapshot = {};
+
 const numberFormatter = new Intl.NumberFormat('en-US');
 
 // Radar dimensions
@@ -103,54 +105,69 @@ const radarCenterY = radarCanvas.height - 20;
 const radarMaxRadius = radarCenterY - 30;
 
 // Range rings (in cm, for display only)
-// Define a maximum range (in cm) and create 5 evenly spaced rings
-const MAX_RANGE_CM = 100;          // total radar range in cm (must be divisible by 5)
-const NUM_RANGE_RINGS = 5;         // number of rings
+const MAX_RANGE_CM = 100; // total radar range in cm (must be divisible by 5)
+const NUM_RANGE_RINGS = 5; // number of rings
 const rangeRings = Array.from(
   { length: NUM_RANGE_RINGS },
   (_, i) => (MAX_RANGE_CM / NUM_RANGE_RINGS) * (i + 1)
 );
 
-// Current detection
-// Tracker coordinates: -90° (left) .. 0° (ahead/top) .. +90° (right)
-let currentAngleDeg = 0;                 // start pointing straight ahead
-let currentRange = MAX_RANGE_CM / 2;     // start at mid-range
+const trackPalette = ['#2f80ed', '#9b59b6', '#27ae60', '#f59e0b', '#ef4444', '#10b981', '#a855f7', '#22c55e'];
+const lockStateColors = {
+  locked: '#22c55e',
+  tracking: '#f59e0b',
+  searching: '#94a3b8',
+};
 
-function drawRadar() {
-  // Clear canvas
+let paletteIndex = 0;
+const trackStore = new Map();
+const TRACK_HISTORY_LIMIT = 30;
+
+function colorForState(lockState) {
+  return lockStateColors[lockState] || '#94a3b8';
+}
+
+function colorForTrack(trackId) {
+  if (trackStore.has(trackId) && trackStore.get(trackId).color) {
+    return trackStore.get(trackId).color;
+  }
+  const color = trackPalette[paletteIndex % trackPalette.length];
+  paletteIndex += 1;
+  return color;
+}
+
+function angleToCoordinates(angleDeg, rangeCm) {
+  const clampedAngle = Math.max(-90, Math.min(90, angleDeg));
+  const clampedRange = Math.max(0, Math.min(MAX_RANGE_CM, rangeCm ?? MAX_RANGE_CM / 2));
+  const rad = (clampedAngle - 90) * Math.PI / 180;
+  const radius = radarMaxRadius * (clampedRange / MAX_RANGE_CM);
+  const x = radarCenterX + radius * Math.cos(rad);
+  const y = radarCenterY + radius * Math.sin(rad);
+  return { x, y };
+}
+
+function drawRadar(tracks = []) {
   radarCtx.fillStyle = '#000000';
   radarCtx.fillRect(0, 0, radarCanvas.width, radarCanvas.height);
 
-  // Draw range rings
   radarCtx.strokeStyle = '#00ff00';
   radarCtx.lineWidth = 1;
 
   rangeRings.forEach((range) => {
-    // radius proportional to the actual range value
     const radius = radarMaxRadius * (range / MAX_RANGE_CM);
-
     radarCtx.beginPath();
-    // Semicircle above the center
     radarCtx.arc(radarCenterX, radarCenterY, radius, Math.PI, 0, false);
     radarCtx.stroke();
-
-    // Range labels
     radarCtx.fillStyle = '#00ff00';
     radarCtx.font = '10px monospace';
     radarCtx.fillText(`${range}`, radarCenterX + radius + 5, radarCenterY - 5);
   });
 
-  // Draw static angle lines (every 10 degrees in tracker coords: -90..90)
   radarCtx.strokeStyle = '#00ff00';
   radarCtx.lineWidth = 0.5;
 
   for (let angleDeg = -90; angleDeg <= 90; angleDeg += 10) {
-    // Map tracker angle to canvas angle:
-    // 0° (ahead)   -> -90° (up)
-    // +90° (right) ->   0° (right)
-    // -90° (left)  -> -180° (left)
     const rad = (angleDeg - 90) * Math.PI / 180;
-
     const x = radarCenterX + radarMaxRadius * Math.cos(rad);
     const y = radarCenterY + radarMaxRadius * Math.sin(rad);
 
@@ -159,7 +176,6 @@ function drawRadar() {
     radarCtx.lineTo(x, y);
     radarCtx.stroke();
 
-    // Angle labels at -90°, -45°, 0°, 45°, 90°
     if (angleDeg % 45 === 0) {
       radarCtx.fillStyle = '#00ff00';
       radarCtx.font = '12px monospace';
@@ -169,33 +185,43 @@ function drawRadar() {
     }
   }
 
-  // Draw detection marker (red dot) using the SAME mapping & scaling
-  const detectionRad = (currentAngleDeg - 90) * Math.PI / 180;
-  const detectionRadius = radarMaxRadius * (currentRange / MAX_RANGE_CM);
-  const detectionX = radarCenterX + detectionRadius * Math.cos(detectionRad);
-  const detectionY = radarCenterY + detectionRadius * Math.sin(detectionRad);
+  tracks.forEach((track) => {
+    const { x, y } = angleToCoordinates(track.angleDeg, track.range);
+    const stateColor = colorForState(track.lockState);
+    const trackColor = track.color || colorForTrack(track.id);
 
-  // Draw glow effect
-  radarCtx.shadowBlur = 15;
-  radarCtx.shadowColor = '#ff0000';
-  radarCtx.fillStyle = '#ff0000';
-  radarCtx.beginPath();
-  radarCtx.arc(detectionX, detectionY, 6, 0, 2 * Math.PI);
-  radarCtx.fill();
-  radarCtx.shadowBlur = 0;
+    if (Array.isArray(track.history) && track.history.length > 1) {
+      radarCtx.beginPath();
+      radarCtx.strokeStyle = trackColor;
+      radarCtx.lineWidth = 1;
+      track.history.forEach((point, idx) => {
+        const coords = angleToCoordinates(point.angleDeg, point.range);
+        if (idx === 0) {
+          radarCtx.moveTo(coords.x, coords.y);
+        } else {
+          radarCtx.lineTo(coords.x, coords.y);
+        }
+      });
+      radarCtx.stroke();
+    }
+
+    radarCtx.shadowBlur = 15;
+    radarCtx.shadowColor = stateColor;
+    radarCtx.fillStyle = stateColor;
+    radarCtx.strokeStyle = trackColor;
+    radarCtx.lineWidth = 2;
+    radarCtx.beginPath();
+    radarCtx.arc(x, y, 6, 0, 2 * Math.PI);
+    radarCtx.fill();
+    radarCtx.stroke();
+    radarCtx.shadowBlur = 0;
+
+    radarCtx.fillStyle = trackColor;
+    radarCtx.font = '11px monospace';
+    radarCtx.fillText(track.id || 'T', x + 8, y + 4);
+  });
 }
 
-function updateRadar(angleDeg) {
-  // angleDeg comes in as tracker coords [-90, 90]
-  currentAngleDeg = Math.max(-90, Math.min(90, angleDeg));
-
-  drawRadar();
-  if (radarAngleDisplay) {
-    radarAngleDisplay.textContent = `Angle: ${currentAngleDeg.toFixed(1)}°`;
-  }
-}
-
-// Initial draw
 drawRadar();
 
 function createChart(elementId, label, color, yTitle) {
@@ -215,7 +241,20 @@ function createChart(elementId, label, color, yTitle) {
   });
 }
 
-const angleChart = createChart('angleChart', 'Angle (deg)', '#2f80ed', 'Degrees');
+const angleChart = new Chart(document.getElementById('angleChart'), {
+  type: 'line',
+  data: { labels: [], datasets: [] },
+  options: {
+    scales: {
+      x: { display: false },
+      y: { title: { display: true, text: 'Degrees' }, ticks: { color: '#cbd5e1' } }
+    },
+    color: '#cbd5e1',
+    animation: false,
+    responsive: true,
+    plugins: { legend: { labels: { color: '#cbd5e1' } } }
+  }
+});
 const peakChart = createChart('peakChart', 'Peak (dBFS)', '#9b59b6', 'dBFS');
 const snrChart = createChart('snrChart', 'SNR (dB)', '#27ae60', 'dB');
 const confidenceChart = createChart('confidenceChart', 'Confidence (%)', '#f59e0b', 'Percent');
@@ -272,6 +311,13 @@ const statsState = {
   intervals: [],
   lastUpdate: null,
 };
+const trackSortState = { key: 'id', dir: 'asc' };
+const perTrackMetrics = new Map();
+
+const tracksTableBody = document.getElementById('tracksTableBody');
+const trackFilterInput = document.getElementById('trackFilter');
+const trackStateFilter = document.getElementById('trackStateFilter');
+const trackStatsContainer = document.getElementById('trackStatsContainer');
 
 const traceViewport = document.getElementById('traceViewport');
 const traceVirtualList = document.getElementById('traceVirtualList');
@@ -420,6 +466,155 @@ function handleTraceDownload() {
   URL.revokeObjectURL(url);
 }
 
+function normalizeTracks(sample) {
+  const tracks = Array.isArray(sample.tracks) ? sample.tracks : [];
+  if (!tracks.length) {
+    const fallbackLock = (sample.lockState || 'searching').toLowerCase();
+    return [{
+      id: 'T1',
+      angleDeg: sample.angleDeg,
+      peak: sample.peak,
+      snr: sample.snr,
+      trackingConfidence: sample.trackingConfidence,
+      lockState: fallbackLock,
+      range: sample.range ?? MAX_RANGE_CM / 2,
+      ageSeconds: sample.ageSeconds,
+    }];
+  }
+
+  return tracks.map((track, idx) => {
+    const lockState = (track.lockState || sample.lockState || 'searching').toLowerCase();
+    return {
+      id: track.id || track.trackId || `T${idx + 1}`,
+      angleDeg: Number.isFinite(track.angleDeg) ? track.angleDeg : sample.angleDeg,
+      peak: Number.isFinite(track.peak) ? track.peak : sample.peak,
+      snr: Number.isFinite(track.snr) ? track.snr : sample.snr,
+      trackingConfidence: Number.isFinite(track.trackingConfidence) ? track.trackingConfidence : sample.trackingConfidence,
+      lockState,
+      range: Number.isFinite(track.range) ? track.range : MAX_RANGE_CM / 2,
+      ageSeconds: Number.isFinite(track.ageSeconds) ? track.ageSeconds : null,
+    };
+  });
+}
+
+function updateTrackStore(tracks, timestamp) {
+  const nowMs = timestamp?.getTime?.() ?? Date.now();
+  const seen = new Set();
+  const timeoutMs = configSnapshot.trackTimeoutMs || 5000;
+  tracks.forEach((track) => {
+    const id = track.id || 'T1';
+    const existing = trackStore.get(id) || { history: [], firstSeen: nowMs, color: colorForTrack(id) };
+    const history = existing.history.slice();
+    history.push({ angleDeg: track.angleDeg, range: track.range });
+    if (history.length > TRACK_HISTORY_LIMIT) {
+      history.shift();
+    }
+    trackStore.set(id, {
+      ...existing,
+      id,
+      color: existing.color || colorForTrack(id),
+      lockState: track.lockState,
+      lastSeen: nowMs,
+      firstSeen: existing.firstSeen || nowMs,
+      last: track,
+      history,
+    });
+    seen.add(id);
+  });
+
+  Array.from(trackStore.entries()).forEach(([id, entry]) => {
+    if (!seen.has(id) && nowMs - (entry.lastSeen || nowMs) > timeoutMs) {
+      trackStore.delete(id);
+    }
+  });
+}
+
+function renderTracksTable() {
+  if (!tracksTableBody) return;
+  const filterText = (trackFilterInput?.value || '').toLowerCase();
+  const filterState = (trackStateFilter?.value || '').toLowerCase();
+  const rows = Array.from(trackStore.values()).map((entry) => {
+    const ageSeconds = Number.isFinite(entry.last?.ageSeconds)
+      ? entry.last.ageSeconds
+      : (entry.lastSeen - (entry.firstSeen || entry.lastSeen)) / 1000;
+    return {
+      id: entry.id,
+      angleDeg: entry.last?.angleDeg,
+      snr: entry.last?.snr,
+      confidence: entry.last?.trackingConfidence,
+      lockState: entry.last?.lockState || 'searching',
+      ageSeconds,
+      color: entry.color,
+    };
+  });
+
+  const filtered = rows.filter((row) => {
+    const matchesFilter = !filterText || row.id.toLowerCase().includes(filterText);
+    const matchesState = !filterState || row.lockState === filterState;
+    return matchesFilter && matchesState;
+  });
+
+  filtered.sort((a, b) => {
+    const dir = trackSortState.dir === 'desc' ? -1 : 1;
+    const key = trackSortState.key;
+    if (key === 'angleDeg' || key === 'snr' || key === 'confidence' || key === 'ageSeconds') {
+      return ((a[key] ?? -Infinity) - (b[key] ?? -Infinity)) * dir;
+    }
+    if (a[key] < b[key]) return -1 * dir;
+    if (a[key] > b[key]) return 1 * dir;
+    return 0;
+  });
+
+  tracksTableBody.innerHTML = '';
+  filtered.forEach((row) => {
+    const div = document.createElement('div');
+    div.className = 'tracks-row';
+    div.innerHTML = `
+      <span class="track-pill" style="border-color:${row.color}">${row.id}</span>
+      <span>${Number.isFinite(row.angleDeg) ? row.angleDeg.toFixed(1) : '--'}</span>
+      <span>${Number.isFinite(row.snr) ? row.snr.toFixed(1) : '--'}</span>
+      <span>${Number.isFinite(row.confidence) ? `${(row.confidence * 100).toFixed(0)}%` : '--'}</span>
+      <span><span class="lock-badge ${row.lockState}">${row.lockState}</span></span>
+      <span>${Number.isFinite(row.ageSeconds) ? `${row.ageSeconds.toFixed(1)}s` : '--'}</span>
+    `;
+    tracksTableBody.appendChild(div);
+  });
+}
+
+function renderTrackStats() {
+  if (!trackStatsContainer) return;
+  trackStatsContainer.innerHTML = '';
+  trackStore.forEach((entry) => {
+    const stats = entry.stats;
+    if (!stats) return;
+    const card = document.createElement('div');
+    card.className = 'track-stat-card';
+    card.innerHTML = `
+      <div class="track-stat-header">
+        <span class="track-pill" style="border-color:${entry.color}">${entry.id}</span>
+        <span class="muted">${entry.last?.lockState || 'searching'}</span>
+      </div>
+      <div class="track-stat-grid">
+        <div><p class="muted">Angle avg</p><div class="metric-value">${stats.angle ? stats.angle.avg.toFixed(2) : '--'}</div></div>
+        <div><p class="muted">Angle std</p><div class="metric-value">${stats.angle ? stats.angle.std.toFixed(2) : '--'}</div></div>
+        <div><p class="muted">SNR avg</p><div class="metric-value">${stats.snr ? stats.snr.avg.toFixed(2) : '--'}</div></div>
+        <div><p class="muted">Confidence</p><div class="metric-value">${stats.confidence ? `${(stats.confidence.avg * 100).toFixed(0)}%` : '--'}</div></div>
+      </div>
+    `;
+    trackStatsContainer.appendChild(card);
+  });
+}
+
+function toggleTrackSort(key) {
+  if (trackSortState.key === key) {
+    trackSortState.dir = trackSortState.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    trackSortState.key = key;
+    trackSortState.dir = 'asc';
+  }
+  renderTracksTable();
+}
+
 const CONFIG_REFRESH_MS = 5000;
 
 // Rate limiting for SSE updates (10 Hz cap + animation frame batching)
@@ -465,19 +660,36 @@ function handleSample(sample, fromHistory = false) {
 }
 
 function addSample(sample, fromHistory = false) {
-  const timestamp = new Date(sample.timestamp).toLocaleTimeString();
-  pushPoint(angleChart, timestamp, sample.angleDeg);
-  pushPoint(peakChart, timestamp, sample.peak);
-  pushPoint(snrChart, timestamp, sample.snr ?? 0);
-  const confidencePercent = Math.max(0, Math.min(1, sample.trackingConfidence ?? 0)) * 100;
+  const timestampObj = new Date(sample.timestamp);
+  const timestamp = timestampObj.toLocaleTimeString();
+  const tracks = normalizeTracks(sample);
+  const primary = tracks[0];
+
+  pushAngleSeries(timestamp, tracks);
+  pushPoint(peakChart, timestamp, primary?.peak);
+  pushPoint(snrChart, timestamp, primary?.snr ?? 0);
+  const confidencePercent = Math.max(0, Math.min(1, primary?.trackingConfidence ?? 0)) * 100;
   pushPoint(confidenceChart, timestamp, confidencePercent);
 
-  // Update radar display
-  updateRadar(sample.angleDeg);
-  updateMetrics(sample.snr, confidencePercent, sample.lockState);
+  updateTrackStore(tracks, timestampObj);
+  const radarTracks = Array.from(trackStore.values()).map((entry) => ({
+    id: entry.id,
+    angleDeg: entry.last?.angleDeg,
+    lockState: entry.last?.lockState,
+    range: entry.last?.range,
+    color: entry.color,
+    history: entry.history,
+  }));
+  drawRadar(radarTracks);
+  if (radarAngleDisplay && primary) {
+    radarAngleDisplay.textContent = `${primary.id}: ${primary.angleDeg.toFixed(1)}° (${tracks.length} tracks)`;
+  }
+  renderTracksTable();
+
+  updateMetrics(primary?.snr, confidencePercent, primary?.lockState || sample.lockState);
 
   updateDebugPanel(sample);
-  updateStats(sample, fromHistory);
+  updateStats(sample, tracks, fromHistory);
 }
 
 function updateMetrics(snr, confidencePercent, lockState) {
@@ -847,9 +1059,10 @@ function recordStatValue(bucket, value) {
   }
 }
 
-function updateStats(sample, fromHistory) {
-  recordStatValue(statsState.angle, sample.angleDeg);
-  recordStatValue(statsState.peak, sample.peak);
+function updateStats(sample, tracks, fromHistory) {
+  const primary = (tracks && tracks[0]) || sample;
+  recordStatValue(statsState.angle, primary?.angleDeg);
+  recordStatValue(statsState.peak, primary?.peak);
 
   const angleStats = computeStats(statsState.angle);
   if (angleStats) {
@@ -865,6 +1078,28 @@ function updateStats(sample, fromHistory) {
     renderStatValue(peakStatsEls.std, peakStats.std, 2);
     renderStatValue(peakStatsEls.min, peakStats.min, 2);
     renderStatValue(peakStatsEls.max, peakStats.max, 2);
+  }
+
+  if (Array.isArray(tracks)) {
+    tracks.forEach((track) => {
+      const bucket = perTrackMetrics.get(track.id) || { angle: [], snr: [], confidence: [] };
+      recordStatValue(bucket.angle, track.angleDeg);
+      recordStatValue(bucket.snr, track.snr);
+      recordStatValue(bucket.confidence, track.trackingConfidence);
+      perTrackMetrics.set(track.id, bucket);
+
+      const stats = {
+        angle: computeStats(bucket.angle),
+        snr: computeStats(bucket.snr),
+        confidence: computeStats(bucket.confidence),
+      };
+      if (trackStore.has(track.id)) {
+        const entry = trackStore.get(track.id);
+        entry.stats = stats;
+        trackStore.set(track.id, entry);
+      }
+    });
+    renderTrackStats();
   }
 
   if (!fromHistory) {
@@ -906,6 +1141,7 @@ function formatSamples(value) {
 
 function updateSummaryPanel(cfg) {
   if (!cfg) return;
+  configSnapshot = cfg;
   if (summaryBackend) {
     summaryBackend.textContent = cfg.sdrBackend || '--';
   }
@@ -921,6 +1157,24 @@ function updateSummaryPanel(cfg) {
   if (summaryFftSize) {
     summaryFftSize.textContent = formatSamples(cfg.numSamples);
   }
+  const summaryTrackingMode = document.getElementById('summaryTrackingMode');
+  const summaryMaxTracks = document.getElementById('summaryMaxTracks');
+  const summaryTimeout = document.getElementById('summaryTimeout');
+  const summarySnrThreshold = document.getElementById('summarySnrThreshold');
+  if (summaryTrackingMode) {
+    summaryTrackingMode.textContent = cfg.trackingMode || 'multi';
+  }
+  if (summaryMaxTracks) {
+    summaryMaxTracks.textContent = formatSamples(cfg.maxTracks);
+  }
+  if (summaryTimeout) {
+    summaryTimeout.textContent = `${cfg.trackTimeoutMs ?? 0} ms`;
+  }
+  if (summarySnrThreshold) {
+    summarySnrThreshold.textContent = Number.isFinite(cfg.snrThreshold)
+      ? `${cfg.snrThreshold.toFixed(1)} dB`
+      : '--';
+  }
 }
 
 async function refreshConfigSummary() {
@@ -932,6 +1186,41 @@ async function refreshConfigSummary() {
   } catch (err) {
     console.error('config summary', err);
   }
+}
+
+function ensureAngleDataset(trackId, color) {
+  const existing = angleChart.data.datasets.find((ds) => ds.label === trackId);
+  if (existing) {
+    existing.borderColor = color;
+    return existing;
+  }
+  const ds = { label: trackId, data: [], borderColor: color, tension: 0.2, pointRadius: 0 };
+  angleChart.data.datasets.push(ds);
+  return ds;
+}
+
+function pushAngleSeries(label, tracks) {
+  angleChart.data.labels.push(label);
+  const trackValues = new Map();
+  tracks.forEach((track) => {
+    const color = trackStore.get(track.id)?.color || colorForTrack(track.id);
+    ensureAngleDataset(track.id, color);
+    trackValues.set(track.id, track.angleDeg);
+  });
+
+  angleChart.data.datasets.forEach((ds) => {
+    const value = trackValues.has(ds.label) ? trackValues.get(ds.label) : null;
+    ds.data.push(value);
+    if (ds.data.length > MAX_POINTS) {
+      ds.data.shift();
+    }
+  });
+
+  if (angleChart.data.labels.length > MAX_POINTS) {
+    angleChart.data.labels.shift();
+  }
+
+  angleChart.update('none');
 }
 
 function pushPoint(chart, label, value) {
@@ -961,6 +1250,15 @@ if (traceCopyBtn) {
 }
 if (traceDownloadBtn) {
   traceDownloadBtn.addEventListener('click', handleTraceDownload);
+}
+document.querySelectorAll('[data-track-sort]').forEach((btn) => {
+  btn.addEventListener('click', () => toggleTrackSort(btn.dataset.trackSort));
+});
+if (trackFilterInput) {
+  trackFilterInput.addEventListener('input', renderTracksTable);
+}
+if (trackStateFilter) {
+  trackStateFilter.addEventListener('change', renderTracksTable);
 }
 
 updateTraceSummary();
