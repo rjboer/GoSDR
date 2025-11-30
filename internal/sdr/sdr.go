@@ -23,4 +23,9 @@ type SDR interface {
 	RX(ctx context.Context) (chan0 []complex64, chan1 []complex64, err error)
 	TX(ctx context.Context, iq0, iq1 []complex64) error
 	Close() error
+	// SetPhaseDelta updates the simulated phase delta (for MockSDR).
+	// Hardware backends may ignore this or return an error.
+	SetPhaseDelta(phaseDeltaDeg float64)
+	// GetPhaseDelta returns the current phase delta setting.
+	GetPhaseDelta() float64
 }

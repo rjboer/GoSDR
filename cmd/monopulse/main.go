@@ -73,7 +73,7 @@ func main() {
 		hubLogger := logger.With(logging.Field{Key: "subsystem", Value: "telemetry"})
 		hub := telemetry.NewHub(cfg.historyLimit, hubLogger)
 		reporters = append(reporters, hub)
-		go telemetry.NewWebServer(cfg.webAddr, hub, hubLogger).Start(ctx)
+		go telemetry.NewWebServer(cfg.webAddr, hub, backend, hubLogger).Start(ctx)
 		hubLogger.Info("web interface available", logging.Field{Key: "addr", Value: cfg.webAddr})
 	} else {
 		// Fallback to stdout if no web interface

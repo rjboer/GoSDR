@@ -190,7 +190,7 @@ form.addEventListener('submit', async (evt) => {
       try {
         const parsed = JSON.parse(errText);
         if (parsed?.error) message = parsed.error;
-      } catch (_) {}
+      } catch (_) { }
       throw new Error(message);
     }
     const saved = await res.json();
@@ -215,3 +215,95 @@ resetBtn.addEventListener('click', () => {
 backendField?.addEventListener('change', updateBackendState);
 
 loadConfig();
+
+// ===== MockSDR Live Angle Control =====
+const mockControlSection = $('mockControlSection');
+const mockAngleSlider = $('mockAngleSlider');
+const mockAngleValue = $('mockAngleValue');
+const mockStatus = $('mockStatus');
+
+function updateMockStatus(message, type = 'ready') {
+  if (!mockStatus) return;
+  const indicator = mockStatus.querySelector('.status-indicator');
+  const text = mockStatus.querySelector('.status-text');
+  if (text) text.textContent = message;
+  if (indicator) {
+    indicator.className = 'status-indicator';
+    if (type === 'updating') indicator.classList.add('updating');
+    else if (type === 'error') indicator.classList.add('error');
+    else indicator.classList.add('ready');
+  }
+}
+
+async function fetchMockAngle() {
+  try {
+    const res = await fetch('/api/mock/angle');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.phaseDelta;
+  } catch (err) {
+    console.error('fetch mock angle failed:', err);
+    return null;
+  }
+}
+
+async function setMockAngle(phaseDelta) {
+  try {
+    updateMockStatus('Updating...', 'updating');
+    const res = await fetch('/api/mock/angle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phaseDelta }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    updateMockStatus(`Set to ${data.phaseDelta.toFixed(1)}°`, 'ready');
+    return data.phaseDelta;
+  } catch (err) {
+    console.error('set mock angle failed:', err);
+    updateMockStatus('Update failed', 'error');
+    return null;
+  }
+}
+
+function updateSliderDisplay(value) {
+  if (mockAngleValue) {
+    mockAngleValue.textContent = `${Number(value).toFixed(1)}°`;
+  }
+}
+
+if (mockAngleSlider && mockControlSection) {
+  // Show/hide mock control section based on backend
+  function toggleMockControl() {
+    const backend = backendField?.value || 'mock';
+    if (mockControlSection) {
+      mockControlSection.style.display = backend === 'mock' ? 'block' : 'none';
+    }
+  }
+
+  backendField?.addEventListener('change', toggleMockControl);
+  toggleMockControl();
+
+  // Initialize slider from current mock angle
+  fetchMockAngle().then((angle) => {
+    if (angle !== null) {
+      mockAngleSlider.value = angle;
+      updateSliderDisplay(angle);
+      updateMockStatus(`Current: ${angle.toFixed(1)}°`, 'ready');
+    }
+  });
+
+  // Update display as slider moves
+  mockAngleSlider.addEventListener('input', (e) => {
+    updateSliderDisplay(e.target.value);
+  });
+
+  // Send update when slider is released
+  let updateTimeout = null;
+  mockAngleSlider.addEventListener('change', (e) => {
+    clearTimeout(updateTimeout);
+    updateTimeout = setTimeout(() => {
+      setMockAngle(parseFloat(e.target.value));
+    }, 100);
+  });
+}
