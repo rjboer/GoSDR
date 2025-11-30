@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/cmplx"
 	"runtime"
+	"sort"
 	"sync"
 )
 
@@ -20,6 +21,14 @@ type scanResult struct {
 	snr       float64
 	peakBin   int
 	ok        bool
+}
+
+// Peak captures the metadata for a detected spectral peak.
+type Peak struct {
+	Bin        int
+	Level      float64
+	Prominence float64
+	SNR        float64
 }
 
 // binRange clamps [start,end) to [0,n).
@@ -99,6 +108,96 @@ func estimateSNR(db []float64, peak float64, peakBin int, start, end int) float6
 		return 0
 	}
 	return snr
+}
+
+// FindMultiplePeaks returns local maxima whose prominence exceeds the given threshold.
+// Prominence is measured as the drop from the peak to the highest valley on either side
+// before encountering a higher peak (or the boundary). Peaks are returned in descending
+// SNR/level order. minSeparation enforces a minimum bin distance between reported peaks.
+func FindMultiplePeaks(db []float64, prominence float64, minSeparation int) []Peak {
+	if len(db) == 0 {
+		return nil
+	}
+
+	if minSeparation < 0 {
+		minSeparation = 0
+	}
+
+	// Identify local maxima (handling boundaries).
+	var candidates []int
+	for i, v := range db {
+		leftOK := i == 0 || v > db[i-1]
+		rightOK := i == len(db)-1 || v >= db[i+1]
+		if leftOK && rightOK {
+			candidates = append(candidates, i)
+		}
+	}
+
+	var peaks []Peak
+	for _, idx := range candidates {
+		val := db[idx]
+
+		leftMin := val
+		for l := idx - 1; l >= 0; l-- {
+			if db[l] > val {
+				break
+			}
+			if db[l] < leftMin {
+				leftMin = db[l]
+			}
+		}
+
+		rightMin := val
+		for r := idx + 1; r < len(db); r++ {
+			if db[r] > val {
+				break
+			}
+			if db[r] < rightMin {
+				rightMin = db[r]
+			}
+		}
+
+		prom := val - math.Max(leftMin, rightMin)
+		if prom < prominence {
+			continue
+		}
+
+		snr := prom
+		peaks = append(peaks, Peak{Bin: idx, Level: val, Prominence: prom, SNR: snr})
+	}
+
+	// Sort by SNR/level descending so greedy spacing keeps strongest peaks.
+	sort.Slice(peaks, func(i, j int) bool {
+		if peaks[i].SNR == peaks[j].SNR {
+			return peaks[i].Level > peaks[j].Level
+		}
+		return peaks[i].SNR > peaks[j].SNR
+	})
+
+	if minSeparation == 0 {
+		return peaks
+	}
+
+	var filtered []Peak
+	for _, p := range peaks {
+		tooClose := false
+		for _, f := range filtered {
+			if abs := p.Bin - f.Bin; abs < 0 {
+				if -abs < minSeparation {
+					tooClose = true
+					break
+				}
+			} else if abs < minSeparation {
+				tooClose = true
+				break
+			}
+		}
+		if !tooClose {
+			filtered = append(filtered, p)
+		}
+	}
+
+	return filtered
 }
 
 // MonopulsePhase correlates sum and delta FFT bins and returns the resulting phase (radians).
