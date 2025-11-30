@@ -119,3 +119,57 @@ func BenchmarkCoarseScanParallel(b *testing.B) {
 		)
 	}
 }
+
+func TestFindMultiplePeaksProminenceAndOrdering(t *testing.T) {
+	spectrum := []float64{0, 2, 0, 5, 0, 3, 0, 4, 0}
+
+	peaks := FindMultiplePeaks(spectrum, 0.5, 0)
+
+	if len(peaks) != 4 {
+		t.Fatalf("expected 4 peaks, got %d", len(peaks))
+	}
+
+	// Sorted by SNR/level descending.
+	expectedBins := []int{3, 7, 5, 1}
+	for i, p := range peaks {
+		if p.Bin != expectedBins[i] {
+			t.Fatalf("peak %d bin mismatch: got %d, want %d", i, p.Bin, expectedBins[i])
+		}
+		if p.Prominence <= 0.5 {
+			t.Fatalf("expected prominence > 0.5, got %.2f", p.Prominence)
+		}
+	}
+}
+
+func TestFindMultiplePeaksSeparation(t *testing.T) {
+	spectrum := []float64{0, 6, 0, 5, 0, 4, 0}
+
+	peaks := FindMultiplePeaks(spectrum, 0.1, 3)
+	if len(peaks) != 2 {
+		t.Fatalf("expected 2 peaks after separation filtering, got %d", len(peaks))
+	}
+
+	if peaks[0].Bin != 1 || peaks[1].Bin != 5 {
+		t.Fatalf("unexpected peak bins: got (%d, %d)", peaks[0].Bin, peaks[1].Bin)
+	}
+}
+
+func TestFindMultiplePeaksProminenceThreshold(t *testing.T) {
+	spectrum := []float64{0, 1, 0.9, 0.8, 0.7, 2, 0, 0.5}
+
+	peaks := FindMultiplePeaks(spectrum, 1.0, 1)
+	if len(peaks) != 1 {
+		t.Fatalf("expected only the strong peak to pass prominence, got %d peaks", len(peaks))
+	}
+
+	if peaks[0].Bin != 5 {
+		t.Fatalf("expected strong peak at bin 5, got %d", peaks[0].Bin)
+	}
+}
+
+func TestFindMultiplePeaksEmpty(t *testing.T) {
+	peaks := FindMultiplePeaks(nil, 0.1, 2)
+	if len(peaks) != 0 {
+		t.Fatalf("expected no peaks for empty input, got %d", len(peaks))
+	}
+}
