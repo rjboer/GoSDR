@@ -15,6 +15,7 @@ const (
 
 // scanResult is used by the worker-pool coarse scan.
 type scanResult struct {
+	idx       int
 	phase     float64
 	peak      float64
 	monoPhase float64
@@ -29,6 +30,22 @@ type Peak struct {
 	Level      float64
 	Prominence float64
 	SNR        float64
+}
+
+// PeakInfo captures metadata for a detected coarse-scan candidate.
+type PeakInfo struct {
+	// Phase is the steering phase delay (degrees) used during the scan.
+	Phase float64
+	// Angle is the corresponding estimated angle of arrival (degrees).
+	Angle float64
+	// Peak is the peak dBFS value observed in the sum spectrum.
+	Peak float64
+	// SNR is the estimated signal-to-noise ratio within the search band.
+	SNR float64
+	// Bin is the FFT bin associated with the detected peak.
+	Bin int
+	// MonoPhase is the monopulse phase (radians) computed for this delay.
+	MonoPhase float64
 }
 
 // binRange clamps [start,end) to [0,n).
@@ -483,7 +500,7 @@ func CoarseScanParallel(
 	freqHz float64,
 	spacingWavelength float64,
 	dsp *CachedDSP,
-) (bestDelay float64, bestTheta float64, peakDBFS float64, monoPhase float64, peakBin int, snr float64) {
+) []PeakInfo {
 	if stepDeg == 0 {
 		stepDeg = 2
 	}
@@ -493,7 +510,7 @@ func CoarseScanParallel(
 		n = len(rx1)
 	}
 	if n == 0 {
-		return 0, 0, 0, 0, 0, 0
+		return nil
 	}
 
 	// Build the phase grid.
@@ -502,7 +519,7 @@ func CoarseScanParallel(
 		phases = append(phases, phase)
 	}
 	if len(phases) == 0 {
-		return 0, 0, 0, 0, 0, 0
+		return nil
 	}
 
 	numWorkers := runtime.NumCPU()
@@ -510,7 +527,12 @@ func CoarseScanParallel(
 		numWorkers = 1
 	}
 
-	jobs := make(chan float64)
+	type scanJob struct {
+		idx   int
+		phase float64
+	}
+
+	jobs := make(chan scanJob)
 	results := make(chan scanResult, numWorkers)
 
 	// Start workers.
@@ -520,14 +542,15 @@ func CoarseScanParallel(
 			sumBuf := make([]complex64, n)
 			deltaBuf := make([]complex64, n)
 
-			for phase := range jobs {
+			for job := range jobs {
 				peak, monoPhase, snr, peakBin, ok := doPhaseScan(
-					phase, rx0, rx1, n, phaseCal,
+					job.phase, rx0, rx1, n, phaseCal,
 					startBin, endBin, dsp,
 					adjusted, sumBuf, deltaBuf,
 				)
 				results <- scanResult{
-					phase:     phase,
+					idx:       job.idx,
+					phase:     job.phase,
 					peak:      peak,
 					monoPhase: monoPhase,
 					snr:       snr,
@@ -540,16 +563,14 @@ func CoarseScanParallel(
 
 	// Feed jobs.
 	go func() {
-		for _, p := range phases {
-			jobs <- p
+		for i, p := range phases {
+			jobs <- scanJob{idx: i, phase: p}
 		}
 		close(jobs)
 	}()
 
-	peakDBFS = -math.MaxFloat64
-	bestMonoPhase := math.MaxFloat64
-	bestPeakBin := 0
-	bestSNR := 0.0
+	phaseResults := make([]scanResult, len(phases))
+	valid := make([]bool, len(phases))
 
 	// Collect results.
 	for range phases {
@@ -557,20 +578,111 @@ func CoarseScanParallel(
 		if !res.ok {
 			continue
 		}
-		if res.peak > peakDBFS || (res.peak == peakDBFS && math.Abs(res.monoPhase) < math.Abs(bestMonoPhase)) {
-			peakDBFS = res.peak
-			bestDelay = res.phase
-			bestTheta = PhaseToTheta(res.phase, freqHz, spacingWavelength)
-			bestMonoPhase = res.monoPhase
-			bestPeakBin = res.peakBin
-			bestSNR = res.snr
+		if res.idx >= 0 && res.idx < len(phaseResults) {
+			phaseResults[res.idx] = res
+			valid[res.idx] = true
 		}
 	}
 
-	if peakDBFS == -math.MaxFloat64 {
-		peakDBFS = 0
+	var scanValues []float64
+	var scanMeta []scanResult
+	bestPeak := -math.MaxFloat64
+	bestMono := math.MaxFloat64
+	bestIdx := -1
+	bestPhase := 0.0
+	for i, ok := range valid {
+		if !ok {
+			continue
+		}
+		metric := phaseResults[i].snr
+		if metric == 0 {
+			metric = phaseResults[i].peak
+		}
+		scanValues = append(scanValues, metric)
+		scanMeta = append(scanMeta, phaseResults[i])
+
+		if phaseResults[i].peak > bestPeak || (phaseResults[i].peak == bestPeak && math.Abs(phaseResults[i].monoPhase) < math.Abs(bestMono)) {
+			bestPeak = phaseResults[i].peak
+			bestMono = phaseResults[i].monoPhase
+			bestIdx = len(scanMeta) - 1
+			bestPhase = phaseResults[i].phase
+		}
 	}
-	return bestDelay, bestTheta, peakDBFS, bestMonoPhase, bestPeakBin, bestSNR
+
+	if len(scanValues) == 0 {
+		return nil
+	}
+
+	// Use peak finding on the SNR trace across phases to identify promising candidates.
+	prominence := 0.1
+	minSeparation := 1
+	coarsePeaks := FindMultiplePeaks(scanValues, prominence, minSeparation)
+
+	// Fallback to the single best value if prominence filtering removed everything.
+	if len(coarsePeaks) == 0 {
+		bestIdx := 0
+		bestVal := -math.MaxFloat64
+		for i, val := range scanValues {
+			if val > bestVal {
+				bestVal = val
+				bestIdx = i
+			}
+		}
+		coarsePeaks = []Peak{{Bin: bestIdx}}
+	}
+
+	hasBest := false
+	for _, p := range coarsePeaks {
+		if p.Bin == bestIdx {
+			hasBest = true
+			break
+		}
+	}
+	if bestIdx >= 0 && !hasBest {
+		coarsePeaks = append(coarsePeaks, Peak{Bin: bestIdx})
+	}
+
+	peakInfos := make([]PeakInfo, 0, len(coarsePeaks))
+	for _, p := range coarsePeaks {
+		if p.Bin < 0 || p.Bin >= len(scanMeta) {
+			continue
+		}
+		res := scanMeta[p.Bin]
+		peakInfos = append(peakInfos, PeakInfo{
+			Phase:     res.phase,
+			Angle:     PhaseToTheta(res.phase, freqHz, spacingWavelength),
+			Peak:      res.peak,
+			SNR:       res.snr,
+			Bin:       res.peakBin,
+			MonoPhase: res.monoPhase,
+		})
+	}
+
+	const snrTieTol = 1e-3
+
+	sort.Slice(peakInfos, func(i, j int) bool {
+		snrDiff := peakInfos[i].SNR - peakInfos[j].SNR
+		if math.Abs(snrDiff) < snrTieTol {
+			if peakInfos[i].Peak == peakInfos[j].Peak {
+				return math.Abs(peakInfos[i].MonoPhase) < math.Abs(peakInfos[j].MonoPhase)
+			}
+			return peakInfos[i].Peak > peakInfos[j].Peak
+		}
+		return snrDiff > 0
+	})
+
+	if bestIdx >= 0 {
+		for i, p := range peakInfos {
+			if p.Phase == bestPhase {
+				if i != 0 {
+					peakInfos[0], peakInfos[i] = peakInfos[i], peakInfos[0]
+				}
+				break
+			}
+		}
+	}
+
+	return peakInfos
 }
 
 // --------- Tracking (parallel FFTs for a single step) ---------

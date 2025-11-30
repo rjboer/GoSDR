@@ -404,7 +404,20 @@ func (t *Tracker) Run(ctx context.Context) error {
 		if iteration == 0 {
 			coarseStart := time.Now()
 			// Use parallel coarse scan with cached DSP
-			delay, theta, peak, monoPhase, peakBin, snr := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
+			coarsePeaks := dsp.CoarseScanParallel(rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.ScanStep, t.cfg.RxLO, t.cfg.SpacingWavelength, t.dsp)
+			if len(coarsePeaks) == 0 {
+				t.logger.Warn("coarse scan produced no peaks", logging.Field{Key: "subsystem", Value: "tracker"})
+				iteration++
+				continue
+			}
+
+			primary := coarsePeaks[0]
+			delay := primary.Phase
+			theta := primary.Angle
+			peak := primary.Peak
+			monoPhase := primary.MonoPhase
+			peakBin := primary.Bin
+			snr := primary.SNR
 			coarseDuration := time.Since(coarseStart)
 			t.lastDelay = delay
 			t.appendHistory(theta)
