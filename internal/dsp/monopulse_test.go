@@ -68,7 +68,7 @@ func TestCoarseScanParallel_SingleTarget(t *testing.T) {
 
 	dsp := NewCachedDSP(nSamples) // Properly initialize with FFT size
 
-	_, estTheta, peak, _, _, snr := CoarseScanParallel(
+	peaks := CoarseScanParallel(
 		rx0, rx1,
 		0, // phaseCal
 		startBin, endBin,
@@ -77,6 +77,15 @@ func TestCoarseScanParallel_SingleTarget(t *testing.T) {
 		spacingWavelength,
 		dsp, // Already a pointer from NewCachedDSP
 	)
+
+	if len(peaks) == 0 {
+		t.Fatalf("no peaks returned")
+	}
+
+	primary := peaks[0]
+	peak := primary.Peak
+	estTheta := primary.Angle
+	snr := primary.SNR
 
 	if peak == 0 {
 		t.Fatalf("no peak detected")
@@ -108,7 +117,7 @@ func BenchmarkCoarseScanParallel(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, _, _, _, _ = CoarseScanParallel(
+		_ = CoarseScanParallel(
 			rx0, rx1,
 			0, // phaseCal
 			startBin, endBin,
