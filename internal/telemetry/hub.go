@@ -438,6 +438,20 @@ type MultiTrackSample struct {
 	Tracks    []TrackSample `json:"tracks"`
 }
 
+// TrackHistorySample stores a track observation with its timestamp for per-track
+// history queries.
+type TrackHistorySample struct {
+	Timestamp time.Time   `json:"timestamp"`
+	Track     TrackSample `json:"track"`
+}
+
+// TrackSnapshot represents the latest known state for a single track.
+type TrackSnapshot struct {
+	ID          string      `json:"id"`
+	LastUpdated time.Time   `json:"lastUpdated"`
+	Sample      TrackSample `json:"sample"`
+}
+
 func sampleFromMultiTrack(multi MultiTrackSample) Sample {
 	sample := Sample{
 		Timestamp: multi.Timestamp,
@@ -475,6 +489,47 @@ func cloneSample(sample Sample) Sample {
 	clone := sample
 	clone.Tracks = cloneTracks(sample.Tracks)
 	return clone
+}
+
+func cloneMultiTrackSample(sample MultiTrackSample) MultiTrackSample {
+	clone := MultiTrackSample{Timestamp: sample.Timestamp, Tracks: cloneTracks(sample.Tracks)}
+	if clone.Timestamp.IsZero() {
+		clone.Timestamp = time.Now()
+	}
+	return clone
+}
+
+func filterTracks(sample MultiTrackSample, filter map[string]struct{}) (MultiTrackSample, bool) {
+	if len(filter) == 0 {
+		cloned := cloneMultiTrackSample(sample)
+		return cloned, len(cloned.Tracks) > 0
+	}
+
+	filtered := MultiTrackSample{Timestamp: sample.Timestamp}
+	for _, track := range sample.Tracks {
+		if _, ok := filter[track.ID]; ok {
+			filtered.Tracks = append(filtered.Tracks, track)
+		}
+	}
+	if filtered.Timestamp.IsZero() {
+		filtered.Timestamp = time.Now()
+	}
+	return filtered, len(filtered.Tracks) > 0
+}
+
+func trackFilterSet(trackIDs []string) map[string]struct{} {
+	if len(trackIDs) == 0 {
+		return nil
+	}
+
+	filter := make(map[string]struct{}, len(trackIDs))
+	for _, id := range trackIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			filter[id] = struct{}{}
+		}
+	}
+	return filter
 }
 
 // DebugInfo captures optional DSP internals for troubleshooting.
@@ -563,9 +618,10 @@ type HealthCheck struct {
 // Hub collects history and fan-outs telemetry updates to subscribers.
 type Hub struct {
 	mu             sync.RWMutex
-	history        []Sample
+	history        []MultiTrackSample
+	trackHistory   map[string][]TrackHistorySample
 	historyLimit   int
-	subscribers    map[chan Sample]struct{}
+	subscribers    map[chan MultiTrackSample]struct{}
 	config         Config
 	logger         logging.Logger
 	startTime      time.Time
@@ -573,7 +629,8 @@ type Hub struct {
 	latestSpectrum *SpectrumSnapshot
 	mockSpectrum   SpectrumSnapshot
 	totalSamples   int64
-	lastSample     *Sample
+	lastSample     *MultiTrackSample
+	lastPrimary    *TrackSample
 	lastReportTime time.Time
 	iterationAvg   time.Duration
 	iterationLast  time.Duration
@@ -606,7 +663,8 @@ func NewHub(historyLimit int, logger logging.Logger) *Hub {
 	cfg, _ = validateConfig(cfg, defaultConfig())
 	h := &Hub{
 		historyLimit: cfg.HistoryLimit,
-		subscribers:  make(map[chan Sample]struct{}),
+		subscribers:  make(map[chan MultiTrackSample]struct{}),
+		trackHistory: make(map[string][]TrackHistorySample),
 		config:       cfg,
 		logger:       logger.With(logging.Field{Key: "subsystem", Value: "telemetry"}),
 		startTime:    time.Now(),
@@ -637,7 +695,7 @@ func (h *Hub) Report(angleDeg float64, peak float64, snr float64, confidence flo
 
 // ReportMultiTrack records a telemetry update that can include multiple tracks.
 func (h *Hub) ReportMultiTrack(multi MultiTrackSample) {
-	sample := sampleFromMultiTrack(multi)
+	sample := cloneMultiTrackSample(multi)
 	if len(sample.Tracks) == 0 {
 		return
 	}
@@ -650,12 +708,13 @@ func (h *Hub) ReportMultiTrack(multi MultiTrackSample) {
 		for i := range sample.Tracks {
 			sample.Tracks[i].Debug = nil
 		}
-		sample.Debug = nil
 	}
 
+	primaryLockState := sample.Tracks[0].LockState
+
 	h.mu.Lock()
-	if h.lastSample != nil && h.lastSample.LockState != sample.LockState {
-		h.recordEventLocked("info", fmt.Sprintf("lock state changed to %s", sample.LockState))
+	if h.lastSample != nil && h.lastLockState != primaryLockState {
+		h.recordEventLocked("info", fmt.Sprintf("lock state changed to %s", primaryLockState))
 	}
 	h.totalSamples++
 	if !h.lastReportTime.IsZero() {
@@ -669,11 +728,25 @@ func (h *Hub) ReportMultiTrack(multi MultiTrackSample) {
 	}
 	h.lastReportTime = sample.Timestamp
 	h.lastSample = &sample
-	h.lastLockState = sample.LockState
-	sample.Tracks = cloneTracks(sample.Tracks)
-	h.history = append(h.history, sample)
+	h.lastLockState = primaryLockState
+	h.lastPrimary = nil
+	if len(sample.Tracks) > 0 {
+		primary := sample.Tracks[0]
+		h.lastPrimary = &primary
+	}
+	h.history = append(h.history, cloneMultiTrackSample(sample))
 	if len(h.history) > h.historyLimit {
 		h.history = h.history[len(h.history)-h.historyLimit:]
+	}
+	for _, track := range sample.Tracks {
+		if track.ID == "" {
+			continue
+		}
+		entry := TrackHistorySample{Timestamp: sample.Timestamp, Track: track}
+		h.trackHistory[track.ID] = append(h.trackHistory[track.ID], entry)
+		if len(h.trackHistory[track.ID]) > h.historyLimit {
+			h.trackHistory[track.ID] = h.trackHistory[track.ID][len(h.trackHistory[track.ID])-h.historyLimit:]
+		}
 	}
 	for ch := range h.subscribers {
 		select {
@@ -698,15 +771,62 @@ func (h *Hub) recordEventLocked(level, message string) {
 	}
 }
 
-// History returns a copy of stored telemetry samples.
-func (h *Hub) History() []Sample {
+// History returns a copy of stored telemetry samples, filtered by optional
+// track IDs.
+func (h *Hub) History(trackIDs ...string) []MultiTrackSample {
+	filter := trackFilterSet(trackIDs)
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	out := make([]Sample, len(h.history))
-	for i, sample := range h.history {
-		out[i] = cloneSample(sample)
+
+	out := make([]MultiTrackSample, 0, len(h.history))
+	for _, sample := range h.history {
+		filtered, ok := filterTracks(sample, filter)
+		if ok {
+			out = append(out, filtered)
+		}
 	}
 	return out
+}
+
+// TrackHistory returns the buffered samples for a given track ID.
+func (h *Hub) TrackHistory(id string) ([]TrackHistorySample, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, false
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	history, ok := h.trackHistory[id]
+	if !ok {
+		return nil, false
+	}
+	out := make([]TrackHistorySample, len(history))
+	copy(out, history)
+	return out, true
+}
+
+func (h *Hub) trackSnapshots(filter map[string]struct{}) []TrackSnapshot {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	snapshots := make([]TrackSnapshot, 0, len(h.trackHistory))
+	for id, history := range h.trackHistory {
+		if len(filter) > 0 {
+			if _, ok := filter[id]; !ok {
+				continue
+			}
+		}
+		if len(history) == 0 {
+			continue
+		}
+		last := history[len(history)-1]
+		snapshots = append(snapshots, TrackSnapshot{ID: id, LastUpdated: last.Timestamp, Sample: last.Track})
+	}
+
+	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].ID < snapshots[j].ID })
+	return snapshots
 }
 
 // UpdateSpectrumSnapshot stores the latest FFT bins for diagnostics.
@@ -734,8 +854,8 @@ func (h *Hub) ConfigSnapshot() Config {
 }
 
 // Subscribe registers a listener for live updates.
-func (h *Hub) Subscribe() (chan Sample, func()) {
-	ch := make(chan Sample, 16)
+func (h *Hub) Subscribe() (chan MultiTrackSample, func()) {
+	ch := make(chan MultiTrackSample, 16)
 	h.mu.Lock()
 	h.subscribers[ch] = struct{}{}
 	h.mu.Unlock()
@@ -981,7 +1101,8 @@ func estimateNoiseFloor(bins []float64) float64 {
 
 func (h *Hub) signalQuality(snapshot SpectrumSnapshot) SignalQuality {
 	h.mu.RLock()
-	last := h.lastSample
+	last := h.lastPrimary
+	lastSample := h.lastSample
 	h.mu.RUnlock()
 
 	quality := SignalQuality{NoiseFloor: estimateNoiseFloor(snapshot.Bins), LockState: LockStateSearching}
@@ -989,7 +1110,9 @@ func (h *Hub) signalQuality(snapshot SpectrumSnapshot) SignalQuality {
 		quality.SNR = last.SNR
 		quality.Confidence = last.Confidence
 		quality.LockState = last.LockState
-		quality.UpdatedAt = last.Timestamp
+		if lastSample != nil {
+			quality.UpdatedAt = lastSample.Timestamp
+		}
 	}
 	return quality
 }
@@ -1085,9 +1208,62 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-func (h *Hub) handleHistory(w http.ResponseWriter, _ *http.Request) {
+func parseTrackIDs(r *http.Request) []string {
+	raw := r.URL.Query().Get("tracks")
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	ids := make([]string, 0, len(parts))
+	for _, id := range parts {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func (h *Hub) handleHistory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(h.History())
+	tracks := parseTrackIDs(r)
+	_ = json.NewEncoder(w).Encode(h.History(tracks...))
+}
+
+func (h *Hub) handleTracks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	trackIDs := parseTrackIDs(r)
+	filter := trackFilterSet(trackIDs)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(h.trackSnapshots(filter))
+}
+
+func (h *Hub) handleTrackHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/tracks/")
+	id = strings.Trim(id, "/")
+	if id == "" {
+		writeJSONError(w, http.StatusBadRequest, "track id required")
+		return
+	}
+
+	history, ok := h.TrackHistory(id)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "track not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(history)
 }
 
 func (h *Hub) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
@@ -1137,6 +1313,8 @@ func (h *Hub) handleLive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+	trackIDs := parseTrackIDs(r)
+	filter := trackFilterSet(trackIDs)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1145,8 +1323,12 @@ func (h *Hub) handleLive(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// send existing history for immediate display
-	for _, sample := range h.History() {
-		payload, _ := json.Marshal(sample)
+	for _, sample := range h.History(trackIDs...) {
+		filtered, ok := filterTracks(sample, filter)
+		if !ok {
+			continue
+		}
+		payload, _ := json.Marshal(filtered)
 		w.Write([]byte("data: "))
 		w.Write(payload)
 		w.Write([]byte("\n\n"))
@@ -1159,7 +1341,11 @@ func (h *Hub) handleLive(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			payload, _ := json.Marshal(sample)
+			filtered, ok := filterTracks(sample, filter)
+			if !ok {
+				continue
+			}
+			payload, _ := json.Marshal(filtered)
 			w.Write([]byte("data: "))
 			w.Write(payload)
 			w.Write([]byte("\n\n"))
@@ -1182,8 +1368,8 @@ func (h *Hub) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	var debugCopy *DebugInfo
 	h.mu.RLock()
-	if h.lastSample != nil && h.lastSample.Debug != nil {
-		dc := *h.lastSample.Debug
+	if h.lastPrimary != nil && h.lastPrimary.Debug != nil {
+		dc := *h.lastPrimary.Debug
 		debugCopy = &dc
 	}
 	h.mu.RUnlock()
