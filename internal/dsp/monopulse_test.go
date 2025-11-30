@@ -113,11 +113,11 @@ func TestMonopulseTrackParallelMultipleDelays(t *testing.T) {
 	dsp := NewCachedDSP(nSamples)
 
 	delay := ThetaToPhase(thetaDeg, 1.0, spacingWavelength)
-	delays := []float64{delay, delay}
+	targets := []TrackTarget{{ID: 1, Delay: delay}, {ID: 2, Delay: delay}}
 
-	measurements := MonopulseTrackParallel(delays, rx0, rx1, 0, 0, 0, phaseStep, dsp)
-	if len(measurements) != len(delays) {
-		t.Fatalf("expected %d measurements, got %d", len(delays), len(measurements))
+	measurements := MonopulseTrackParallel(targets, rx0, rx1, 0, 0, 0, phaseStep, dsp)
+	if len(measurements) != len(targets) {
+		t.Fatalf("expected %d measurements, got %d", len(targets), len(measurements))
 	}
 
 	first := measurements[0]
@@ -129,6 +129,10 @@ func TestMonopulseTrackParallelMultipleDelays(t *testing.T) {
 
 	if first.Delay != second.Delay || first.Peak != second.Peak || first.MonoPhase != second.MonoPhase || first.SNR != second.SNR {
 		t.Fatalf("expected identical measurements for identical delays")
+	}
+
+	if first.ID == second.ID {
+		t.Fatalf("expected distinct IDs to be preserved")
 	}
 }
 
