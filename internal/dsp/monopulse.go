@@ -5,7 +5,6 @@ import (
 	"math/cmplx"
 	"runtime"
 	"sort"
-	"sync"
 )
 
 const (
@@ -46,6 +45,16 @@ type PeakInfo struct {
 	Bin int
 	// MonoPhase is the monopulse phase (radians) computed for this delay.
 	MonoPhase float64
+}
+
+// TrackMeasurement captures the per-target results of a monopulse tracking
+// update.
+type TrackMeasurement struct {
+	Delay     float64
+	Peak      float64
+	MonoPhase float64
+	SNR       float64
+	PeakBin   int
 }
 
 // binRange clamps [start,end) to [0,n).
@@ -238,6 +247,22 @@ func MonopulsePhase(sumFFT, deltaFFT []complex128, start, end int) float64 {
 		corr += cmplx.Conj(sumFFT[i]) * deltaFFT[i]
 	}
 	return cmplx.Phase(corr)
+}
+
+func fftToDBFS(fft []complex128) []float64 {
+	if len(fft) == 0 {
+		return nil
+	}
+	dbfs := make([]float64, len(fft))
+	for i, v := range fft {
+		mag := cmplx.Abs(v)
+		if mag == 0 {
+			dbfs[i] = -math.Inf(1)
+			continue
+		}
+		dbfs[i] = 20 * math.Log10(mag/adcScale)
+	}
+	return dbfs
 }
 
 // MonopulsePhaseRatio implements an alternative monopulse estimator:
@@ -687,77 +712,81 @@ func CoarseScanParallel(
 
 // --------- Tracking (parallel FFTs for a single step) ---------
 
-// MonopulseTrackParallel performs tracking with parallel FFT computation.
-// This version computes sum and delta FFTs concurrently using goroutines.
+// MonopulseTrackParallel performs tracking for one or more targets using shared
+// FFT results. RX channel FFTs are computed once, then reused to form the sum
+// and delta spectra for each steering hypothesis. The return slice is ordered
+// to match the provided delays.
 func MonopulseTrackParallel(
-	lastDelay float64,
+	delays []float64,
 	rx0, rx1 []complex64,
 	phaseCal float64,
 	startBin, endBin int,
 	phaseStep float64,
 	dsp *CachedDSP,
-) (float64, float64, float64, float64, int) {
+) []TrackMeasurement {
 	n := len(rx0)
 	if len(rx1) < n {
 		n = len(rx1)
 	}
-	if n == 0 {
-		return lastDelay, 0, 0, 0, 0
+	if n == 0 || len(delays) == 0 {
+		return nil
 	}
 
-	adjusted := make([]complex64, n)
-	sumBuf := make([]complex64, n)
-	deltaBuf := make([]complex64, n)
-
-	phaseRad := (lastDelay + phaseCal) * degToRad
-	phaseFactor := complex64(cmplx.Exp(complex(0, phaseRad)))
-
-	complexScale(adjusted, rx1[:n], phaseFactor)
-	sumDeltaForms(sumBuf, deltaBuf, rx0[:n], adjusted)
-
-	// Parallel FFT computation
-	var sumFFT, deltaFFT []complex128
-	var sumDBFS []float64
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		sumFFT, sumDBFS = dsp.FFTAndDBFS(sumBuf)
-	}()
-
-	go func() {
-		defer wg.Done()
-		deltaFFT, _ = dsp.FFTAndDBFS(deltaBuf)
-	}()
-
-	wg.Wait()
-
-	if len(sumDBFS) == 0 || len(sumFFT) == 0 || len(deltaFFT) == 0 {
-		return lastDelay, 0, 0, 0, 0
+	fft0 := dsp.ShiftedFFT(rx0[:n])
+	fft1 := dsp.ShiftedFFT(rx1[:n])
+	if len(fft0) == 0 || len(fft1) == 0 {
+		return nil
 	}
 
-	monoPhase := MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
-	// monoPhase := MonopulsePhaseRatio(sumFFT, deltaFFT, startBin, endBin)
+	sumFFT := make([]complex128, len(fft0))
+	deltaFFT := make([]complex128, len(fft0))
+	results := make([]TrackMeasurement, 0, len(delays))
 
-	bandStart := startBin
-	bandEnd := endBin
-	peak, peakBin, ok := peakInBand(sumDBFS, startBin, endBin)
-	if !ok {
-		bandStart = 0
-		bandEnd = len(sumDBFS)
-		peak, peakBin, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
-	}
-	if !ok {
-		peak = 0
-	}
-	snr := estimateSNR(sumDBFS, peak, peakBin, bandStart, bandEnd)
+	for _, delay := range delays {
+		phaseRad := (delay + phaseCal) * degToRad
+		phaseFactor := cmplx.Exp(complex(0, phaseRad))
 
-	newDelay := lastDelay
-	if monoPhase > monoDeadbandRad {
-		newDelay = lastDelay + phaseStep
-	} else if monoPhase < -monoDeadbandRad {
-		newDelay = lastDelay - phaseStep
+		for i := range fft0 {
+			shifted := phaseFactor * fft1[i]
+			sumFFT[i] = fft0[i] + shifted
+			deltaFFT[i] = fft0[i] - shifted
+		}
+
+		sumDBFS := fftToDBFS(sumFFT)
+		if len(sumDBFS) == 0 {
+			results = append(results, TrackMeasurement{Delay: delay})
+			continue
+		}
+
+		monoPhase := MonopulsePhase(sumFFT, deltaFFT, startBin, endBin)
+		bandStart := startBin
+		bandEnd := endBin
+		peak, peakBin, ok := peakInBand(sumDBFS, startBin, endBin)
+		if !ok {
+			bandStart = 0
+			bandEnd = len(sumDBFS)
+			peak, peakBin, ok = peakInBand(sumDBFS, 0, len(sumDBFS))
+		}
+		if !ok {
+			peak = 0
+		}
+		snr := estimateSNR(sumDBFS, peak, peakBin, bandStart, bandEnd)
+
+		newDelay := delay
+		if monoPhase > monoDeadbandRad {
+			newDelay = delay + phaseStep
+		} else if monoPhase < -monoDeadbandRad {
+			newDelay = delay - phaseStep
+		}
+
+		results = append(results, TrackMeasurement{
+			Delay:     newDelay,
+			Peak:      peak,
+			MonoPhase: monoPhase,
+			SNR:       snr,
+			PeakBin:   peakBin,
+		})
 	}
-	return newDelay, peak, monoPhase, snr, peakBin
+
+	return results
 }

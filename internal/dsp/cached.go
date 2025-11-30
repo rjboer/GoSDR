@@ -82,6 +82,36 @@ func (c *CachedDSP) FFTAndDBFS(samples []complex64) ([]complex128, []float64) {
 	return shifted, dbfs
 }
 
+// ShiftedFFT performs a windowed FFT using cached resources and returns the
+// shifted spectrum without converting to dBFS. This enables callers to reuse
+// the raw FFT results across multiple derived computations (e.g. combining
+// channels for multiple steering hypotheses) without recomputing the FFT.
+func (c *CachedDSP) ShiftedFFT(samples []complex64) []complex128 {
+	if len(samples) == 0 {
+		return nil
+	}
+
+	// If the size does not match the cached FFT, fall back to the standard
+	// path. This retains correctness even when callers pass unexpected
+	// buffer sizes at the cost of extra allocations.
+	if len(samples) != c.fftSize {
+		fft, _ := FFTAndDBFS(samples)
+		return fft
+	}
+
+	windowed := ApplyWindow(samples, c.hammingWindow)
+
+	c.mu.Lock()
+	fft := c.fft.Coefficients(nil, windowed)
+	c.mu.Unlock()
+
+	for i := range fft {
+		fft[i] /= complex(c.windowSum, 0)
+	}
+
+	return FFTShift(fft)
+}
+
 // UpdateSize recreates cached resources for a new FFT size.
 // This should be called if the sample size changes during runtime.
 func (c *CachedDSP) UpdateSize(size int) {

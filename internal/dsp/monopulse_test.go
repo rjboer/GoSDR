@@ -100,6 +100,38 @@ func TestCoarseScanParallel_SingleTarget(t *testing.T) {
 	}
 }
 
+func TestMonopulseTrackParallelMultipleDelays(t *testing.T) {
+	const (
+		nSamples          = 1024
+		thetaDeg          = 15.0
+		spacingWavelength = 0.5
+		snrDB             = 30.0
+		phaseStep         = 0.5
+	)
+
+	rx0, rx1 := simulateTwoElementArray(thetaDeg, nSamples, snrDB, spacingWavelength)
+	dsp := NewCachedDSP(nSamples)
+
+	delay := ThetaToPhase(thetaDeg, 1.0, spacingWavelength)
+	delays := []float64{delay, delay}
+
+	measurements := MonopulseTrackParallel(delays, rx0, rx1, 0, 0, 0, phaseStep, dsp)
+	if len(measurements) != len(delays) {
+		t.Fatalf("expected %d measurements, got %d", len(delays), len(measurements))
+	}
+
+	first := measurements[0]
+	second := measurements[1]
+
+	if first.Peak == 0 || second.Peak == 0 {
+		t.Fatalf("expected non-zero peaks for identical delays, got %.2f and %.2f", first.Peak, second.Peak)
+	}
+
+	if first.Delay != second.Delay || first.Peak != second.Peak || first.MonoPhase != second.MonoPhase || first.SNR != second.SNR {
+		t.Fatalf("expected identical measurements for identical delays")
+	}
+}
+
 func BenchmarkCoarseScanParallel(b *testing.B) {
 	const (
 		nSamples          = 4096

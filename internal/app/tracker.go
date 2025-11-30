@@ -48,6 +48,7 @@ const (
 // Track holds state for a single target being tracked.
 type Track struct {
 	ID                int
+	PhaseDelay        float64
 	Angle             float64
 	Peak              float64
 	SNR               float64
@@ -101,7 +102,7 @@ func NewTrackManager(maxTracks int, timeout time.Duration, minSNR float64, histo
 }
 
 // Upsert updates the closest matching track or creates a new one if capacity allows.
-func (tm *TrackManager) Upsert(angle, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) *Track {
+func (tm *TrackManager) Upsert(angle, phaseDelay, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) *Track {
 	if tm == nil {
 		return nil
 	}
@@ -115,7 +116,7 @@ func (tm *TrackManager) Upsert(angle, peak, snr, confidence float64, lock teleme
 		if len(tm.tracks) >= tm.maxTracks {
 			tm.dropOldest()
 		}
-		track = tm.newTrack(angle, peak, snr, confidence, lock, now)
+		track = tm.newTrack(angle, phaseDelay, peak, snr, confidence, lock, now)
 		tm.markMisses(track.ID, now)
 		return track
 	}
@@ -123,6 +124,7 @@ func (tm *TrackManager) Upsert(angle, peak, snr, confidence float64, lock teleme
 	tm.markMisses(track.ID, now)
 
 	track.Angle = angle
+	track.PhaseDelay = phaseDelay
 	track.Peak = peak
 	track.SNR = snr
 	track.Confidence = confidence
@@ -153,11 +155,12 @@ func (tm *TrackManager) Tracks() []Track {
 	return result
 }
 
-func (tm *TrackManager) newTrack(angle, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) *Track {
+func (tm *TrackManager) newTrack(angle, phaseDelay, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) *Track {
 	id := tm.nextID
 	tm.nextID++
 	track := &Track{
 		ID:               id,
+		PhaseDelay:       phaseDelay,
 		Angle:            angle,
 		Peak:             peak,
 		SNR:              snr,
@@ -424,7 +427,16 @@ func (t *Tracker) Run(ctx context.Context) error {
 
 			confidence := t.trackingConfidence(snr, monoPhase)
 			state := t.updateLockState(snr, confidence)
-			t.updateTracks(theta, peak, snr, confidence)
+			t.lockState = state
+
+			now := time.Now()
+			for i, pk := range coarsePeaks {
+				if i >= t.cfg.MaxTracks {
+					break
+				}
+				conf := t.trackingConfidence(pk.SNR, pk.MonoPhase)
+				t.updateTracks(pk.Angle, pk.Phase, pk.Peak, pk.SNR, conf, state, now)
+			}
 
 			var debug *telemetry.DebugInfo
 			if t.cfg.DebugMode {
@@ -449,34 +461,71 @@ func (t *Tracker) Run(ctx context.Context) error {
 		}
 
 		// Subsequent iterations: monopulse tracking
-		// Use parallel tracking with cached DSP
+		// Use shared FFTs with cached DSP
 		trackStart := time.Now()
-		var peak, monoPhase, snr float64
-		var peakBin int
-		t.lastDelay, peak, monoPhase, snr, peakBin = dsp.MonopulseTrackParallel(t.lastDelay, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
+		activeTracks := t.manager.Tracks()
+		var trackDelays []float64
+		var trackIDs []int
+		for _, track := range activeTracks {
+			if track.State == TrackLost {
+				continue
+			}
+			trackDelays = append(trackDelays, track.PhaseDelay)
+			trackIDs = append(trackIDs, track.ID)
+		}
+		if len(trackDelays) == 0 {
+			trackDelays = []float64{t.lastDelay}
+			trackIDs = []int{-1}
+		}
+
+		measurements := dsp.MonopulseTrackParallel(trackDelays, rx0, rx1, t.cfg.PhaseCal, t.startBin, t.endBin, t.cfg.PhaseStep, t.dsp)
 		trackDuration := time.Since(trackStart)
-		theta := dsp.PhaseToTheta(t.lastDelay, t.cfg.RxLO, t.cfg.SpacingWavelength)
+		if len(measurements) == 0 {
+			t.logger.Warn("tracking produced no measurements", logging.Field{Key: "subsystem", Value: "tracker"})
+			iteration++
+			continue
+		}
+
+		bestIdx := 0
+		for i := 1; i < len(measurements); i++ {
+			if measurements[i].SNR > measurements[bestIdx].SNR {
+				bestIdx = i
+			}
+		}
+
+		best := measurements[bestIdx]
+		theta := dsp.PhaseToTheta(best.Delay, t.cfg.RxLO, t.cfg.SpacingWavelength)
+		confidence := t.trackingConfidence(best.SNR, best.MonoPhase)
+		state := t.updateLockState(best.SNR, confidence)
+		t.lockState = state
+		t.lastDelay = best.Delay
 		t.appendHistory(theta)
 
-		confidence := t.trackingConfidence(snr, monoPhase)
-		state := t.updateLockState(snr, confidence)
-		t.updateTracks(theta, peak, snr, confidence)
+		now := time.Now()
+		for i, m := range measurements {
+			if i >= len(trackIDs) {
+				break
+			}
+			angle := dsp.PhaseToTheta(m.Delay, t.cfg.RxLO, t.cfg.SpacingWavelength)
+			conf := t.trackingConfidence(m.SNR, m.MonoPhase)
+			t.updateTracks(angle, m.Delay, m.Peak, m.SNR, conf, state, now)
+		}
 
 		var debug *telemetry.DebugInfo
 		if t.cfg.DebugMode {
 			debug = &telemetry.DebugInfo{
-				PhaseDelayDeg:     t.lastDelay,
-				MonopulsePhaseRad: monoPhase,
+				PhaseDelayDeg:     best.Delay,
+				MonopulsePhaseRad: best.MonoPhase,
 				Peak: telemetry.PeakDebug{
-					Value: peak,
-					Bin:   peakBin,
+					Value: best.Peak,
+					Bin:   best.PeakBin,
 					Band:  [2]int{t.startBin, t.endBin},
 				},
 			}
 		}
 
 		if t.reporter != nil {
-			t.reporter.Report(theta, peak, snr, confidence, state, debug)
+			t.reporter.Report(theta, best.Peak, best.SNR, confidence, state, debug)
 		}
 		t.logger.Debug("tracking iteration", logging.Field{Key: "iteration", Value: iteration}, logging.Field{Key: "duration_ms", Value: trackDuration.Seconds() * 1000})
 		iteration++
@@ -575,11 +624,11 @@ func (t *Tracker) appendHistory(theta float64) {
 	}
 }
 
-func (t *Tracker) updateTracks(theta, peak, snr, confidence float64) {
+func (t *Tracker) updateTracks(theta, delay, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) {
 	if t.manager == nil {
 		return
 	}
-	t.manager.Upsert(theta, peak, snr, confidence, t.lockState, time.Now())
+	t.manager.Upsert(theta, delay, peak, snr, confidence, lock, now)
 }
 
 func (t *Tracker) warmup(ctx context.Context) error {
