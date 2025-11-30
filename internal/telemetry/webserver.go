@@ -28,6 +28,8 @@ func NewWebServer(addr string, hub *Hub, logger logging.Logger) *WebServer {
 	mux.Handle("/static/", http.FileServer(http.FS(staticFiles)))
 	mux.HandleFunc("/api/history", hub.handleHistory)
 	mux.HandleFunc("/api/live", hub.handleLive)
+	mux.HandleFunc("/api/tracks", hub.handleTracks)
+	mux.HandleFunc("/api/tracks/", hub.handleTrackHistory)
 	mux.HandleFunc("/api/diagnostics", hub.handleDiagnostics)
 	mux.HandleFunc("/api/diagnostics/metrics", hub.handleMetricsStream)
 	mux.HandleFunc("/api/diagnostics/health", hub.handleHealth)
