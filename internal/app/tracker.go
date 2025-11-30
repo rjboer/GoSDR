@@ -47,28 +47,38 @@ const (
 
 // Track holds state for a single target being tracked.
 type Track struct {
-	ID         int
-	Angle      float64
-	Peak       float64
-	SNR        float64
-	Confidence float64
-	LockState  telemetry.LockState
-	History    []float64
-	State      TrackLifecycle
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	LastSeen   time.Time
+	ID                int
+	Angle             float64
+	Peak              float64
+	SNR               float64
+	Confidence        float64
+	Score             float64
+	LockState         telemetry.LockState
+	History           []float64
+	State             TrackLifecycle
+	DetectionHistory  []bool
+	ConsecutiveHits   int
+	ConsecutiveMisses int
+	Misses            int
+	TotalDetections   int
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	LastSeen          time.Time
 }
 
 // TrackManager manages creation and lifecycle of tracks.
 type TrackManager struct {
-	tracks       map[int]*Track
-	order        []int
-	nextID       int
-	maxTracks    int
-	timeout      time.Duration
-	minSNR       float64
-	historyLimit int
+	tracks        map[int]*Track
+	order         []int
+	nextID        int
+	maxTracks     int
+	timeout       time.Duration
+	minSNR        float64
+	historyLimit  int
+	gate          float64
+	confirmHits   int
+	confirmWindow int
+	maxMisses     int
 }
 
 // NewTrackManager creates a track manager with lifecycle controls.
@@ -77,12 +87,16 @@ func NewTrackManager(maxTracks int, timeout time.Duration, minSNR float64, histo
 		maxTracks = 1
 	}
 	return &TrackManager{
-		tracks:       make(map[int]*Track),
-		nextID:       1,
-		maxTracks:    maxTracks,
-		timeout:      timeout,
-		minSNR:       minSNR,
-		historyLimit: historyLimit,
+		tracks:        make(map[int]*Track),
+		nextID:        1,
+		maxTracks:     maxTracks,
+		timeout:       timeout,
+		minSNR:        minSNR,
+		historyLimit:  historyLimit,
+		gate:          5.0,
+		confirmHits:   3,
+		confirmWindow: 5,
+		maxMisses:     3,
 	}
 }
 
@@ -102,20 +116,25 @@ func (tm *TrackManager) Upsert(angle, peak, snr, confidence float64, lock teleme
 			tm.dropOldest()
 		}
 		track = tm.newTrack(angle, peak, snr, confidence, lock, now)
-	} else {
-		track.Angle = angle
-		track.Peak = peak
-		track.SNR = snr
-		track.Confidence = confidence
-		track.LockState = lock
-		track.State = tm.nextLifecycle(track.State)
-		track.UpdatedAt = now
-		track.LastSeen = now
-		track.History = append(track.History, angle)
-		if tm.historyLimit > 0 && len(track.History) > tm.historyLimit {
-			track.History = track.History[len(track.History)-tm.historyLimit:]
-		}
+		tm.markMisses(track.ID, now)
+		return track
 	}
+
+	tm.markMisses(track.ID, now)
+
+	track.Angle = angle
+	track.Peak = peak
+	track.SNR = snr
+	track.Confidence = confidence
+	track.LockState = lock
+	track.UpdatedAt = now
+	track.LastSeen = now
+	track.History = append(track.History, angle)
+	if tm.historyLimit > 0 && len(track.History) > tm.historyLimit {
+		track.History = track.History[len(track.History)-tm.historyLimit:]
+	}
+	tm.recordDetection(track, true)
+	tm.updateLifecycle(track)
 
 	return track
 }
@@ -138,25 +157,29 @@ func (tm *TrackManager) newTrack(angle, peak, snr, confidence float64, lock tele
 	id := tm.nextID
 	tm.nextID++
 	track := &Track{
-		ID:         id,
-		Angle:      angle,
-		Peak:       peak,
-		SNR:        snr,
-		Confidence: confidence,
-		LockState:  lock,
-		State:      TrackTentative,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		LastSeen:   now,
-		History:    []float64{angle},
+		ID:               id,
+		Angle:            angle,
+		Peak:             peak,
+		SNR:              snr,
+		Confidence:       confidence,
+		Score:            tm.scoreTrack(snr, confidence, 0),
+		LockState:        lock,
+		State:            TrackTentative,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		LastSeen:         now,
+		History:          []float64{angle},
+		DetectionHistory: []bool{true},
+		ConsecutiveHits:  1,
+		TotalDetections:  1,
 	}
 	tm.tracks[id] = track
 	tm.order = append(tm.order, id)
+	tm.updateLifecycle(track)
 	return track
 }
 
 func (tm *TrackManager) findMatch(angle float64) *Track {
-	const angleMatchThreshold = 5.0
 	var (
 		best      *Track
 		bestDelta = math.MaxFloat64
@@ -166,7 +189,7 @@ func (tm *TrackManager) findMatch(angle float64) *Track {
 			continue
 		}
 		delta := math.Abs(track.Angle - angle)
-		if delta < bestDelta && delta <= angleMatchThreshold {
+		if delta < bestDelta && delta <= tm.gate {
 			best = track
 			bestDelta = delta
 		}
@@ -189,27 +212,77 @@ func (tm *TrackManager) expire(now time.Time) {
 	if tm.timeout <= 0 {
 		return
 	}
-	for _, track := range tm.tracks {
-		if track.State == TrackLost {
+	for id, track := range tm.tracks {
+		if now.Sub(track.LastSeen) > tm.timeout {
+			track.State = TrackLost
+			tm.removeTrack(id)
+		}
+	}
+}
+
+func (tm *TrackManager) markMisses(matchedID int, now time.Time) {
+	for id, track := range tm.tracks {
+		if id == matchedID || track.State == TrackLost {
 			continue
 		}
-		if now.Sub(track.LastSeen) > tm.timeout {
+		tm.recordDetection(track, false)
+		if track.ConsecutiveMisses >= tm.maxMisses {
 			track.State = TrackLost
 		}
 	}
 }
 
-func (tm *TrackManager) nextLifecycle(current TrackLifecycle) TrackLifecycle {
-	switch current {
-	case TrackTentative:
-		return TrackConfirmed
-	case TrackConfirmed:
-		return TrackConfirmed
-	case TrackLost:
-		return TrackLost
-	default:
-		return TrackTentative
+func (tm *TrackManager) recordDetection(track *Track, hit bool) {
+	track.DetectionHistory = append(track.DetectionHistory, hit)
+	if tm.confirmWindow > 0 && len(track.DetectionHistory) > tm.confirmWindow {
+		track.DetectionHistory = track.DetectionHistory[len(track.DetectionHistory)-tm.confirmWindow:]
 	}
+
+	if hit {
+		track.ConsecutiveHits++
+		track.ConsecutiveMisses = 0
+		track.TotalDetections++
+	} else {
+		track.ConsecutiveMisses++
+		track.ConsecutiveHits = 0
+		track.Misses++
+	}
+
+	track.Score = tm.scoreTrack(track.SNR, track.Confidence, track.ConsecutiveMisses)
+}
+
+func (tm *TrackManager) updateLifecycle(track *Track) {
+	hits := 0
+	for _, detected := range track.DetectionHistory {
+		if detected {
+			hits++
+		}
+	}
+
+	if hits >= tm.confirmHits && len(track.DetectionHistory) >= tm.confirmHits {
+		track.State = TrackConfirmed
+	}
+
+	if track.ConsecutiveMisses >= tm.maxMisses {
+		track.State = TrackLost
+	}
+}
+
+func (tm *TrackManager) removeTrack(id int) {
+	delete(tm.tracks, id)
+	for i, orderID := range tm.order {
+		if orderID == id {
+			tm.order = append(tm.order[:i], tm.order[i+1:]...)
+			break
+		}
+	}
+}
+
+func (tm *TrackManager) scoreTrack(snr, confidence float64, misses int) float64 {
+	snrScore := clamp(snr/30.0, 0, 1)
+	confScore := clamp(confidence, 0, 1)
+	missPenalty := clamp(1-0.2*float64(misses), 0, 1)
+	return 0.6*snrScore + 0.3*confScore + 0.1*missPenalty
 }
 
 // Tracker wires SDR input into the DSP monopulse tracking loop.
