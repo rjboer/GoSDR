@@ -67,6 +67,17 @@ type Track struct {
 	LastSeen          time.Time
 }
 
+// Detection represents a single observation used to update a track.
+type Detection struct {
+	ID         int
+	PhaseDelay float64
+	Angle      float64
+	Peak       float64
+	SNR        float64
+	Confidence float64
+	LockState  telemetry.LockState
+}
+
 // TrackManager manages creation and lifecycle of tracks.
 type TrackManager struct {
 	tracks        map[int]*Track
@@ -101,6 +112,47 @@ func NewTrackManager(maxTracks int, timeout time.Duration, minSNR float64, histo
 	}
 }
 
+// Update ingests a batch of detections, updates matching tracks, creates new
+// ones when capacity allows, and prunes tracks based on timeouts and score.
+// Returns the current list of tracks ordered by creation time.
+func (tm *TrackManager) Update(detections []Detection, now time.Time) []Track {
+	if tm == nil {
+		return nil
+	}
+
+	tm.expire(now)
+
+	matched := make(map[int]bool, len(detections))
+	for _, det := range detections {
+		if det.SNR < tm.minSNR {
+			continue
+		}
+
+		track := tm.findMatch(det.Angle)
+		if det.ID > 0 {
+			if byID, ok := tm.tracks[det.ID]; ok {
+				track = byID
+			}
+		}
+
+		if track == nil {
+			if len(tm.tracks) >= tm.maxTracks {
+				tm.pruneExcess()
+			}
+			track = tm.newTrack(det.Angle, det.PhaseDelay, det.Peak, det.SNR, det.Confidence, det.LockState, now)
+		} else {
+			tm.updateTrack(track, det.Angle, det.PhaseDelay, det.Peak, det.SNR, det.Confidence, det.LockState, now)
+		}
+		matched[track.ID] = true
+	}
+
+	tm.markUnmatched(matched, now)
+	tm.expire(now)
+	tm.pruneExcess()
+
+	return tm.Tracks()
+}
+
 // Upsert updates the closest matching track or creates a new one if capacity allows.
 func (tm *TrackManager) Upsert(angle, phaseDelay, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) *Track {
 	if tm == nil {
@@ -123,21 +175,7 @@ func (tm *TrackManager) Upsert(angle, phaseDelay, peak, snr, confidence float64,
 
 	tm.markMisses(track.ID, now)
 
-	track.Angle = angle
-	track.PhaseDelay = phaseDelay
-	track.Peak = peak
-	track.SNR = snr
-	track.Confidence = confidence
-	track.LockState = lock
-	track.UpdatedAt = now
-	track.LastSeen = now
-	track.History = append(track.History, angle)
-	if tm.historyLimit > 0 && len(track.History) > tm.historyLimit {
-		track.History = track.History[len(track.History)-tm.historyLimit:]
-	}
-	tm.recordDetection(track, true)
-	tm.updateLifecycle(track)
-
+	tm.updateTrack(track, angle, phaseDelay, peak, snr, confidence, lock, now)
 	return track
 }
 
@@ -154,21 +192,7 @@ func (tm *TrackManager) UpdateByID(id int, angle, phaseDelay, peak, snr, confide
 	}
 	tm.markMisses(track.ID, now)
 
-	track.Angle = angle
-	track.PhaseDelay = phaseDelay
-	track.Peak = peak
-	track.SNR = snr
-	track.Confidence = confidence
-	track.LockState = lock
-	track.UpdatedAt = now
-	track.LastSeen = now
-	track.History = append(track.History, angle)
-	if tm.historyLimit > 0 && len(track.History) > tm.historyLimit {
-		track.History = track.History[len(track.History)-tm.historyLimit:]
-	}
-	tm.recordDetection(track, true)
-	tm.updateLifecycle(track)
-
+	tm.updateTrack(track, angle, phaseDelay, peak, snr, confidence, lock, now)
 	return track
 }
 
@@ -191,12 +215,23 @@ func (tm *TrackManager) PhaseDelays() (ids []int, delays []float64) {
 	if tm == nil {
 		return nil, nil
 	}
+	confirmed := make([]*Track, 0, len(tm.tracks))
+	tentative := make([]*Track, 0, len(tm.tracks))
+
 	for _, id := range tm.order {
 		track, ok := tm.tracks[id]
 		if !ok || track.State == TrackLost {
 			continue
 		}
-		ids = append(ids, id)
+		if track.State == TrackConfirmed {
+			confirmed = append(confirmed, track)
+			continue
+		}
+		tentative = append(tentative, track)
+	}
+
+	for _, track := range append(confirmed, tentative...) {
+		ids = append(ids, track.ID)
 		delays = append(delays, track.PhaseDelay)
 	}
 	return ids, delays
@@ -227,6 +262,23 @@ func (tm *TrackManager) newTrack(angle, phaseDelay, peak, snr, confidence float6
 	tm.order = append(tm.order, id)
 	tm.updateLifecycle(track)
 	return track
+}
+
+func (tm *TrackManager) updateTrack(track *Track, angle, phaseDelay, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) {
+	track.Angle = angle
+	track.PhaseDelay = phaseDelay
+	track.Peak = peak
+	track.SNR = snr
+	track.Confidence = confidence
+	track.LockState = lock
+	track.UpdatedAt = now
+	track.LastSeen = now
+	track.History = append(track.History, angle)
+	if tm.historyLimit > 0 && len(track.History) > tm.historyLimit {
+		track.History = track.History[len(track.History)-tm.historyLimit:]
+	}
+	tm.recordDetection(track, true)
+	tm.updateLifecycle(track)
 }
 
 func (tm *TrackManager) findMatch(angle float64) *Track {
@@ -273,6 +325,21 @@ func (tm *TrackManager) expire(now time.Time) {
 func (tm *TrackManager) markMisses(matchedID int, now time.Time) {
 	for id, track := range tm.tracks {
 		if id == matchedID || track.State == TrackLost {
+			continue
+		}
+		tm.recordDetection(track, false)
+		if track.ConsecutiveMisses >= tm.maxMisses {
+			track.State = TrackLost
+		}
+	}
+}
+
+func (tm *TrackManager) markUnmatched(matched map[int]bool, now time.Time) {
+	for id, track := range tm.tracks {
+		if track.State == TrackLost {
+			continue
+		}
+		if matched[id] {
 			continue
 		}
 		tm.recordDetection(track, false)
@@ -335,6 +402,29 @@ func (tm *TrackManager) scoreTrack(snr, confidence float64, misses int) float64 
 	return 0.6*snrScore + 0.3*confScore + 0.1*missPenalty
 }
 
+func (tm *TrackManager) pruneExcess() {
+	for len(tm.tracks) > tm.maxTracks {
+		var (
+			dropID    int
+			dropScore = math.MaxFloat64
+		)
+		for _, track := range tm.tracks {
+			if track.State == TrackLost {
+				dropID = track.ID
+				break
+			}
+			if track.Score < dropScore {
+				dropScore = track.Score
+				dropID = track.ID
+			}
+		}
+		if dropID == 0 {
+			return
+		}
+		tm.removeTrack(dropID)
+	}
+}
+
 // Tracker wires SDR input into the DSP monopulse tracking loop.
 type Tracker struct {
 	sdr       sdr.SDR
@@ -350,6 +440,7 @@ type Tracker struct {
 	stableCnt int
 	dropCnt   int
 	manager   *TrackManager
+	mode      string
 }
 
 func NewTracker(backend sdr.SDR, reporter telemetry.Reporter, logger logging.Logger, cfg Config) *Tracker {
@@ -393,13 +484,16 @@ func (t *Tracker) Init(ctx context.Context) error {
 			t.cfg.MaxTracks = 1
 		}
 	}
+
 	if t.cfg.TrackTimeout == 0 {
 		t.cfg.TrackTimeout = 3 * time.Second
 	}
 	if t.cfg.MinSNRThreshold == 0 {
 		t.cfg.MinSNRThreshold = 3
 	}
-	t.manager = NewTrackManager(t.cfg.MaxTracks, t.cfg.TrackTimeout, t.cfg.MinSNRThreshold, t.cfg.HistoryLimit)
+
+	t.applyTrackingMode(t.cfg.TrackingMode)
+
 	// Update cached DSP size if needed
 	t.dsp.UpdateSize(t.cfg.NumSamples)
 	if err := t.sdr.Init(ctx, sdr.Config{
@@ -426,6 +520,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 	if err := t.warmup(ctx); err != nil {
 		return fmt.Errorf("warmup: %w", err)
 	}
+	multiMode := t.mode == "multi"
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -476,13 +571,24 @@ func (t *Tracker) Run(ctx context.Context) error {
 			state := t.updateLockState(snr, confidence)
 			t.lockState = state
 
-			now := time.Now()
-			for i, pk := range coarsePeaks {
-				if i >= t.cfg.MaxTracks {
-					break
+			if multiMode && t.manager != nil {
+				now := time.Now()
+				detections := make([]Detection, 0, min(len(coarsePeaks), t.cfg.MaxTracks))
+				for i, pk := range coarsePeaks {
+					if i >= t.cfg.MaxTracks {
+						break
+					}
+					conf := t.trackingConfidence(pk.SNR, pk.MonoPhase)
+					detections = append(detections, Detection{
+						PhaseDelay: pk.Phase,
+						Angle:      pk.Angle,
+						Peak:       pk.Peak,
+						SNR:        pk.SNR,
+						Confidence: conf,
+						LockState:  state,
+					})
 				}
-				conf := t.trackingConfidence(pk.SNR, pk.MonoPhase)
-				t.updateTracks(-1, pk.Angle, pk.Phase, pk.Peak, pk.SNR, conf, state, now)
+				t.manager.Update(detections, now)
 			}
 
 			var debug *telemetry.DebugInfo
@@ -511,7 +617,10 @@ func (t *Tracker) Run(ctx context.Context) error {
 		// Use shared FFTs with cached DSP
 		trackStart := time.Now()
 		trackIDs, trackDelays := t.manager.PhaseDelays()
-		if len(trackDelays) == 0 {
+		if !multiMode || t.manager == nil {
+			trackDelays = []float64{t.lastDelay}
+			trackIDs = []int{-1}
+		} else if len(trackDelays) == 0 {
 			trackDelays = []float64{t.lastDelay}
 			trackIDs = []int{-1}
 		}
@@ -549,14 +658,26 @@ func (t *Tracker) Run(ctx context.Context) error {
 		t.appendHistory(theta)
 
 		now := time.Now()
-		for i, m := range measurements {
-			angle := dsp.PhaseToTheta(m.Delay, t.cfg.RxLO, t.cfg.SpacingWavelength)
-			conf := t.trackingConfidence(m.SNR, m.MonoPhase)
-			trackID := -1
-			if i < len(trackIDs) {
-				trackID = trackIDs[i]
+		if multiMode && t.manager != nil {
+			detections := make([]Detection, 0, len(measurements))
+			for i, m := range measurements {
+				angle := dsp.PhaseToTheta(m.Delay, t.cfg.RxLO, t.cfg.SpacingWavelength)
+				conf := t.trackingConfidence(m.SNR, m.MonoPhase)
+				trackID := -1
+				if i < len(trackIDs) {
+					trackID = trackIDs[i]
+				}
+				detections = append(detections, Detection{
+					ID:         trackID,
+					PhaseDelay: m.Delay,
+					Angle:      angle,
+					Peak:       m.Peak,
+					SNR:        m.SNR,
+					Confidence: conf,
+					LockState:  state,
+				})
 			}
-			t.updateTracks(trackID, angle, m.Delay, m.Peak, m.SNR, conf, state, now)
+			t.manager.Update(detections, now)
 		}
 
 		var debug *telemetry.DebugInfo
@@ -643,6 +764,30 @@ func (t *Tracker) updateLockState(snr float64, confidence float64) telemetry.Loc
 	return t.lockState
 }
 
+func (t *Tracker) applyTrackingMode(mode string) {
+	prevMode := t.mode
+
+	if mode != "multi" {
+		mode = "single"
+	}
+
+	if prevMode != mode {
+		t.history = nil
+		t.lastDelay = 0
+		t.lockState = telemetry.LockStateSearching
+		t.stableCnt = 0
+		t.dropCnt = 0
+	}
+
+	if mode == "multi" {
+		t.manager = NewTrackManager(t.cfg.MaxTracks, t.cfg.TrackTimeout, t.cfg.MinSNRThreshold, t.cfg.HistoryLimit)
+	} else {
+		t.manager = nil
+	}
+
+	t.mode = mode
+}
+
 func clamp(value, min, max float64) float64 {
 	if value < min {
 		return min
@@ -651,6 +796,13 @@ func clamp(value, min, max float64) float64 {
 		return max
 	}
 	return value
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // LastDelay returns the most recent phase delay used by the tracker.
