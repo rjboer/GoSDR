@@ -126,20 +126,23 @@ the goal of the multi-target tracking is to detect multiple targets in the same 
 
 ---
 
-## Phase 6: API & Backend ⏱️ 2-3 hours
+## Phase 6: API & Backend ⏱️ 2-3 hours ✅
 
 ### Telemetry API Updates
-- [ ] Update `/api/live` SSE to send multi-track data
-- [ ] Update `/api/history` to support multi-track
-- [ ] Add `/api/tracks` endpoint for current track list
-- [ ] Add `/api/tracks/{id}` for individual track details
+- [x] Update `/api/live` SSE to send multi-track data (with track filtering)
+- [x] Update `/api/history` to support multi-track (returns MultiTrackSample array)
+- [x] Add `/api/tracks` endpoint for current track list (returns TrackSnapshot array)
+- [x] Add `/api/tracks/{id}` for individual track details (returns TrackHistorySample array)
 - [ ] Update JSON schema documentation
 
 ### Hub Updates
-- [ ] Modify [Hub](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go#448-471) to store multi-track samples
-- [ ] Update history buffer for multi-track data
-- [ ] Implement track-specific history queries
-- [ ] Add track filtering in API responses
+- [x] Modify [Hub](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/telemetry/hub.go#448-471) to store multi-track samples
+- [x] Update history buffer for multi-track data (trackHistory map)
+- [x] Implement track-specific history queries (TrackHistory method)
+- [x] Add track filtering in API responses (filterTracks helper)
+- [x] Add TrackSample, MultiTrackSample, TrackSnapshot types
+- [x] Implement Subscribe() returning chan MultiTrackSample
+- [x] Add ReportMultiTrack to Reporter interface
 
 ---
 
