@@ -108,6 +108,29 @@
             <input id="trackingLength" name="trackingLength" type="number" min="1" max="10000" step="1" required>
             <small>Loop iterations to run</small>
           </label>
+          <label class="field" for="trackingMode">
+            <span>Tracking mode</span>
+            <select id="trackingMode" name="trackingMode">
+              <option value="single">Single</option>
+              <option value="multi">Multi</option>
+            </select>
+            <small>Single target or multi-target tracking.</small>
+          </label>
+          <label class="field" for="maxTracks">
+            <span>Max tracks</span>
+            <input id="maxTracks" name="maxTracks" type="number" min="1" max="256" step="1" required>
+            <small>Maximum concurrent targets.</small>
+          </label>
+          <label class="field" for="trackTimeoutMs">
+            <span>Track timeout (ms)</span>
+            <input id="trackTimeoutMs" name="trackTimeoutMs" type="number" min="100" max="120000" step="100" required>
+            <small>Age before inactive tracks expire.</small>
+          </label>
+          <label class="field" for="snrThreshold">
+            <span>SNR threshold (dB)</span>
+            <input id="snrThreshold" name="snrThreshold" type="number" step="0.5" required>
+            <small>Minimum SNR to promote a track.</small>
+          </label>
           <label class="field" for="phaseStepDeg">
             <span>Phase step (deg)</span>
             <input id="phaseStepDeg" name="phaseStepDeg" type="number" min="0.01" max="90" step="0.1" required>

@@ -55,6 +55,34 @@
         </div>
       </div>
       <div class="info-grid">
+        <div class="chart-panel tracks-panel">
+          <div class="tracks-header">
+            <div>
+              <h2>Tracks</h2>
+              <p class="muted">Live detections with state-aware colors</p>
+            </div>
+            <div class="tracks-controls" aria-label="Track filters">
+              <input id="trackFilter" type="search" placeholder="Filter by ID" aria-label="Filter tracks by ID" />
+              <select id="trackStateFilter" aria-label="Filter tracks by state">
+                <option value="">Any state</option>
+                <option value="locked">Locked</option>
+                <option value="tracking">Tracking</option>
+                <option value="searching">Searching</option>
+              </select>
+            </div>
+          </div>
+          <div class="tracks-table" role="table" aria-label="Track list">
+            <div class="tracks-row tracks-header-row" role="row">
+              <button type="button" data-track-sort="id">ID</button>
+              <button type="button" data-track-sort="angleDeg">Angle</button>
+              <button type="button" data-track-sort="snr">SNR</button>
+              <button type="button" data-track-sort="confidence">Confidence</button>
+              <button type="button" data-track-sort="lockState">State</button>
+              <button type="button" data-track-sort="ageSeconds">Age</button>
+            </div>
+            <div id="tracksTableBody" class="tracks-body" role="rowgroup"></div>
+          </div>
+        </div>
         <div class="chart-panel summary-panel">
           <h2>Settings Summary</h2>
           <div class="summary-grid">
@@ -77,6 +105,22 @@
             <div class="summary-card">
               <p class="muted">FFT size</p>
               <div id="summaryFftSize" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Tracking mode</p>
+              <div id="summaryTrackingMode" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Max tracks</p>
+              <div id="summaryMaxTracks" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">Track timeout</p>
+              <div id="summaryTimeout" class="metric-value">--</div>
+            </div>
+            <div class="summary-card">
+              <p class="muted">SNR threshold</p>
+              <div id="summarySnrThreshold" class="metric-value">--</div>
             </div>
           </div>
         </div>
@@ -130,6 +174,11 @@
             <p class="muted">Update rate</p>
             <div id="updateRate" class="metric-value">--</div>
           </div>
+        </div>
+        <div class="chart-panel track-stats-panel">
+          <h2>Track Statistics</h2>
+          <p class="muted">Rolling averages per tracked ID</p>
+          <div id="trackStatsContainer" class="track-stats-container"></div>
         </div>
 
         <!-- New cluster for SNR / Confidence / Lock -->

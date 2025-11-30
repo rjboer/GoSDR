@@ -32,6 +32,10 @@ type Config struct {
 	BufferSize        int     `json:"bufferSize"`
 	HistoryLimit      int     `json:"historyLimit"`
 	TrackingLength    int     `json:"trackingLength"`
+	TrackingMode      string  `json:"trackingMode"`
+	MaxTracks         int     `json:"maxTracks"`
+	TrackTimeoutMs    int     `json:"trackTimeoutMs"`
+	SnrThreshold      float64 `json:"snrThreshold"`
 	PhaseStepDeg      float64 `json:"phaseStepDeg"`
 	ScanStepDeg       float64 `json:"scanStepDeg"`
 	PhaseCalDeg       float64 `json:"phaseCalDeg"`
@@ -57,6 +61,10 @@ const (
 	maxHistoryLimit        = 10_000
 	minNumSamples          = 64
 	maxNumSamples          = 1 << 20
+	minMaxTracks           = 1
+	maxMaxTracks           = 256
+	minTrackTimeoutMs      = 100
+	maxTrackTimeoutMs      = 120_000
 	minTracking            = 1
 	maxTracking            = 10_000
 	configFilePath         = "config.json"
@@ -77,6 +85,10 @@ type persistentConfig struct {
 	ScanStep       float64 `json:"scan_step"`
 	Spacing        float64 `json:"spacing_wavelength"`
 	PhaseDelta     float64 `json:"phase_delta"`
+	TrackingMode   string  `json:"tracking_mode"`
+	MaxTracks      int     `json:"max_tracks"`
+	TrackTimeoutMs int     `json:"track_timeout_ms"`
+	SnrThreshold   float64 `json:"snr_threshold_db"`
 	SDRBackend     string  `json:"sdr_backend"`
 	SDRURI         string  `json:"sdr_uri"`
 	WarmupBuffers  int     `json:"warmup_buffers"`
@@ -109,6 +121,10 @@ func defaultConfig() Config {
 		BufferSize:        4096,
 		HistoryLimit:      500,
 		TrackingLength:    50,
+		TrackingMode:      "multi",
+		MaxTracks:         32,
+		TrackTimeoutMs:    5000,
+		SnrThreshold:      6,
 		PhaseStepDeg:      1,
 		ScanStepDeg:       2,
 		PhaseCalDeg:       0,
@@ -141,6 +157,10 @@ func defaultPersistentConfig() persistentConfig {
 		ScanStep:       2,
 		Spacing:        0.5,
 		PhaseDelta:     30,
+		TrackingMode:   "multi",
+		MaxTracks:      32,
+		TrackTimeoutMs: 5000,
+		SnrThreshold:   6,
 		SDRBackend:     "mock",
 		SDRURI:         "",
 		WarmupBuffers:  3,
@@ -161,6 +181,10 @@ func configFromPersistent(stored persistentConfig) Config {
 		NumSamples:        stored.NumSamples,
 		HistoryLimit:      stored.HistoryLimit,
 		TrackingLength:    stored.TrackingLength,
+		TrackingMode:      stored.TrackingMode,
+		MaxTracks:         stored.MaxTracks,
+		TrackTimeoutMs:    stored.TrackTimeoutMs,
+		SnrThreshold:      stored.SnrThreshold,
 		PhaseStepDeg:      stored.PhaseStep,
 		ScanStepDeg:       stored.ScanStep,
 		PhaseCalDeg:       stored.PhaseCal,
@@ -206,6 +230,18 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	}
 	if cfg.TrackingLength == 0 {
 		cfg.TrackingLength = base.TrackingLength
+	}
+	if cfg.TrackingMode == "" {
+		cfg.TrackingMode = base.TrackingMode
+	}
+	if cfg.MaxTracks == 0 {
+		cfg.MaxTracks = base.MaxTracks
+	}
+	if cfg.TrackTimeoutMs == 0 {
+		cfg.TrackTimeoutMs = base.TrackTimeoutMs
+	}
+	if cfg.SnrThreshold == 0 {
+		cfg.SnrThreshold = base.SnrThreshold
 	}
 	if cfg.PhaseStepDeg == 0 {
 		cfg.PhaseStepDeg = base.PhaseStepDeg
@@ -261,6 +297,21 @@ func validateConfig(cfg Config, base Config) (Config, error) {
 	}
 	if cfg.TrackingLength < minTracking || cfg.TrackingLength > maxTracking {
 		return Config{}, fmt.Errorf("tracking length must be between %d and %d", minTracking, maxTracking)
+	}
+	cfg.TrackingMode = strings.ToLower(strings.TrimSpace(cfg.TrackingMode))
+	switch cfg.TrackingMode {
+	case "single", "multi":
+	default:
+		return Config{}, errors.New("tracking mode must be 'single' or 'multi'")
+	}
+	if cfg.MaxTracks < minMaxTracks || cfg.MaxTracks > maxMaxTracks {
+		return Config{}, fmt.Errorf("max tracks must be between %d and %d", minMaxTracks, maxMaxTracks)
+	}
+	if cfg.TrackTimeoutMs < minTrackTimeoutMs || cfg.TrackTimeoutMs > maxTrackTimeoutMs {
+		return Config{}, fmt.Errorf("track timeout must be between %d and %d ms", minTrackTimeoutMs, maxTrackTimeoutMs)
+	}
+	if cfg.SnrThreshold < -200 || cfg.SnrThreshold > 200 {
+		return Config{}, errors.New("snr threshold must be finite")
 	}
 	if cfg.PhaseStepDeg <= 0 {
 		return Config{}, errors.New("phase step must be positive")
@@ -328,6 +379,10 @@ func (h *Hub) persistConfig(cfg Config) error {
 	stored.ToneOffset = cfg.ToneOffsetHz
 	stored.NumSamples = cfg.NumSamples
 	stored.TrackingLength = cfg.TrackingLength
+	stored.TrackingMode = cfg.TrackingMode
+	stored.MaxTracks = cfg.MaxTracks
+	stored.TrackTimeoutMs = cfg.TrackTimeoutMs
+	stored.SnrThreshold = cfg.SnrThreshold
 	stored.PhaseStep = cfg.PhaseStepDeg
 	stored.PhaseCal = cfg.PhaseCalDeg
 	stored.ScanStep = cfg.ScanStepDeg
@@ -352,11 +407,14 @@ func (h *Hub) persistConfig(cfg Config) error {
 
 // TrackSample captures telemetry for a single tracked source.
 type TrackSample struct {
+	ID         string     `json:"id,omitempty"`
 	AngleDeg   float64    `json:"angleDeg"`
 	Peak       float64    `json:"peak"`
 	SNR        float64    `json:"snr"`
 	Confidence float64    `json:"trackingConfidence"`
 	LockState  LockState  `json:"lockState"`
+	Range      float64    `json:"range,omitempty"`
+	AgeSeconds float64    `json:"ageSeconds,omitempty"`
 	Debug      *DebugInfo `json:"debug,omitempty"`
 }
 
