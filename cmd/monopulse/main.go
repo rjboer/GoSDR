@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/rjboer/GoSDR/internal/app"
 	"github.com/rjboer/GoSDR/internal/logging"
@@ -50,9 +51,9 @@ func main() {
 		os.Exit(1)
 	}
 
-        logger = logging.New(level, format, os.Stdout).With(logging.Field{Key: "subsystem", Value: "cli"})
-        logging.SetDefault(logger)
-        logStartupBanner(logger, cfg)
+	logger = logging.New(level, format, os.Stdout).With(logging.Field{Key: "subsystem", Value: "cli"})
+	logging.SetDefault(logger)
+	logStartupBanner(logger, cfg)
 
 	if err := saveConfig(configPath, persistentFromCLI(cfg)); err != nil {
 		logger.Error("save config", logging.Field{Key: "error", Value: err})
@@ -97,6 +98,10 @@ func main() {
 		WarmupBuffers:     cfg.warmupBuffers,
 		HistoryLimit:      cfg.historyLimit,
 		DebugMode:         cfg.debugMode,
+		TrackingMode:      cfg.trackingMode,
+		MaxTracks:         cfg.maxTracks,
+		TrackTimeout:      cfg.trackTimeout,
+		MinSNRThreshold:   cfg.minSNR,
 	})
 
 	if err := tracker.Init(ctx); err != nil {
@@ -126,6 +131,10 @@ type cliConfig struct {
 	scanStep       float64
 	spacing        float64
 	phaseDelta     float64
+	trackingMode   string
+	maxTracks      int
+	trackTimeout   time.Duration
+	minSNR         float64
 	sdrBackend     string
 	sdrURI         string
 	warmupBuffers  int
@@ -151,6 +160,10 @@ type persistentConfig struct {
 	ScanStep       float64 `json:"scan_step"`
 	Spacing        float64 `json:"spacing_wavelength"`
 	PhaseDelta     float64 `json:"phase_delta"`
+	TrackingMode   string  `json:"tracking_mode"`
+	MaxTracks      int     `json:"max_tracks"`
+	TrackTimeout   string  `json:"track_timeout"`
+	MinSNR         float64 `json:"min_snr_threshold"`
 	SDRBackend     string  `json:"sdr_backend"`
 	SDRURI         string  `json:"sdr_uri"`
 	WarmupBuffers  int     `json:"warmup_buffers"`
@@ -176,6 +189,10 @@ func logStartupBanner(logger logging.Logger, cfg cliConfig) {
 		"tracking_length":  cfg.trackingLength,
 		"warmup_buffers":   cfg.warmupBuffers,
 		"history_limit":    cfg.historyLimit,
+		"tracking_mode":    cfg.trackingMode,
+		"max_tracks":       cfg.maxTracks,
+		"track_timeout":    cfg.trackTimeout,
+		"min_snr":          cfg.minSNR,
 		"sdr_backend":      cfg.sdrBackend,
 		"sdr_uri":          cfg.sdrURI,
 		"log_level":        cfg.logLevel,
@@ -203,6 +220,10 @@ func parseConfig(args []string, lookup func(string) (string, bool), defaults per
 	fs.Float64Var(&cfg.scanStep, "scan-step", envFloat(lookup, "MONO_SCAN_STEP", defaults.ScanStep), "Scan step in degrees for coarse search")
 	fs.Float64Var(&cfg.spacing, "spacing-wavelength", envFloat(lookup, "MONO_SPACING_WAVELENGTH", defaults.Spacing), "Antenna spacing as a fraction of wavelength")
 	fs.Float64Var(&cfg.phaseDelta, "mock-phase-delta", envFloat(lookup, "MONO_MOCK_PHASE_DELTA", defaults.PhaseDelta), "Mock SDR phase delta in degrees")
+	fs.StringVar(&cfg.trackingMode, "tracking-mode", envString(lookup, "MONO_TRACKING_MODE", defaults.TrackingMode), "Tracking mode (single|multi)")
+	fs.IntVar(&cfg.maxTracks, "max-tracks", envInt(lookup, "MONO_MAX_TRACKS", defaults.MaxTracks), "Maximum number of simultaneous tracks")
+	fs.DurationVar(&cfg.trackTimeout, "track-timeout", envDuration(lookup, "MONO_TRACK_TIMEOUT", durationFromString(defaults.TrackTimeout, 0)), "Duration after which inactive tracks are marked lost")
+	fs.Float64Var(&cfg.minSNR, "min-snr-threshold", envFloat(lookup, "MONO_MIN_SNR_THRESHOLD", defaults.MinSNR), "Minimum SNR required to create or update a track")
 	fs.StringVar(&cfg.sdrBackend, "sdr-backend", envString(lookup, "MONO_SDR_BACKEND", defaults.SDRBackend), "SDR backend (mock|pluto)")
 	fs.StringVar(&cfg.sdrURI, "sdr-uri", envString(lookup, "MONO_SDR_URI", defaults.SDRURI), "SDR URI")
 	fs.IntVar(&cfg.warmupBuffers, "warmup-buffers", envInt(lookup, "MONO_WARMUP_BUFFERS", defaults.WarmupBuffers), "Number of RX buffers to discard for warm-up")
@@ -240,6 +261,10 @@ func persistentFromCLI(cfg cliConfig) persistentConfig {
 		ScanStep:       cfg.scanStep,
 		Spacing:        cfg.spacing,
 		PhaseDelta:     cfg.phaseDelta,
+		TrackingMode:   cfg.trackingMode,
+		MaxTracks:      cfg.maxTracks,
+		TrackTimeout:   cfg.trackTimeout.String(),
+		MinSNR:         cfg.minSNR,
 		SDRBackend:     cfg.sdrBackend,
 		SDRURI:         cfg.sdrURI,
 		WarmupBuffers:  cfg.warmupBuffers,
@@ -298,6 +323,10 @@ func defaultPersistentConfig() persistentConfig {
 		ScanStep:       2,
 		Spacing:        0.5,
 		PhaseDelta:     30,
+		TrackingMode:   "single",
+		MaxTracks:      1,
+		TrackTimeout:   "3s",
+		MinSNR:         3,
 		SDRBackend:     "mock",
 		SDRURI:         "",
 		WarmupBuffers:  3,
@@ -334,6 +363,15 @@ func envString(lookup func(string) (string, bool), key, def string) string {
 	return def
 }
 
+func envDuration(lookup func(string) (string, bool), key string, def time.Duration) time.Duration {
+	if val, ok := lookup(key); ok {
+		if parsed, err := time.ParseDuration(val); err == nil {
+			return parsed
+		}
+	}
+	return def
+}
+
 func envBool(lookup func(string) (string, bool), key string, def bool) bool {
 	if val, ok := lookup(key); ok {
 		if parsed, err := strconv.ParseBool(val); err == nil {
@@ -341,6 +379,16 @@ func envBool(lookup func(string) (string, bool), key string, def bool) bool {
 		}
 	}
 	return def
+}
+
+func durationFromString(value string, fallback time.Duration) time.Duration {
+	if value == "" {
+		return fallback
+	}
+	if parsed, err := time.ParseDuration(value); err == nil {
+		return parsed
+	}
+	return fallback
 }
 
 func selectBackend(cfg cliConfig) (sdr.SDR, error) {

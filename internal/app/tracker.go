@@ -30,6 +30,186 @@ type Config struct {
 	WarmupBuffers     int
 	HistoryLimit      int
 	DebugMode         bool
+	TrackingMode      string
+	MaxTracks         int
+	TrackTimeout      time.Duration
+	MinSNRThreshold   float64
+}
+
+// TrackLifecycle represents the lifecycle of a track.
+type TrackLifecycle int
+
+const (
+	TrackTentative TrackLifecycle = iota
+	TrackConfirmed
+	TrackLost
+)
+
+// Track holds state for a single target being tracked.
+type Track struct {
+	ID         int
+	Angle      float64
+	Peak       float64
+	SNR        float64
+	Confidence float64
+	LockState  telemetry.LockState
+	History    []float64
+	State      TrackLifecycle
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	LastSeen   time.Time
+}
+
+// TrackManager manages creation and lifecycle of tracks.
+type TrackManager struct {
+	tracks       map[int]*Track
+	order        []int
+	nextID       int
+	maxTracks    int
+	timeout      time.Duration
+	minSNR       float64
+	historyLimit int
+}
+
+// NewTrackManager creates a track manager with lifecycle controls.
+func NewTrackManager(maxTracks int, timeout time.Duration, minSNR float64, historyLimit int) *TrackManager {
+	if maxTracks <= 0 {
+		maxTracks = 1
+	}
+	return &TrackManager{
+		tracks:       make(map[int]*Track),
+		nextID:       1,
+		maxTracks:    maxTracks,
+		timeout:      timeout,
+		minSNR:       minSNR,
+		historyLimit: historyLimit,
+	}
+}
+
+// Upsert updates the closest matching track or creates a new one if capacity allows.
+func (tm *TrackManager) Upsert(angle, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) *Track {
+	if tm == nil {
+		return nil
+	}
+	tm.expire(now)
+	if snr < tm.minSNR {
+		return nil
+	}
+
+	track := tm.findMatch(angle)
+	if track == nil {
+		if len(tm.tracks) >= tm.maxTracks {
+			tm.dropOldest()
+		}
+		track = tm.newTrack(angle, peak, snr, confidence, lock, now)
+	} else {
+		track.Angle = angle
+		track.Peak = peak
+		track.SNR = snr
+		track.Confidence = confidence
+		track.LockState = lock
+		track.State = tm.nextLifecycle(track.State)
+		track.UpdatedAt = now
+		track.LastSeen = now
+		track.History = append(track.History, angle)
+		if tm.historyLimit > 0 && len(track.History) > tm.historyLimit {
+			track.History = track.History[len(track.History)-tm.historyLimit:]
+		}
+	}
+
+	return track
+}
+
+// Tracks returns a copy of managed tracks ordered by creation.
+func (tm *TrackManager) Tracks() []Track {
+	if tm == nil {
+		return nil
+	}
+	result := make([]Track, 0, len(tm.tracks))
+	for _, id := range tm.order {
+		if track, ok := tm.tracks[id]; ok {
+			result = append(result, *track)
+		}
+	}
+	return result
+}
+
+func (tm *TrackManager) newTrack(angle, peak, snr, confidence float64, lock telemetry.LockState, now time.Time) *Track {
+	id := tm.nextID
+	tm.nextID++
+	track := &Track{
+		ID:         id,
+		Angle:      angle,
+		Peak:       peak,
+		SNR:        snr,
+		Confidence: confidence,
+		LockState:  lock,
+		State:      TrackTentative,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		LastSeen:   now,
+		History:    []float64{angle},
+	}
+	tm.tracks[id] = track
+	tm.order = append(tm.order, id)
+	return track
+}
+
+func (tm *TrackManager) findMatch(angle float64) *Track {
+	const angleMatchThreshold = 5.0
+	var (
+		best      *Track
+		bestDelta = math.MaxFloat64
+	)
+	for _, track := range tm.tracks {
+		if track.State == TrackLost {
+			continue
+		}
+		delta := math.Abs(track.Angle - angle)
+		if delta < bestDelta && delta <= angleMatchThreshold {
+			best = track
+			bestDelta = delta
+		}
+	}
+	return best
+}
+
+func (tm *TrackManager) dropOldest() {
+	for len(tm.order) > 0 {
+		id := tm.order[0]
+		tm.order = tm.order[1:]
+		if _, ok := tm.tracks[id]; ok {
+			delete(tm.tracks, id)
+			return
+		}
+	}
+}
+
+func (tm *TrackManager) expire(now time.Time) {
+	if tm.timeout <= 0 {
+		return
+	}
+	for _, track := range tm.tracks {
+		if track.State == TrackLost {
+			continue
+		}
+		if now.Sub(track.LastSeen) > tm.timeout {
+			track.State = TrackLost
+		}
+	}
+}
+
+func (tm *TrackManager) nextLifecycle(current TrackLifecycle) TrackLifecycle {
+	switch current {
+	case TrackTentative:
+		return TrackConfirmed
+	case TrackConfirmed:
+		return TrackConfirmed
+	case TrackLost:
+		return TrackLost
+	default:
+		return TrackTentative
+	}
 }
 
 // Tracker wires SDR input into the DSP monopulse tracking loop.
@@ -46,6 +226,7 @@ type Tracker struct {
 	lockState telemetry.LockState
 	stableCnt int
 	dropCnt   int
+	manager   *TrackManager
 }
 
 func NewTracker(backend sdr.SDR, reporter telemetry.Reporter, logger logging.Logger, cfg Config) *Tracker {
@@ -79,6 +260,23 @@ func (t *Tracker) Init(ctx context.Context) error {
 	if t.cfg.HistoryLimit == 0 {
 		t.cfg.HistoryLimit = t.cfg.TrackingLength
 	}
+	if t.cfg.TrackingMode == "" {
+		t.cfg.TrackingMode = "single"
+	}
+	if t.cfg.MaxTracks == 0 {
+		if t.cfg.TrackingMode == "multi" {
+			t.cfg.MaxTracks = 10
+		} else {
+			t.cfg.MaxTracks = 1
+		}
+	}
+	if t.cfg.TrackTimeout == 0 {
+		t.cfg.TrackTimeout = 3 * time.Second
+	}
+	if t.cfg.MinSNRThreshold == 0 {
+		t.cfg.MinSNRThreshold = 3
+	}
+	t.manager = NewTrackManager(t.cfg.MaxTracks, t.cfg.TrackTimeout, t.cfg.MinSNRThreshold, t.cfg.HistoryLimit)
 	// Update cached DSP size if needed
 	t.dsp.UpdateSize(t.cfg.NumSamples)
 	if err := t.sdr.Init(ctx, sdr.Config{
@@ -140,6 +338,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 
 			confidence := t.trackingConfidence(snr, monoPhase)
 			state := t.updateLockState(snr, confidence)
+			t.updateTracks(theta, peak, snr, confidence)
 
 			var debug *telemetry.DebugInfo
 			if t.cfg.DebugMode {
@@ -175,6 +374,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 
 		confidence := t.trackingConfidence(snr, monoPhase)
 		state := t.updateLockState(snr, confidence)
+		t.updateTracks(theta, peak, snr, confidence)
 
 		var debug *telemetry.DebugInfo
 		if t.cfg.DebugMode {
@@ -287,6 +487,13 @@ func (t *Tracker) appendHistory(theta float64) {
 	if len(t.history) > t.cfg.HistoryLimit && t.cfg.HistoryLimit > 0 {
 		t.history = t.history[len(t.history)-t.cfg.HistoryLimit:]
 	}
+}
+
+func (t *Tracker) updateTracks(theta, peak, snr, confidence float64) {
+	if t.manager == nil {
+		return
+	}
+	t.manager.Upsert(theta, peak, snr, confidence, t.lockState, time.Now())
 }
 
 func (t *Tracker) warmup(ctx context.Context) error {
