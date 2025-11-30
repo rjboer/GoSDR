@@ -21,6 +21,12 @@ func (r *recordingReporter) Report(angleDeg float64, _ float64, _ float64, _ flo
 	r.angles = append(r.angles, angleDeg)
 }
 
+func (r *recordingReporter) ReportMultiTrack(sample telemetry.MultiTrackSample) {
+	for _, track := range sample.Tracks {
+		r.Report(track.AngleDeg, track.Peak, track.SNR, track.Confidence, track.LockState, track.Debug)
+	}
+}
+
 func TestTrackerConvergesWithMock(t *testing.T) {
 	rand.Seed(3)
 	backend := sdr.NewMock()
