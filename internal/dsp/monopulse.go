@@ -47,9 +47,16 @@ type PeakInfo struct {
 	MonoPhase float64
 }
 
+// TrackTarget identifies a monopulse hypothesis to evaluate.
+type TrackTarget struct {
+	ID    int
+	Delay float64
+}
+
 // TrackMeasurement captures the per-target results of a monopulse tracking
 // update.
 type TrackMeasurement struct {
+	ID        int
 	Delay     float64
 	Peak      float64
 	MonoPhase float64
@@ -254,15 +261,25 @@ func fftToDBFS(fft []complex128) []float64 {
 		return nil
 	}
 	dbfs := make([]float64, len(fft))
+	return fftToDBFSBuffer(fft, dbfs)
+}
+
+func fftToDBFSBuffer(fft []complex128, buf []float64) []float64 {
+	if len(fft) == 0 {
+		return nil
+	}
+	if len(buf) < len(fft) {
+		buf = make([]float64, len(fft))
+	}
 	for i, v := range fft {
 		mag := cmplx.Abs(v)
 		if mag == 0 {
-			dbfs[i] = -math.Inf(1)
+			buf[i] = -math.Inf(1)
 			continue
 		}
-		dbfs[i] = 20 * math.Log10(mag/adcScale)
+		buf[i] = 20 * math.Log10(mag/adcScale)
 	}
-	return dbfs
+	return buf[:len(fft)]
 }
 
 // MonopulsePhaseRatio implements an alternative monopulse estimator:
@@ -715,9 +732,9 @@ func CoarseScanParallel(
 // MonopulseTrackParallel performs tracking for one or more targets using shared
 // FFT results. RX channel FFTs are computed once, then reused to form the sum
 // and delta spectra for each steering hypothesis. The return slice is ordered
-// to match the provided delays.
+// to match the provided targets.
 func MonopulseTrackParallel(
-	delays []float64,
+	targets []TrackTarget,
 	rx0, rx1 []complex64,
 	phaseCal float64,
 	startBin, endBin int,
@@ -728,7 +745,7 @@ func MonopulseTrackParallel(
 	if len(rx1) < n {
 		n = len(rx1)
 	}
-	if n == 0 || len(delays) == 0 {
+	if n == 0 || len(targets) == 0 {
 		return nil
 	}
 
@@ -740,10 +757,11 @@ func MonopulseTrackParallel(
 
 	sumFFT := make([]complex128, len(fft0))
 	deltaFFT := make([]complex128, len(fft0))
-	results := make([]TrackMeasurement, 0, len(delays))
+	sumDBFS := make([]float64, len(fft0))
+	results := make([]TrackMeasurement, 0, len(targets))
 
-	for _, delay := range delays {
-		phaseRad := (delay + phaseCal) * degToRad
+	for _, target := range targets {
+		phaseRad := (target.Delay + phaseCal) * degToRad
 		phaseFactor := cmplx.Exp(complex(0, phaseRad))
 
 		for i := range fft0 {
@@ -752,9 +770,9 @@ func MonopulseTrackParallel(
 			deltaFFT[i] = fft0[i] - shifted
 		}
 
-		sumDBFS := fftToDBFS(sumFFT)
+		sumDBFS = fftToDBFSBuffer(sumFFT, sumDBFS)
 		if len(sumDBFS) == 0 {
-			results = append(results, TrackMeasurement{Delay: delay})
+			results = append(results, TrackMeasurement{ID: target.ID, Delay: target.Delay})
 			continue
 		}
 
@@ -772,14 +790,15 @@ func MonopulseTrackParallel(
 		}
 		snr := estimateSNR(sumDBFS, peak, peakBin, bandStart, bandEnd)
 
-		newDelay := delay
+		newDelay := target.Delay
 		if monoPhase > monoDeadbandRad {
-			newDelay = delay + phaseStep
+			newDelay = target.Delay + phaseStep
 		} else if monoPhase < -monoDeadbandRad {
-			newDelay = delay - phaseStep
+			newDelay = target.Delay - phaseStep
 		}
 
 		results = append(results, TrackMeasurement{
+			ID:        target.ID,
 			Delay:     newDelay,
 			Peak:      peak,
 			MonoPhase: monoPhase,
