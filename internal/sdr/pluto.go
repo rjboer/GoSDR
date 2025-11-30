@@ -17,5 +17,11 @@ func (p *PlutoSDR) RX(_ context.Context) ([]complex64, []complex64, error) {
 func (p *PlutoSDR) TX(_ context.Context, _, _ []complex64) error { return ErrNotImplemented }
 func (p *PlutoSDR) Close() error                                 { return nil }
 
+// SetPhaseDelta is a no-op for hardware backends.
+func (p *PlutoSDR) SetPhaseDelta(phaseDeltaDeg float64) {}
+
+// GetPhaseDelta returns 0 for hardware backends.
+func (p *PlutoSDR) GetPhaseDelta() float64 { return 0 }
+
 // ErrNotImplemented signals missing hardware support.
 var ErrNotImplemented = fmt.Errorf("pluto backend not implemented")
