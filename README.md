@@ -1,10 +1,14 @@
 ## `README.md`
 
-A couple of days ago I saw a script from Jon Kraft about beamforming and direction of arrival tracking using an Pluto SDR. 
-As i have a pluto+ SDR I enjoyed this inmensly. 
+This started when I saw a script from Jon Kraft about beamforming and direction of arrival tracking using an Pluto SDR. 
+I have a pluto+ SDR and I enjoyed this inmensly. 
+However to set this up was a pain and to explain deployment to others was even worse.....
 
 So I decided to create a golang version of Jon's idea because it is more easily portable (executables with the IIOD in there!). 
-While I was at it, i thought about also adding a configuration page in there. 
+While I was at it, i thought about also adding a configuration page in there and other features, memory optimizations and multi tracking...
+
+I somewhat created a very nice SDR Radio direction finding suite! 
+After some feedback I added better explainations and an introduction. 
 
 
 
@@ -78,6 +82,11 @@ This Go project recreates the original behaviour with an emphasis on:
 └── README.md             # this file
 
 ```
+
+Now with impoved explainations:
+<img width="2045" height="1694" alt="image" src="https://github.com/user-attachments/assets/60baacd2-143f-4410-92cc-8084efa64705" />
+
+
 Example of the webinterface:
 <img width="1400" height="1272" alt="image" src="https://github.com/user-attachments/assets/e9f8e93d-71cf-4bdc-942d-6c853d70e085" />
 
