@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <title>GoSDR Settings</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <link rel="stylesheet" href="/static/settings.css" />
+  <link rel="stylesheet" href="/static/settings.css" />`r`n  <link rel="stylesheet" href="/static/settings_tooltips.css" />
 </head>
 
 <body>
@@ -36,34 +36,44 @@
           <label class="field" for="sampleRateHz">
             <span>Sample rate (Hz)</span>
             <input id="sampleRateHz" name="sampleRateHz" type="number" required>
-            <small>1 kHz – 61.44 MHz</small>
+            <small>IQ sample rate in Hz. Higher rates provide wider bandwidth but increase CPU load. Typical: 2 MHz for
+              narrowband, 10-20 MHz for wideband.</small>
           </label>
           <label class="field" for="rxLoHz">
             <span>RX LO (Hz)</span>
             <input id="rxLoHz" name="rxLoHz" type="number" required>
-            <small>Carrier center frequency</small>
+            <small>Receiver local oscillator frequency in Hz. This is the center frequency your SDR will tune to (e.g.,
+              2.4 GHz for WiFi, 433 MHz for ISM).</small>
           </label>
           <label class="field" for="toneOffsetHz">
             <span>Tone offset (Hz)</span>
             <input id="toneOffsetHz" name="toneOffsetHz" type="number" required>
-            <small>Offset from LO for the transmitted tone</small>
+            <small>Frequency offset from RX LO for the transmitted calibration tone in Hz. Positive = above LO, negative
+              = below. Typical: 200 kHz.</small>
           </label>
           <label class="field" for="spacingWavelength">
             <span>Spacing (wavelengths)</span>
             <input id="spacingWavelength" name="spacingWavelength" type="number" required>
-            <small>Antenna spacing in wavelengths</small>
+            <small>Physical distance between antenna elements divided by wavelength (λ = c/f). 0.5λ is optimal for
+              unambiguous bearing. Smaller = less sensitivity, larger = phase ambiguity.</small>
           </label>
           <label class="field" for="rxGain0">
             <span>RX gain ch0 (dB)</span>
             <input id="rxGain0" name="rxGain0" type="number">
+            <small>Receive gain for channel 0 in dB. Higher gain increases sensitivity but may cause saturation. Match
+              both channels for best phase accuracy.</small>
           </label>
           <label class="field" for="rxGain1">
             <span>RX gain ch1 (dB)</span>
             <input id="rxGain1" name="rxGain1" type="number">
+            <small>Receive gain for channel 1 in dB. Should match RX gain ch0 for balanced phase measurements and
+              accurate angle estimation.</small>
           </label>
           <label class="field" for="txGain">
             <span>TX gain (dB)</span>
             <input id="txGain" name="txGain" type="number">
+            <small>Transmit gain in dB for the calibration tone. Lower values reduce interference. Typical: -10 to 0 dB
+              for local calibration.</small>
           </label>
         </div>
       </section>
@@ -77,22 +87,26 @@
           <label class="field" for="numSamples">
             <span>FFT size (samples)</span>
             <input id="numSamples" name="numSamples" type="number" required>
-            <small>Power-of-two sample window</small>
+            <small>Number of IQ samples per FFT (must be power of 2: 512, 1024, 2048, etc.). Larger = better frequency
+              resolution but slower updates. Typical: 512-2048.</small>
           </label>
           <label class="field" for="bufferSize">
             <span>Buffer size</span>
             <input id="bufferSize" name="bufferSize" type="number" required>
-            <small>Power-of-two streaming buffer</small>
+            <small>SDR streaming buffer size in samples (power of 2). Should be ≥ FFT size. Larger buffers reduce USB
+              overhead but increase latency. Typical: 4096.</small>
           </label>
           <label class="field" for="warmupBuffers">
             <span>Warmup buffers</span>
             <input id="warmupBuffers" name="warmupBuffers" type="number" required>
-            <small>Discarded buffers before tracking</small>
+            <small>Number of initial sample buffers to discard before starting tracking. Allows SDR to stabilize and
+              filters to settle. Typical: 3-5.</small>
           </label>
           <label class="field" for="historyLimit">
             <span>History limit</span>
             <input id="historyLimit" name="historyLimit" type="number" required>
-            <small>Telemetry samples retained</small>
+            <small>Maximum number of telemetry samples stored in memory for history/charts. Higher = more history but
+              more RAM. Typical: 500-1000 (8-16 seconds at 60 Hz).</small>
           </label>
         </div>
       </section>
@@ -106,7 +120,8 @@
           <label class="field" for="trackingLength">
             <span>Tracking iterations</span>
             <input id="trackingLength" name="trackingLength" type="number" required>
-            <small>Loop iterations to run</small>
+            <small>Number of tracking iterations before stopping (legacy parameter). Set high for continuous operation.
+              Modern usage: runs indefinitely until stopped.</small>
           </label>
           <label class="field" for="trackingMode">
             <span>Tracking mode</span>
@@ -114,39 +129,50 @@
               <option value="single">Single</option>
               <option value="multi">Multi</option>
             </select>
-            <small>Single target or multi-target tracking.</small>
+            <small>Single: Track only the strongest target (classic mode). Multi: Track multiple targets simultaneously
+              with independent lifecycles. Multi-target requires more CPU.</small>
           </label>
           <label class="field" for="maxTracks">
             <span>Max tracks</span>
             <input id="maxTracks" name="maxTracks" type="number" required>
-            <small>Maximum concurrent targets.</small>
+            <small>Maximum number of targets to track simultaneously in multi-target mode. Higher values increase
+              CPU/memory usage. Typical: 5-32. Max: 256.</small>
           </label>
           <label class="field" for="trackTimeoutMs">
             <span>Track timeout (ms)</span>
             <input id="trackTimeoutMs" name="trackTimeoutMs" type="number" required>
-            <small>Age before inactive tracks expire.</small>
+            <small>Time in milliseconds before a track without updates is marked as Lost and removed. Longer timeout =
+              more persistent tracks. Typical: 3000-10000 ms.</small>
           </label>
           <label class="field" for="snrThreshold">
             <span>SNR threshold (dB)</span>
             <input id="snrThreshold" name="snrThreshold" type="number" required>
-            <small>Minimum SNR to promote a track.</small>
+            <small>Minimum signal-to-noise ratio in dB for a detection to become a Confirmed track. Lower = more
+              sensitive but more false positives. Typical: 6-10 dB.</small>
           </label>
           <label class="field" for="phaseStepDeg">
             <span>Phase step (deg)</span>
             <input id="phaseStepDeg" name="phaseStepDeg" type="number" required>
+            <small>Phase increment in degrees for monopulse tracking refinement. Smaller = more precise but slower
+              convergence. Typical: 0.5-2 degrees.</small>
           </label>
           <label class="field" for="scanStepDeg">
             <span>Scan step (deg)</span>
             <input id="scanStepDeg" name="scanStepDeg" type="number" required>
+            <small>Angular step size in degrees for coarse scan sweep. Smaller = more accurate initial acquisition but
+              slower scan. Typical: 1-5 degrees.</small>
           </label>
           <label class="field" for="phaseCalDeg">
             <span>Phase calibration (deg)</span>
             <input id="phaseCalDeg" name="phaseCalDeg" type="number" required>
+            <small>Phase calibration offset in degrees to compensate for hardware phase imbalance between channels.
+              Adjust if bearing shows systematic error. Typical: 0.</small>
           </label>
           <label class="field" for="phaseDeltaDeg">
             <span>Phase delta (deg)</span>
             <input id="phaseDeltaDeg" name="phaseDeltaDeg" type="number" required>
-            <small>Initial channel offset estimate</small>
+            <small>Initial phase delta estimate in degrees for MockSDR or hardware calibration. Used as starting point
+              for tracking. Typical: 0-45 degrees.</small>
           </label>
         </div>
       </section>
@@ -163,17 +189,20 @@
               <option value="mock">Mock</option>
               <option value="pluto">Pluto / AD9361</option>
             </select>
-            <small>Choose the simulated mock source or Pluto hardware.</small>
+            <small>SDR backend selection. Mock: Simulated signals for testing (no hardware needed). Pluto: ADALM-Pluto /
+              AD9361 hardware support (requires physical SDR).</small>
           </label>
           <label class="field" for="sdrUri">
             <span>Backend URI</span>
             <input id="sdrUri" name="sdrUri" type="text" placeholder="ip:192.168.2.1">
-            <small>Connection string passed to the backend (disabled for mock).</small>
+            <small>Connection URI for hardware SDR (e.g., "ip:192.168.2.1" for network Pluto, "usb:" for USB). Ignored
+              when using Mock backend.</small>
           </label>
           <label class="field" for="mockPhaseDelta">
             <span>Mock phase delta (deg)</span>
             <input id="mockPhaseDelta" name="mockPhaseDelta" type="number">
-            <small>Channel offset simulated by the mock backend.</small>
+            <small>Simulated phase delta in degrees for MockSDR backend. This sets the initial angle of the virtual
+              target. Use MockSDR Live Control slider for real-time adjustment.</small>
           </label>
         </div>
       </section>

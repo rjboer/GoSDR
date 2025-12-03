@@ -21,14 +21,109 @@
   </header>
   <main>
     <div class="tab-header" role="tablist" aria-label="Telemetry views">
-      <button class="tab-button active" role="tab" aria-selected="true" aria-controls="telemetry"
+      <button class="tab-button active" role="tab" aria-selected="true" aria-controls="introduction"
+        data-tab="introduction">Introduction</button>
+      <button class="tab-button" role="tab" aria-selected="false" aria-controls="telemetry"
         data-tab="telemetry">Telemetry</button>
       <button class="tab-button" role="tab" aria-selected="false" aria-controls="trace" data-tab="trace">Trace</button>
       <button class="tab-button" role="tab" aria-selected="false" aria-controls="debug" data-tab="debug">Debug</button>
-      <button class="tab-button" role="tab" aria-selected="false" aria-controls="settings"
-        data-tab="settings">Settings</button>
+
     </div>
-    <section id="telemetry" class="tab-panel active" role="tabpanel" aria-label="Telemetry charts">
+
+        <section id="introduction" class="tab-panel active" role="tabpanel" aria-label="Introduction">
+      <div class="introduction-content" style="max-width: 900px; margin: 0 auto; padding: 2rem;">
+        <h1 style="color: #2f80ed; margin-bottom: 1rem;">GoSDR Monopulse Direction Finder</h1>
+        
+        <div style="margin-bottom: 2rem;">
+          <h2 style="color: #cbd5e1; border-bottom: 2px solid #1f2a3a; padding-bottom: 0.5rem;">?? Overview</h2>
+          <p style="color: #9fb3c8; line-height: 1.6;">
+            GoSDR is a real-time direction finding system using monopulse angle-of-arrival estimation. 
+            It processes IQ samples from a two-channel SDR to determine the bearing of RF signals with high precision.
+          </p>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+          <h2 style="color: #cbd5e1; border-bottom: 2px solid #1f2a3a; padding-bottom: 0.5rem;">?? Key Features</h2>
+          <ul style="color: #9fb3c8; line-height: 1.8;">
+            <li><strong style="color: #cbd5e1;">Multi-Target Tracking:</strong> Simultaneously track up to 256 targets with independent lifecycles</li>
+            <li><strong style="color: #cbd5e1;">Real-Time Processing:</strong> Sub-millisecond tracking updates with optimized DSP pipeline</li>
+            <li><strong style="color: #cbd5e1;">Monopulse Estimation:</strong> High-accuracy angle determination using phase comparison</li>
+            <li><strong style="color: #cbd5e1;">Interactive Web UI:</strong> Live radar display, charts, and comprehensive diagnostics</li>
+            <li><strong style="color: #cbd5e1;">MockSDR Support:</strong> Test and experiment without hardware using simulated signals</li>
+          </ul>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+          <h2 style="color: #cbd5e1; border-bottom: 2px solid #1f2a3a; padding-bottom: 0.5rem;">?? Quick Start</h2>
+          <ol style="color: #9fb3c8; line-height: 1.8;">
+            <li><strong style="color: #cbd5e1;">Configure Settings:</strong> Visit the <a href="/settings" style="color: #2f80ed;">Settings Page</a> to adjust RF parameters, tracking mode, and SDR backend</li>
+            <li><strong style="color: #cbd5e1;">Choose Tracking Mode:</strong>
+              <ul style="margin-top: 0.5rem;">
+                <li><strong>Single:</strong> Track the strongest target (classic mode)</li>
+                <li><strong>Multi:</strong> Track multiple targets simultaneously</li>
+              </ul>
+            </li>
+            <li><strong style="color: #cbd5e1;">Monitor Telemetry:</strong> Switch to the <strong>Telemetry</strong> tab to view live tracking data</li>
+            <li><strong style="color: #cbd5e1;">Debug Performance:</strong> Use the <strong>Debug</strong> tab for system metrics and diagnostics</li>
+          </ol>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+          <h2 style="color: #cbd5e1; border-bottom: 2px solid #1f2a3a; padding-bottom: 0.5rem;">?? Navigation</h2>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 1rem;">
+            <div style="background: #121926; border: 1px solid #1f2a3a; border-radius: 8px; padding: 1rem;">
+              <h3 style="color: #2f80ed; margin: 0 0 0.5rem 0;">Telemetry</h3>
+              <p style="color: #9fb3c8; font-size: 0.9rem; margin: 0;">Real-time radar display, angle charts, track statistics, and signal quality metrics</p>
+            </div>
+            <div style="background: #121926; border: 1px solid #1f2a3a; border-radius: 8px; padding: 1rem;">
+              <h3 style="color: #2f80ed; margin: 0 0 0.5rem 0;">Trace</h3>
+              <p style="color: #9fb3c8; font-size: 0.9rem; margin: 0;">Detailed spectrum analysis and frequency-domain visualization</p>
+            </div>
+            <div style="background: #121926; border: 1px solid #1f2a3a; border-radius: 8px; padding: 1rem;">
+              <h3 style="color: #2f80ed; margin: 0 0 0.5rem 0;">Debug</h3>
+              <p style="color: #9fb3c8; font-size: 0.9rem; margin: 0;">System diagnostics, CPU/memory usage, goroutine monitoring, and event logs</p>
+            </div>
+            <div style="background: #121926; border: 1px solid #1f2a3a; border-radius: 8px; padding: 1rem;">
+              <h3 style="color: #cbd5e1; margin: 0 0 0.5rem 0;">Settings</h3>
+              <p style="color: #9fb3c8; font-size: 0.9rem; margin: 0;">Configure RF parameters, tracking modes, SDR backend, and MockSDR controls</p>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+          <h2 style="color: #cbd5e1; border-bottom: 2px solid #1f2a3a; padding-bottom: 0.5rem;">?? MockSDR Interactive Control</h2>
+          <p style="color: #9fb3c8; line-height: 1.6;">
+            When using the MockSDR backend, you can dynamically adjust the simulated angle in real-time:
+          </p>
+          <ol style="color: #9fb3c8; line-height: 1.8;">
+            <li>Go to <a href="/settings" style="color: #2f80ed;">Settings</a> ? <strong>MockSDR Live Control</strong></li>
+            <li>Use the slider to change the simulated phase delta from -90° to +90°</li>
+            <li>Watch the radar display update in real-time as the target moves</li>
+          </ol>
+          <p style="background: rgba(47, 128, 237, 0.1); border-left: 3px solid #2f80ed; padding: 0.75rem; color: #cbd5e1; margin-top: 1rem;">
+            ?? <strong>Tip:</strong> Perfect for testing multi-target tracking without hardware!
+          </p>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+          <h2 style="color: #cbd5e1; border-bottom: 2px solid #1f2a3a; padding-bottom: 0.5rem;">?? System Architecture</h2>
+          <p style="color: #9fb3c8; line-height: 1.8;">
+            <strong style="color: #cbd5e1;">DSP Pipeline:</strong> FFT ? Peak Detection ? Monopulse Tracking ? Track Association<br>
+            <strong style="color: #cbd5e1;">Tracking Modes:</strong> Single-target (highest SNR) or Multi-target (up to max-tracks)<br>
+            <strong style="color: #cbd5e1;">Track Lifecycle:</strong> Tentative ? Confirmed ? Lost (with configurable timeout)<br>
+            <strong style="color: #cbd5e1;">Web Interface:</strong> Server-Sent Events (SSE) for live updates, REST API for configuration
+          </p>
+        </div>
+
+        <div style="background: linear-gradient(135deg, rgba(47, 128, 237, 0.1), rgba(52, 211, 153, 0.1)); border: 1px solid #1f2a3a; border-radius: 8px; padding: 1.5rem; text-align: center;">
+          <p style="color: #cbd5e1; font-size: 1.1rem; margin: 0;">
+            Ready to start? Visit the <a href="/settings" style="color: #2f80ed; font-weight: 600;">Settings Page</a> to configure your system, then switch to the <strong>Telemetry</strong> tab to begin tracking!
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="telemetry" class="tab-panel" role="tabpanel" aria-label="Telemetry charts">
       <div class="chart-grid">
         <div class="chart-panel radar-panel">
           <h2>Radar Display</h2>
@@ -374,12 +469,7 @@
         </div>
       </div>
     </section>
-    <section id="placeholder" class="tab-panel" role="tabpanel" aria-label="Settings view">
-      <div class="placeholder">
-        <h2>Settings</h2>
-        <p>Manage configuration from the <a href="/settings">settings page</a>.</p>
-      </div>
-    </section>
+
   </main>
   <script src="/static/app.js"></script>
 </body>

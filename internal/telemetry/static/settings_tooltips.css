@@ -1,0 +1,135 @@
+/* Tooltip System for Settings Page */
+
+.field-with-tooltip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.field-with-tooltip .field-label-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(47, 128, 237, 0.2);
+    color: #2f80ed;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: help;
+    position: relative;
+    flex-shrink: 0;
+    transition: all 0.2s;
+}
+
+.info-icon:hover {
+    background: rgba(47, 128, 237, 0.3);
+    transform: scale(1.1);
+}
+
+.tooltip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 10px);
+    transform: translateX(-50%);
+    background: #1a2332;
+    border: 1px solid #2f80ed;
+    border-radius: 8px;
+    padding: 1rem;
+    width: 350px;
+    max-width: 90vw;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0.2s;
+    pointer-events: none;
+}
+
+.info-icon:hover .tooltip {
+    opacity: 1;
+    visibility: visible;
+}
+
+.tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 8px solid transparent;
+    border-top-color: #2f80ed;
+}
+
+.tooltip h4 {
+    margin: 0 0 0.5rem 0;
+    color: #2f80ed;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.tooltip p {
+    margin: 0 0 0.75rem 0;
+    color: #cbd5e1;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.tooltip p:last-child {
+    margin-bottom: 0;
+}
+
+.tooltip strong {
+    color: #e4e9f0;
+}
+
+.tooltip code {
+    background: rgba(47, 128, 237, 0.1);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.8rem;
+    color: #34d399;
+}
+
+.tooltip ul {
+    margin: 0.5rem 0;
+    padding-left: 1.25rem;
+    color: #9fb3c8;
+}
+
+.tooltip li {
+    margin: 0.25rem 0;
+    font-size: 0.85rem;
+}
+
+.tooltip .tip-section {
+    background: rgba(52, 211, 153, 0.08);
+    border-left: 3px solid #34d399;
+    padding: 0.5rem;
+    margin-top: 0.75rem;
+    border-radius: 4px;
+}
+
+.tooltip .warning-section {
+    background: rgba(239, 68, 68, 0.08);
+    border-left: 3px solid #ef4444;
+    padding: 0.5rem;
+    margin-top: 0.75rem;
+    border-radius: 4px;
+}
+
+.tooltip .example-section {
+    background: rgba(47, 128, 237, 0.08);
+    border-left: 3px solid #2f80ed;
+    padding: 0.5rem;
+    margin-top: 0.75rem;
+    border-radius: 4px;
+}
