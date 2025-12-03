@@ -35,36 +35,35 @@
         <div class="field-grid">
           <label class="field" for="sampleRateHz">
             <span>Sample rate (Hz)</span>
-            <input id="sampleRateHz" name="sampleRateHz" type="number" min="1000" max="61440000" step="1000" required>
+            <input id="sampleRateHz" name="sampleRateHz" type="number" required>
             <small>1 kHz – 61.44 MHz</small>
           </label>
           <label class="field" for="rxLoHz">
             <span>RX LO (Hz)</span>
-            <input id="rxLoHz" name="rxLoHz" type="number" min="1" step="1000" required>
+            <input id="rxLoHz" name="rxLoHz" type="number" required>
             <small>Carrier center frequency</small>
           </label>
           <label class="field" for="toneOffsetHz">
             <span>Tone offset (Hz)</span>
-            <input id="toneOffsetHz" name="toneOffsetHz" type="number" min="-10000000" max="10000000" step="1000"
-              required>
+            <input id="toneOffsetHz" name="toneOffsetHz" type="number" required>
             <small>Offset from LO for the transmitted tone</small>
           </label>
           <label class="field" for="spacingWavelength">
             <span>Spacing (wavelengths)</span>
-            <input id="spacingWavelength" name="spacingWavelength" type="number" min="0.1" max="2" step="0.05" required>
+            <input id="spacingWavelength" name="spacingWavelength" type="number" required>
             <small>Antenna spacing in wavelengths</small>
           </label>
           <label class="field" for="rxGain0">
             <span>RX gain ch0 (dB)</span>
-            <input id="rxGain0" name="rxGain0" type="number" step="1">
+            <input id="rxGain0" name="rxGain0" type="number">
           </label>
           <label class="field" for="rxGain1">
             <span>RX gain ch1 (dB)</span>
-            <input id="rxGain1" name="rxGain1" type="number" step="1">
+            <input id="rxGain1" name="rxGain1" type="number">
           </label>
           <label class="field" for="txGain">
             <span>TX gain (dB)</span>
-            <input id="txGain" name="txGain" type="number" step="1">
+            <input id="txGain" name="txGain" type="number">
           </label>
         </div>
       </section>
@@ -77,22 +76,22 @@
         <div class="field-grid">
           <label class="field" for="numSamples">
             <span>FFT size (samples)</span>
-            <input id="numSamples" name="numSamples" type="number" min="64" max="1048576" step="64" required>
+            <input id="numSamples" name="numSamples" type="number" required>
             <small>Power-of-two sample window</small>
           </label>
           <label class="field" for="bufferSize">
             <span>Buffer size</span>
-            <input id="bufferSize" name="bufferSize" type="number" min="64" max="1048576" step="64" required>
+            <input id="bufferSize" name="bufferSize" type="number" required>
             <small>Power-of-two streaming buffer</small>
           </label>
           <label class="field" for="warmupBuffers">
             <span>Warmup buffers</span>
-            <input id="warmupBuffers" name="warmupBuffers" type="number" min="0" max="100" step="1" required>
+            <input id="warmupBuffers" name="warmupBuffers" type="number" required>
             <small>Discarded buffers before tracking</small>
           </label>
           <label class="field" for="historyLimit">
             <span>History limit</span>
-            <input id="historyLimit" name="historyLimit" type="number" min="1" max="10000" step="1" required>
+            <input id="historyLimit" name="historyLimit" type="number" required>
             <small>Telemetry samples retained</small>
           </label>
         </div>
@@ -106,7 +105,7 @@
         <div class="field-grid">
           <label class="field" for="trackingLength">
             <span>Tracking iterations</span>
-            <input id="trackingLength" name="trackingLength" type="number" min="1" max="10000" step="1" required>
+            <input id="trackingLength" name="trackingLength" type="number" required>
             <small>Loop iterations to run</small>
           </label>
           <label class="field" for="trackingMode">
@@ -119,34 +118,34 @@
           </label>
           <label class="field" for="maxTracks">
             <span>Max tracks</span>
-            <input id="maxTracks" name="maxTracks" type="number" min="1" max="256" step="1" required>
+            <input id="maxTracks" name="maxTracks" type="number" required>
             <small>Maximum concurrent targets.</small>
           </label>
           <label class="field" for="trackTimeoutMs">
             <span>Track timeout (ms)</span>
-            <input id="trackTimeoutMs" name="trackTimeoutMs" type="number" min="100" max="120000" step="100" required>
+            <input id="trackTimeoutMs" name="trackTimeoutMs" type="number" required>
             <small>Age before inactive tracks expire.</small>
           </label>
           <label class="field" for="snrThreshold">
             <span>SNR threshold (dB)</span>
-            <input id="snrThreshold" name="snrThreshold" type="number" step="0.5" required>
+            <input id="snrThreshold" name="snrThreshold" type="number" required>
             <small>Minimum SNR to promote a track.</small>
           </label>
           <label class="field" for="phaseStepDeg">
             <span>Phase step (deg)</span>
-            <input id="phaseStepDeg" name="phaseStepDeg" type="number" min="0.01" max="90" step="0.1" required>
+            <input id="phaseStepDeg" name="phaseStepDeg" type="number" required>
           </label>
           <label class="field" for="scanStepDeg">
             <span>Scan step (deg)</span>
-            <input id="scanStepDeg" name="scanStepDeg" type="number" min="0.01" max="90" step="0.1" required>
+            <input id="scanStepDeg" name="scanStepDeg" type="number" required>
           </label>
           <label class="field" for="phaseCalDeg">
             <span>Phase calibration (deg)</span>
-            <input id="phaseCalDeg" name="phaseCalDeg" type="number" step="0.1" required>
+            <input id="phaseCalDeg" name="phaseCalDeg" type="number" required>
           </label>
           <label class="field" for="phaseDeltaDeg">
             <span>Phase delta (deg)</span>
-            <input id="phaseDeltaDeg" name="phaseDeltaDeg" type="number" step="0.1" required>
+            <input id="phaseDeltaDeg" name="phaseDeltaDeg" type="number" required>
             <small>Initial channel offset estimate</small>
           </label>
         </div>
@@ -173,7 +172,7 @@
           </label>
           <label class="field" for="mockPhaseDelta">
             <span>Mock phase delta (deg)</span>
-            <input id="mockPhaseDelta" name="mockPhaseDelta" type="number" step="0.1">
+            <input id="mockPhaseDelta" name="mockPhaseDelta" type="number">
             <small>Channel offset simulated by the mock backend.</small>
           </label>
         </div>
