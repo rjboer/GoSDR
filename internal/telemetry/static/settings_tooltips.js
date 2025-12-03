@@ -1,4 +1,6 @@
-// Comprehensive tooltip data for all settings fields
+// Settings page with help sidebar - 70/30 layout
+// Click info icons to show help in the right sidebar
+
 const tooltipData = {
     sampleRateHz: {
         title: "IQ Sample Rate",
@@ -163,8 +165,7 @@ const tooltipData = {
             { value: "3", desc: "Standard warmup (recommended)" },
             { value: "10", desc: "Extended warmup for very stable initial conditions" }
         ],
-        tip: "Use 3-5 for most applications. Increase if you see unstable readings at startup. Each buffer takes ~(buffer_size / sample_rate) seconds.",
-        warning: "Too few warmup buffers may cause initial tracking errors. Too many delays system startup unnecessarily."
+        tip: "Use 3-5 for most applications. Increase if you see unstable readings at startup. Each buffer takes ~(buffer_size / sample_rate) seconds."
     },
 
     historyLimit: {
@@ -179,26 +180,14 @@ const tooltipData = {
         examples: [
             { value: "100", desc: "Minimal history, ~1.5 seconds at 60 Hz, low memory" },
             { value: "500", desc: "Standard history, ~8 seconds (recommended)" },
-            { value: "1000", desc: "Extended history, ~16 seconds, more memory" },
-            { value: "5000", desc: "Very long history, ~83 seconds, high memory usage" }
+            { value: "1000", desc: "Extended history, ~16 seconds, more memory" }
         ],
-        tip: "Use 500-1000 for most applications. Increase for longer chart history, decrease to reduce memory usage. Consider your update rate when choosing.",
-        warning: "Very large values (>10000) may cause UI slowdown and excessive memory usage, especially in multi-target mode."
+        tip: "Use 500-1000 for most applications. Increase for longer chart history, decrease to reduce memory usage."
     },
 
     trackingLength: {
         title: "Tracking Iterations (Legacy)",
         definition: "Number of tracking loop iterations before stopping. This is a legacy parameter - modern usage runs indefinitely until manually stopped.",
-        details: [
-            "<strong>Legacy Behavior:</strong> Originally limited tracking to N iterations for testing",
-            "<strong>Modern Usage:</strong> Set to high value (10000+) for continuous operation",
-            "<strong>Actual Control:</strong> Tracking stops when you stop the application, not when this limit is reached"
-        ],
-        examples: [
-            { value: "50", desc: "Short test run, stops after 50 iterations" },
-            { value: "10000", desc: "Effectively continuous (recommended)" },
-            { value: "999999", desc: "Infinite for practical purposes" }
-        ],
         tip: "Set to 10000 or higher for normal operation. This parameter is mostly ignored in modern versions - use Ctrl+C or stop button to end tracking."
     },
 
@@ -208,15 +197,10 @@ const tooltipData = {
         details: [
             "<strong>Single Mode:</strong> Tracks only the highest SNR target, lowest CPU usage, classic behavior",
             "<strong>Multi Mode:</strong> Tracks up to max_tracks targets simultaneously, higher CPU/memory usage",
-            "<strong>Track Lifecycle:</strong> In multi mode, tracks have states: Tentative → Confirmed → Lost",
-            "<strong>Association:</strong> Multi mode uses nearest-neighbor association to link detections to tracks"
+            "<strong>Track Lifecycle:</strong> In multi mode, tracks have states: Tentative → Confirmed → Lost"
         ],
-        examples: [
-            { value: "single", desc: "One target, minimal CPU, simple display" },
-            { value: "multi", desc: "Multiple targets, more CPU, comprehensive tracking" }
-        ],
-        tip: "Use single mode for simple applications or when CPU is limited. Use multi mode when you need to track multiple simultaneous targets or want track persistence.",
-        warning: "Multi mode requires significantly more CPU (2-5x) and memory. Monitor system performance in Debug tab when using multi mode with many tracks."
+        tip: "Use single mode for simple applications or when CPU is limited. Use multi mode when you need to track multiple simultaneous targets.",
+        warning: "Multi mode requires significantly more CPU (2-5x) and memory. Monitor system performance in Debug tab."
     },
 
     maxTracks: {
@@ -225,187 +209,100 @@ const tooltipData = {
         details: [
             "<strong>CPU Impact:</strong> Each track requires monopulse processing, ~linear CPU scaling",
             "<strong>Memory Impact:</strong> Each track stores history (angle, SNR, confidence over time)",
-            "<strong>UI Impact:</strong> More tracks = more complex radar display and track table",
-            "<strong>Association:</strong> More tracks = more complex track-to-detection association"
+            "<strong>UI Impact:</strong> More tracks = more complex radar display and track table"
         ],
         examples: [
-            { value: "5", desc: "Light tracking, low overhead (recommended for most applications)" },
+            { value: "5", desc: "Light tracking, low overhead (recommended)" },
             { value: "16", desc: "Moderate tracking, balanced performance" },
-            { value: "32", desc: "Heavy tracking, significant CPU usage" },
-            { value: "256", desc: "Maximum capacity, very high CPU/memory usage" }
+            { value: "32", desc: "Heavy tracking, significant CPU usage" }
         ],
-        tip: "Start with 5-10 tracks for most applications. Increase only if you need to track more simultaneous targets. Monitor CPU usage in Debug tab.",
-        warning: "Values >32 may cause performance degradation on slower systems. Each track adds processing overhead and memory usage."
+        tip: "Start with 5-10 tracks for most applications. Monitor CPU usage in Debug tab.",
+        warning: "Values >32 may cause performance degradation on slower systems."
     },
 
     trackTimeoutMs: {
         title: "Track Timeout Duration",
         definition: "Time in milliseconds before a track without new detections is marked as Lost and removed from the system. Controls track persistence.",
-        details: [
-            "<strong>Persistence:</strong> Longer timeout = tracks survive longer gaps in detection",
-            "<strong>Responsiveness:</strong> Shorter timeout = faster removal of disappeared targets",
-            "<strong>Memory:</strong> Longer timeout may keep more Lost tracks in memory temporarily",
-            "<strong>Track States:</strong> Confirmed → Lost (after timeout) → Removed"
-        ],
         examples: [
             { value: "1000", desc: "1 second - Very responsive, removes tracks quickly" },
             { value: "3000", desc: "3 seconds - Balanced (recommended)" },
-            { value: "10000", desc: "10 seconds - Very persistent, survives long gaps" },
-            { value: "30000", desc: "30 seconds - Maximum persistence" }
+            { value: "10000", desc: "10 seconds - Very persistent, survives long gaps" }
         ],
-        tip: "Use 3000-5000 ms for most applications. Increase for intermittent signals or when targets may be temporarily obscured. Decrease for rapidly changing scenarios.",
-        warning: "Very short timeouts (<1000 ms) may cause tracks to flicker on/off. Very long timeouts (>30000 ms) may keep stale tracks visible."
+        tip: "Use 3000-5000 ms for most applications. Increase for intermittent signals."
     },
 
     snrThreshold: {
         title: "SNR Threshold for Track Confirmation",
-        definition: "Minimum signal-to-noise ratio in dB required for a detection to be promoted from Tentative to Confirmed track state. Controls track quality.",
-        details: [
-            "<strong>Sensitivity:</strong> Lower threshold = more sensitive, detects weaker signals",
-            "<strong>False Positives:</strong> Lower threshold = more noise-induced false tracks",
-            "<strong>Track Quality:</strong> Higher threshold = only strong, reliable signals become tracks",
-            "<strong>Confirmation:</strong> Detections below threshold remain Tentative and timeout faster"
-        ],
+        definition: "Minimum signal-to-noise ratio in dB required for a detection to be promoted from Tentative to Confirmed track state.",
         examples: [
             { value: "3", desc: "Very sensitive, may have false positives from noise" },
             { value: "6", desc: "Balanced sensitivity (recommended)" },
-            { value: "10", desc: "Conservative, only strong signals" },
-            { value: "15", desc: "Very conservative, only very strong signals" }
+            { value: "10", desc: "Conservative, only strong signals" }
         ],
-        tip: "Start with 6-8 dB for most applications. Lower for weak/distant signals, raise to reduce false tracks from noise. Monitor track quality in Tracks panel.",
-        warning: "Very low thresholds (<3 dB) will create many false tracks from noise. Very high thresholds (>15 dB) may miss legitimate weak signals."
+        tip: "Start with 6-8 dB for most applications. Lower for weak/distant signals, raise to reduce false tracks.",
+        warning: "Very low thresholds (<3 dB) will create many false tracks from noise."
     },
 
     phaseStepDeg: {
         title: "Monopulse Phase Step",
         definition: "Phase increment in degrees used for monopulse tracking refinement. Smaller steps provide more precise angle estimation but slower convergence.",
-        details: [
-            "<strong>Precision:</strong> Smaller steps = finer angle resolution",
-            "<strong>Convergence:</strong> Larger steps = faster initial acquisition",
-            "<strong>Stability:</strong> Too large may cause oscillation around true angle",
-            "<strong>Processing:</strong> Step size affects number of iterations needed"
-        ],
         examples: [
-            { value: "0.1", desc: "Very fine precision, slow convergence" },
-            { value: "0.5", desc: "Fine precision (recommended for accurate tracking)" },
+            { value: "0.5", desc: "Fine precision (recommended)" },
             { value: "1.0", desc: "Balanced precision and speed" },
             { value: "2.0", desc: "Fast convergence, coarser precision" }
         ],
-        tip: "Use 0.5-1.0 degrees for most applications. Smaller for high-precision requirements, larger for faster acquisition of rapidly moving targets.",
-        warning: "Very small steps (<0.1°) may cause slow convergence. Very large steps (>5°) may cause oscillation and reduced accuracy."
+        tip: "Use 0.5-1.0 degrees for most applications."
     },
 
     scanStepDeg: {
         title: "Coarse Scan Angular Step",
         definition: "Angular step size in degrees for the initial coarse scan sweep. Determines how finely the system searches for targets across the ±90° field of view.",
-        details: [
-            "<strong>Scan Speed:</strong> Larger steps = faster scan, fewer computations",
-            "<strong>Accuracy:</strong> Smaller steps = more accurate initial angle estimate",
-            "<strong>Detection:</strong> Too large may miss targets between scan points",
-            "<strong>CPU Load:</strong> Smaller steps = more FFT computations per scan"
-        ],
         examples: [
-            { value: "0.5", desc: "Very fine scan, slow but accurate" },
-            { value: "1.0", desc: "Fine scan (recommended for precision)" },
-            { value: "2.0", desc: "Standard scan, balanced speed and accuracy" },
+            { value: "1.0", desc: "Fine scan (recommended)" },
+            { value: "2.0", desc: "Standard scan, balanced" },
             { value: "5.0", desc: "Coarse scan, fast but may miss targets" }
         ],
-        tip: "Use 1-2 degrees for most applications. Smaller for weak signals or high precision, larger for faster acquisition. Scan step should be ≥ phase step.",
-        warning: "Very large steps (>10°) may miss targets. Very small steps (<0.5°) significantly increase scan time and CPU usage."
+        tip: "Use 1-2 degrees for most applications."
     },
 
     phaseCalDeg: {
         title: "Phase Calibration Offset",
         definition: "Phase offset in degrees applied to compensate for hardware phase imbalance between the two receiver channels. Corrects systematic bearing errors.",
-        details: [
-            "<strong>Hardware Imbalance:</strong> Real hardware has slight phase differences between channels",
-            "<strong>Calibration:</strong> Measure error with known target angle, adjust this value to correct",
-            "<strong>Systematic Error:</strong> Non-zero calibration indicates hardware phase mismatch",
-            "<strong>Temperature:</strong> Phase calibration may drift with temperature changes"
-        ],
-        examples: [
-            { value: "0", desc: "No calibration (ideal hardware or MockSDR)" },
-            { value: "2.5", desc: "Small correction for minor hardware imbalance" },
-            { value: "-5.0", desc: "Negative correction for opposite phase error" }
-        ],
-        tip: "Start with 0. If bearings show consistent offset (e.g., always 5° too high), adjust this value to compensate. Re-calibrate periodically or after hardware changes.",
-        warning: "Incorrect calibration will cause systematic bearing errors. Verify calibration with known target angles before field use."
+        tip: "Start with 0. If bearings show consistent offset, adjust this value to compensate. Re-calibrate periodically."
     },
 
     phaseDeltaDeg: {
         title: "Initial Phase Delta Estimate",
-        definition: "Initial phase difference estimate in degrees between the two receiver channels. Used as starting point for tracking algorithm. For MockSDR, this sets the simulated target angle.",
-        details: [
-            "<strong>Initialization:</strong> Provides initial guess for tracking algorithm",
-            "<strong>MockSDR:</strong> In mock mode, this sets the virtual target's angle",
-            "<strong>Convergence:</strong> Good initial estimate speeds up acquisition",
-            "<strong>Hardware:</strong> For real SDR, typically start with 0 or last known value"
-        ],
-        examples: [
-            { value: "0", desc: "Boresight (straight ahead), neutral starting point" },
-            { value: "30", desc: "30° off boresight, if target location is approximately known" },
-            { value: "-45", desc: "-45° off boresight, left side" }
-        ],
-        tip: "Use 0 for unknown target location. For MockSDR testing, set to desired simulated angle. For hardware, use last known angle if available.",
-        warning: "For MockSDR, this value is overridden by the Live Control slider if you adjust it. For hardware, incorrect initial estimate only affects acquisition speed, not final accuracy."
+        definition: "Initial phase difference estimate in degrees between the two receiver channels. For MockSDR, this sets the simulated target angle.",
+        tip: "Use 0 for unknown target location. For MockSDR testing, set to desired simulated angle."
     },
 
     sdrBackend: {
         title: "SDR Backend Selection",
-        definition: "Selects which SDR hardware or simulator to use. Mock provides simulated signals for testing without hardware. Pluto supports ADALM-Pluto and AD9361-based SDRs.",
-        details: [
-            "<strong>Mock:</strong> Software simulation, no hardware required, perfect for development/testing",
-            "<strong>Pluto:</strong> ADALM-Pluto SDR, 70 MHz - 6 GHz, full-duplex capable",
-            "<strong>Hardware Requirements:</strong> Pluto requires physical SDR connected via USB or network",
-            "<strong>Capabilities:</strong> Mock has no RF limitations, Pluto has real-world constraints"
-        ],
-        examples: [
-            { value: "mock", desc: "Simulated SDR, perfect signals, no hardware needed" },
-            { value: "pluto", desc: "ADALM-Pluto hardware, real RF signals" }
-        ],
-        tip: "Use Mock for development, testing, and demonstrations. Use Pluto for actual direction finding with real RF signals. Mock is perfect for learning the system.",
-        warning: "Pluto backend requires physical hardware and proper USB drivers. Mock backend ignores TX gain and some other hardware-specific parameters."
+        definition: "Selects which SDR hardware or simulator to use. Mock provides simulated signals for testing without hardware.",
+        tip: "Use Mock for development and testing. Use Pluto for actual direction finding with real RF signals."
     },
 
     sdrUri: {
         title: "SDR Backend Connection URI",
-        definition: "Connection string for hardware SDR. Specifies how to connect to the Pluto SDR - via USB or network. Ignored when using Mock backend.",
-        details: [
-            "<strong>USB Connection:</strong> Use 'usb:' for direct USB connection",
-            "<strong>Network Connection:</strong> Use 'ip:192.168.2.1' for network-connected Pluto",
-            "<strong>Auto-discovery:</strong> Some backends support auto-discovery (leave blank)",
-            "<strong>Mock Mode:</strong> This field is ignored when backend is Mock"
-        ],
+        definition: "Connection string for hardware SDR. Specifies how to connect to the Pluto SDR - via USB or network.",
         examples: [
             { value: "usb:", desc: "Direct USB connection (most common)" },
-            { value: "ip:192.168.2.1", desc: "Network Pluto at default IP" },
-            { value: "ip:pluto.local", desc: "Network Pluto via mDNS hostname" }
+            { value: "ip:192.168.2.1", desc: "Network Pluto at default IP" }
         ],
-        tip: "Use 'usb:' for USB-connected Pluto. Use 'ip:192.168.2.1' for network Pluto (default IP). Verify Pluto is accessible before starting tracking.",
-        warning: "Incorrect URI will cause connection failure. Ensure Pluto drivers are installed and device is powered on before connecting."
+        tip: "Use 'usb:' for USB-connected Pluto. Use 'ip:192.168.2.1' for network Pluto."
     },
 
     mockPhaseDelta: {
         title: "MockSDR Simulated Phase Delta",
-        definition: "For MockSDR backend only: Sets the simulated phase difference between channels in degrees, which determines the virtual target's angle. Can be adjusted in real-time via Live Control slider.",
-        details: [
-            "<strong>Simulation:</strong> Creates a virtual target at the specified angle",
-            "<strong>Testing:</strong> Perfect for testing tracking algorithms without hardware",
-            "<strong>Live Control:</strong> Can be changed in real-time using the MockSDR Live Control slider on this page",
-            "<strong>Hardware:</strong> Ignored when using Pluto or other hardware backends"
-        ],
-        examples: [
-            { value: "0", desc: "Target at boresight (straight ahead)" },
-            { value: "30", desc: "Target 30° to the right" },
-            { value: "-45", desc: "Target 45° to the left" }
-        ],
-        tip: "Set initial angle here, then use the MockSDR Live Control slider below for real-time adjustment. Perfect for testing multi-target tracking by changing angle dynamically.",
-        warning: "Only affects MockSDR backend. For hardware SDR, this parameter is ignored. Use Live Control slider for interactive testing."
+        definition: "For MockSDR backend only: Sets the simulated phase difference between channels in degrees. Can be adjusted in real-time via Live Control slider.",
+        tip: "Set initial angle here, then use the MockSDR Live Control slider for real-time adjustment."
     }
 };
 
-// Function to add tooltips to all fields
-function addTooltipsToFields() {
+// Function to add info icons and setup sidebar interaction
+function setupHelpSidebar() {
+    // Add info icons to all fields
     Object.keys(tooltipData).forEach(fieldId => {
         const field = document.getElementById(fieldId);
         if (!field) return;
@@ -413,56 +310,87 @@ function addTooltipsToFields() {
         const label = field.closest('label');
         if (!label) return;
 
-        const data = tooltipData[fieldId];
         const span = label.querySelector('span');
-        if (!span) return;
+        if (!span || span.querySelector('.info-icon')) return; // Skip if already has icon
 
-        // Create tooltip HTML
-        let tooltipHTML = `
-      <span class="info-icon">ℹ️
-        <div class="tooltip">
-          <h4>${data.title}</h4>
-          <p><strong>Definition:</strong> ${data.definition}</p>
-    `;
+        // Create info icon
+        const icon = document.createElement('span');
+        icon.className = 'info-icon';
+        icon.textContent = 'ℹ️';
+        icon.dataset.fieldId = fieldId;
+        icon.title = 'Click for help';
 
-        if (data.details && data.details.length > 0) {
-            tooltipHTML += `<p><strong>Technical Details:</strong></p><ul>`;
-            data.details.forEach(detail => {
-                tooltipHTML += `<li>${detail}</li>`;
-            });
-            tooltipHTML += `</ul>`;
-        }
+        // Add click handler
+        icon.addEventListener('click', (e) => {
+            e.preventDefault();
+            showHelp(fieldId);
 
-        if (data.examples && data.examples.length > 0) {
-            tooltipHTML += `<div class="example-section"><p><strong>Examples:</strong></p><ul>`;
-            data.examples.forEach(ex => {
-                tooltipHTML += `<li><code>${ex.value}</code> - ${ex.desc}</li>`;
-            });
-            tooltipHTML += `</ul></div>`;
-        }
+            // Update active state
+            document.querySelectorAll('.info-icon').forEach(i => i.classList.remove('active'));
+            icon.classList.add('active');
+        });
 
-        if (data.tip) {
-            tooltipHTML += `<div class="tip-section"><p><strong>💡 Recommendation:</strong> ${data.tip}</p></div>`;
-        }
-
-        if (data.warning) {
-            tooltipHTML += `<div class="warning-section"><p><strong>⚠️ Warning:</strong> ${data.warning}</p></div>`;
-        }
-
-        tooltipHTML += `</div></span>`;
-
-        // Wrap span in field-label-row div and add tooltip
-        const wrapper = document.createElement('div');
-        wrapper.className = 'field-label-row';
-        span.parentNode.insertBefore(wrapper, span);
-        wrapper.appendChild(span);
-        wrapper.innerHTML += tooltipHTML;
+        span.appendChild(icon);
     });
+}
+
+// Function to show help in sidebar
+function showHelp(fieldId) {
+    const data = tooltipData[fieldId];
+    if (!data) return;
+
+    // Hide all help content
+    document.querySelectorAll('.help-content').forEach(el => el.classList.remove('active'));
+
+    // Show specific help content
+    let helpEl = document.getElementById(`help-${fieldId}`);
+    if (helpEl) {
+        helpEl.classList.add('active');
+        return;
+    }
+
+    // Create help content if it doesn't exist
+    const helpContainer = document.getElementById('helpContentContainer');
+    if (!helpContainer) return;
+
+    helpEl = document.createElement('div');
+    helpEl.id = `help-${fieldId}`;
+    helpEl.className = 'help-content active';
+
+    let html = `<h4>${data.title}</h4>`;
+    html += `<p><strong>Definition:</strong> ${data.definition}</p>`;
+
+    if (data.details && data.details.length > 0) {
+        html += `<p><strong>Technical Details:</strong></p><ul>`;
+        data.details.forEach(detail => {
+            html += `<li>${detail}</li>`;
+        });
+        html += `</ul>`;
+    }
+
+    if (data.examples && data.examples.length > 0) {
+        html += `<div class="example-section"><p><strong>Examples:</strong></p><ul>`;
+        data.examples.forEach(ex => {
+            html += `<li><code>${ex.value}</code> - ${ex.desc}</li>`;
+        });
+        html += `</ul></div>`;
+    }
+
+    if (data.tip) {
+        html += `<div class="tip-section"><p><strong>💡 Recommendation:</strong> ${data.tip}</p></div>`;
+    }
+
+    if (data.warning) {
+        html += `<div class="warning-section"><p><strong>⚠️ Warning:</strong> ${data.warning}</p></div>`;
+    }
+
+    helpEl.innerHTML = html;
+    helpContainer.appendChild(helpEl);
 }
 
 // Run when DOM is loaded
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', addTooltipsToFields);
+    document.addEventListener('DOMContentLoaded', setupHelpSidebar);
 } else {
-    addTooltipsToFields();
+    setupHelpSidebar();
 }

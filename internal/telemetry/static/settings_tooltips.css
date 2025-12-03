@@ -1,17 +1,137 @@
-/* Tooltip System for Settings Page */
+/* Settings Page with Help Sidebar - 70/30 Layout */
 
-.field-with-tooltip {
+/* Main layout container */
+.settings-container {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    gap: 2rem;
+    max-width: 100%;
+    height: calc(100vh - 80px);
 }
 
-.field-with-tooltip .field-label-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+/* Left side - Form (70%) */
+.settings-form-wrapper {
+    flex: 0 0 70%;
+    overflow-y: auto;
+    padding-right: 1rem;
 }
 
+/* Right side - Help panel (30%) */
+.help-sidebar {
+    flex: 0 0 30%;
+    position: sticky;
+    top: 0;
+    height: calc(100vh - 80px);
+    overflow-y: auto;
+    background: #0d1117;
+    border-left: 2px solid #1f2a3a;
+    padding: 1.5rem;
+}
+
+.help-sidebar-header {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid #1f2a3a;
+}
+
+.help-sidebar-header h3 {
+    margin: 0 0 0.5rem 0;
+    color: #2f80ed;
+    font-size: 1.1rem;
+}
+
+.help-sidebar-header p {
+    margin: 0;
+    color: #9fb3c8;
+    font-size: 0.85rem;
+}
+
+.help-content {
+    display: none;
+}
+
+.help-content.active {
+    display: block;
+    animation: fadeIn 0.2s;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.help-content h4 {
+    margin: 0 0 0.75rem 0;
+    color: #2f80ed;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.help-content p {
+    margin: 0 0 0.75rem 0;
+    color: #cbd5e1;
+    font-size: 0.85rem;
+    line-height: 1.6;
+}
+
+.help-content p:last-child {
+    margin-bottom: 0;
+}
+
+.help-content strong {
+    color: #e4e9f0;
+}
+
+.help-content code {
+    background: rgba(47, 128, 237, 0.15);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.8rem;
+    color: #34d399;
+}
+
+.help-content ul {
+    margin: 0.5rem 0 1rem 0;
+    padding-left: 1.25rem;
+    color: #9fb3c8;
+}
+
+.help-content li {
+    margin: 0.4rem 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.tip-section {
+    background: rgba(52, 211, 153, 0.08);
+    border-left: 3px solid #34d399;
+    padding: 0.75rem;
+    margin: 1rem 0;
+    border-radius: 4px;
+}
+
+.warning-section {
+    background: rgba(239, 68, 68, 0.08);
+    border-left: 3px solid #ef4444;
+    padding: 0.75rem;
+    margin: 1rem 0;
+    border-radius: 4px;
+}
+
+.example-section {
+    background: rgba(47, 128, 237, 0.08);
+    border-left: 3px solid #2f80ed;
+    padding: 0.75rem;
+    margin: 1rem 0;
+    border-radius: 4px;
+}
+
+/* Info icon next to labels */
 .info-icon {
     display: inline-flex;
     align-items: center;
@@ -23,113 +143,56 @@
     color: #2f80ed;
     font-size: 12px;
     font-weight: bold;
-    cursor: help;
-    position: relative;
+    cursor: pointer;
+    margin-left: 0.5rem;
     flex-shrink: 0;
     transition: all 0.2s;
 }
 
 .info-icon:hover {
-    background: rgba(47, 128, 237, 0.3);
-    transform: scale(1.1);
+    background: rgba(47, 128, 237, 0.4);
+    transform: scale(1.15);
 }
 
-.tooltip {
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + 10px);
-    transform: translateX(-50%);
-    background: #1a2332;
-    border: 1px solid #2f80ed;
-    border-radius: 8px;
-    padding: 1rem;
-    width: 350px;
-    max-width: 90vw;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    z-index: 1000;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s, visibility 0.2s;
-    pointer-events: none;
+.info-icon.active {
+    background: rgba(47, 128, 237, 0.5);
+    box-shadow: 0 0 0 3px rgba(47, 128, 237, 0.2);
 }
 
-.info-icon:hover .tooltip {
-    opacity: 1;
-    visibility: visible;
+/* Adjust field labels to accommodate info icon */
+.field span {
+    display: inline-flex;
+    align-items: center;
 }
 
-.tooltip::after {
-    content: '';
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    border: 8px solid transparent;
-    border-top-color: #2f80ed;
+/* Scrollbar styling for help sidebar */
+.help-sidebar::-webkit-scrollbar {
+    width: 8px;
 }
 
-.tooltip h4 {
-    margin: 0 0 0.5rem 0;
-    color: #2f80ed;
-    font-size: 0.95rem;
-    font-weight: 600;
+.help-sidebar::-webkit-scrollbar-track {
+    background: #0d1117;
 }
 
-.tooltip p {
-    margin: 0 0 0.75rem 0;
-    color: #cbd5e1;
-    font-size: 0.85rem;
-    line-height: 1.5;
+.help-sidebar::-webkit-scrollbar-thumb {
+    background: #1f2a3a;
+    border-radius: 4px;
 }
 
-.tooltip p:last-child {
-    margin-bottom: 0;
+.help-sidebar::-webkit-scrollbar-thumb:hover {
+    background: #2f3a4a;
 }
 
-.tooltip strong {
-    color: #e4e9f0;
-}
-
-.tooltip code {
-    background: rgba(47, 128, 237, 0.1);
-    padding: 0.1rem 0.3rem;
-    border-radius: 3px;
-    font-family: 'Courier New', monospace;
-    font-size: 0.8rem;
-    color: #34d399;
-}
-
-.tooltip ul {
-    margin: 0.5rem 0;
-    padding-left: 1.25rem;
+/* Empty state */
+.help-empty {
     color: #9fb3c8;
+    font-size: 0.9rem;
+    text-align: center;
+    padding: 2rem 1rem;
 }
 
-.tooltip li {
-    margin: 0.25rem 0;
-    font-size: 0.85rem;
-}
-
-.tooltip .tip-section {
-    background: rgba(52, 211, 153, 0.08);
-    border-left: 3px solid #34d399;
-    padding: 0.5rem;
-    margin-top: 0.75rem;
-    border-radius: 4px;
-}
-
-.tooltip .warning-section {
-    background: rgba(239, 68, 68, 0.08);
-    border-left: 3px solid #ef4444;
-    padding: 0.5rem;
-    margin-top: 0.75rem;
-    border-radius: 4px;
-}
-
-.tooltip .example-section {
-    background: rgba(47, 128, 237, 0.08);
-    border-left: 3px solid #2f80ed;
-    padding: 0.5rem;
-    margin-top: 0.75rem;
-    border-radius: 4px;
+.help-empty-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.3;
 }
