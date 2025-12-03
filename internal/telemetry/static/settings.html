@@ -1,69 +1,83 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8" />
   <title>GoSDR Settings</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/settings_tooltips.css">
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/settings.css" />
+  <link rel="stylesheet" href="/static/settings_tooltips.css" />
 </head>
 
 <body>
-  <main>
+  <header class="page-header">
+    <div>
+      <h1>GoSDR Settings</h1>
+      <p>Configure RF, timing, and SDR backend parameters</p>
+    </div>
+    <nav class="top-nav" aria-label="Primary">
+      <a href="/">Telemetry</a>
+      <a class="active" href="/settings">Settings</a>
+    </nav>
+  </header>
+
+  <main class="settings-page">
+    <div id="restartBanner" class="info-banner hidden" role="status" aria-live="polite">
+      <strong>Restart required for SDR changes.</strong>
+      <span>Restart the GoSDR service to apply backend updates.</span>
+    </div>
 
     <div class="settings-container">
-
       <!-- LEFT SIDE: SETTINGS FORM -->
       <div class="settings-form-wrapper">
-        <form id="configForm">
-
+        <form id="configForm" class="settings-form">
           <section class="card">
             <div class="section-heading">
-              <h1>GoSDR Settings</h1>
-              <p>Configure RF, timing, and SDR backend parameters</p>
+              <h2>RF</h2>
+              <p>Front-end and signal parameters</p>
             </div>
-
             <div class="field-grid">
               <label class="field" for="sampleRateHz">
                 <span>Sample rate (Hz)</span>
                 <input id="sampleRateHz" name="sampleRateHz" type="number" required>
-                <small>IQ sample rate in Hz. Higher rates provide wider bandwidth but increase CPU load.</small>
+                <small>IQ sample rate in Hz. Higher rates provide wider bandwidth but increase CPU load. Typical: 2 MHz
+                  for narrowband, 10-20 MHz for wideband.</small>
               </label>
-
               <label class="field" for="rxLoHz">
                 <span>RX LO (Hz)</span>
                 <input id="rxLoHz" name="rxLoHz" type="number" required>
-                <small>Receiver local oscillator frequency.</small>
+                <small>Receiver local oscillator frequency in Hz. This is the center frequency your SDR will tune to
+                  (e.g., 2.4 GHz for WiFi, 433 MHz for ISM).</small>
               </label>
-
               <label class="field" for="toneOffsetHz">
                 <span>Tone offset (Hz)</span>
                 <input id="toneOffsetHz" name="toneOffsetHz" type="number" required>
-                <small>Offset of calibration tone.</small>
+                <small>Frequency offset from RX LO for the transmitted calibration tone in Hz. Positive = above LO,
+                  negative = below. Typical: 200 kHz.</small>
               </label>
-
               <label class="field" for="spacingWavelength">
                 <span>Spacing (wavelengths)</span>
                 <input id="spacingWavelength" name="spacingWavelength" type="number" required>
-                <small>Distance between antenna elements in wavelengths.</small>
+                <small>Physical distance between antenna elements divided by wavelength (λ = c/f). 0.5λ is optimal for
+                  unambiguous bearing. Smaller = less sensitivity, larger = phase ambiguity.</small>
               </label>
-
               <label class="field" for="rxGain0">
                 <span>RX gain ch0 (dB)</span>
                 <input id="rxGain0" name="rxGain0" type="number">
-                <small>Receive gain for channel 0.</small>
+                <small>Receive gain for channel 0 in dB. Higher gain increases sensitivity but may cause saturation.
+                  Match both channels for best phase accuracy.</small>
               </label>
-
               <label class="field" for="rxGain1">
                 <span>RX gain ch1 (dB)</span>
                 <input id="rxGain1" name="rxGain1" type="number">
-                <small>Receive gain for channel 1.</small>
+                <small>Receive gain for channel 1 in dB. Should match RX gain ch0 for balanced phase measurements and
+                  accurate angle estimation.</small>
               </label>
-
               <label class="field" for="txGain">
                 <span>TX gain (dB)</span>
                 <input id="txGain" name="txGain" type="number">
-                <small>Transmit gain for calibration tone.</small>
+                <small>Transmit gain in dB for the calibration tone. Lower values reduce interference. Typical: -10 to 0
+                  dB for local calibration.</small>
               </label>
             </div>
           </section>
@@ -77,25 +91,26 @@
               <label class="field" for="numSamples">
                 <span>FFT size (samples)</span>
                 <input id="numSamples" name="numSamples" type="number" required>
-                <small>Must be a power of 2.</small>
+                <small>Number of IQ samples per FFT (must be power of 2: 512, 1024, 2048, etc.). Larger = better
+                  frequency resolution but slower updates. Typical: 512-2048.</small>
               </label>
-
               <label class="field" for="bufferSize">
                 <span>Buffer size</span>
                 <input id="bufferSize" name="bufferSize" type="number" required>
-                <small>Should be ≥ FFT size.</small>
+                <small>SDR streaming buffer size in samples (power of 2). Should be ≥ FFT size. Larger buffers reduce
+                  USB overhead but increase latency. Typical: 4096.</small>
               </label>
-
               <label class="field" for="warmupBuffers">
                 <span>Warmup buffers</span>
                 <input id="warmupBuffers" name="warmupBuffers" type="number" required>
-                <small>Buffers to discard at startup.</small>
+                <small>Number of initial sample buffers to discard before starting tracking. Allows SDR to stabilize and
+                  filters to settle. Typical: 3-5.</small>
               </label>
-
               <label class="field" for="historyLimit">
                 <span>History limit</span>
                 <input id="historyLimit" name="historyLimit" type="number" required>
-                <small>Telemetry samples stored in memory.</small>
+                <small>Maximum number of telemetry samples stored in memory for history/charts. Higher = more history
+                  but more RAM. Typical: 500-1000 (8-16 seconds at 60 Hz).</small>
               </label>
             </div>
           </section>
@@ -105,63 +120,63 @@
               <h2>Tracking</h2>
               <p>Monopulse scan and loop parameters</p>
             </div>
-
             <div class="field-grid">
               <label class="field" for="trackingLength">
                 <span>Tracking iterations</span>
                 <input id="trackingLength" name="trackingLength" type="number" required>
-                <small>Legacy parameter.</small>
+                <small>Number of tracking iterations before stopping (legacy parameter). Set high for continuous
+                  operation. Modern usage: runs indefinitely until stopped.</small>
               </label>
-
               <label class="field" for="trackingMode">
                 <span>Tracking mode</span>
                 <select id="trackingMode" name="trackingMode">
                   <option value="single">Single</option>
                   <option value="multi">Multi</option>
                 </select>
-                <small>Choose single or multi target tracking.</small>
+                <small>Single: Track only the strongest target (classic mode). Multi: Track multiple targets
+                  simultaneously with independent lifecycles. Multi-target requires more CPU.</small>
               </label>
-
               <label class="field" for="maxTracks">
                 <span>Max tracks</span>
                 <input id="maxTracks" name="maxTracks" type="number" required>
-                <small>Maximum concurrent tracks.</small>
+                <small>Maximum number of targets to track simultaneously in multi-target mode. Higher values increase
+                  CPU/memory usage. Typical: 5-32. Max: 256.</small>
               </label>
-
               <label class="field" for="trackTimeoutMs">
                 <span>Track timeout (ms)</span>
                 <input id="trackTimeoutMs" name="trackTimeoutMs" type="number" required>
-                <small>Timeout before a track is removed.</small>
+                <small>Time in milliseconds before a track without updates is marked as Lost and removed. Longer timeout
+                  = more persistent tracks. Typical: 3000-10000 ms.</small>
               </label>
-
               <label class="field" for="snrThreshold">
                 <span>SNR threshold (dB)</span>
                 <input id="snrThreshold" name="snrThreshold" type="number" required>
-                <small>Minimum signal-to-noise ratio.</small>
+                <small>Minimum signal-to-noise ratio in dB for a detection to become a Confirmed track. Lower = more
+                  sensitive but more false positives. Typical: 6-10 dB.</small>
               </label>
-
               <label class="field" for="phaseStepDeg">
                 <span>Phase step (deg)</span>
                 <input id="phaseStepDeg" name="phaseStepDeg" type="number" required>
-                <small>Monopulse refinement step.</small>
+                <small>Phase increment in degrees for monopulse tracking refinement. Smaller = more precise but slower
+                  convergence. Typical: 0.5-2 degrees.</small>
               </label>
-
               <label class="field" for="scanStepDeg">
                 <span>Scan step (deg)</span>
                 <input id="scanStepDeg" name="scanStepDeg" type="number" required>
-                <small>Coarse scan angular step.</small>
+                <small>Angular step size in degrees for coarse scan sweep. Smaller = more accurate initial acquisition
+                  but slower scan. Typical: 1-5 degrees.</small>
               </label>
-
               <label class="field" for="phaseCalDeg">
                 <span>Phase calibration (deg)</span>
                 <input id="phaseCalDeg" name="phaseCalDeg" type="number" required>
-                <small>Offset correction.</small>
+                <small>Phase calibration offset in degrees to compensate for hardware phase imbalance between channels.
+                  Adjust if bearing shows systematic error. Typical: 0.</small>
               </label>
-
               <label class="field" for="phaseDeltaDeg">
                 <span>Phase delta (deg)</span>
                 <input id="phaseDeltaDeg" name="phaseDeltaDeg" type="number" required>
-                <small>Initial phase delta estimate.</small>
+                <small>Initial phase delta estimate in degrees for MockSDR or hardware calibration. Used as starting
+                  point for tracking. Typical: 0-45 degrees.</small>
               </label>
             </div>
           </section>
@@ -171,7 +186,6 @@
               <h2>SDR backend</h2>
               <p>Radio selection and connection target</p>
             </div>
-
             <div class="field-grid">
               <label class="field" for="sdrBackend">
                 <span>Backend</span>
@@ -179,39 +193,40 @@
                   <option value="mock">Mock</option>
                   <option value="pluto">Pluto / AD9361</option>
                 </select>
-                <small>Choose SDR engine.</small>
+                <small>SDR backend selection. Mock: Simulated signals for testing (no hardware needed). Pluto:
+                  ADALM-Pluto / AD9361 hardware support (requires physical SDR).</small>
               </label>
-
               <label class="field" for="sdrUri">
                 <span>Backend URI</span>
                 <input id="sdrUri" name="sdrUri" type="text" placeholder="ip:192.168.2.1">
-                <small>Connection URI for hardware SDR.</small>
+                <small>Connection URI for hardware SDR (e.g., "ip:192.168.2.1" for network Pluto, "usb:" for USB).
+                  Ignored when using Mock backend.</small>
               </label>
-
               <label class="field" for="mockPhaseDelta">
                 <span>Mock phase delta (deg)</span>
                 <input id="mockPhaseDelta" name="mockPhaseDelta" type="number">
-                <small>Simulated phase delta for MockSDR.</small>
+                <small>Simulated phase delta in degrees for MockSDR backend. This sets the initial angle of the virtual
+                  target. Use MockSDR Live Control slider for real-time adjustment.</small>
               </label>
             </div>
           </section>
 
-          <section class="card" id="mockControlSection" style="display:none;">
+          <!-- MockSDR Live Control Section -->
+          <section class="card" id="mockControlSection" style="display: none;">
             <div class="section-heading">
               <h2>MockSDR Live Control</h2>
+              <p>Adjust simulated angle in real-time for testing</p>
             </div>
-
             <div class="field-grid">
               <label class="field" for="mockAngleSlider">
                 <span>Simulated Angle (degrees)</span>
                 <div class="slider-container">
                   <input id="mockAngleSlider" type="range" min="-90" max="90" step="0.5" value="0">
-                  <output id="mockAngleValue">0.0°</output>
+                  <output id="mockAngleValue" for="mockAngleSlider">0.0°</output>
                 </div>
-                <small>Drag to set simulated phase delta.</small>
+                <small>Drag slider to change the MockSDR's simulated phase delta in real-time</small>
               </label>
             </div>
-
             <div class="mock-status" id="mockStatus">
               <span class="status-indicator"></span>
               <span class="status-text">Ready</span>
@@ -221,8 +236,8 @@
           <section class="card">
             <div class="section-heading">
               <h2>Logging</h2>
+              <p>Control verbosity and output format</p>
             </div>
-
             <div class="field-grid">
               <label class="field" for="logLevel">
                 <span>Log level</span>
@@ -232,20 +247,20 @@
                   <option value="info">Info</option>
                   <option value="debug">Debug</option>
                 </select>
+                <small>Lower levels emit more verbose output.</small>
               </label>
-
               <label class="field" for="logFormat">
                 <span>Log format</span>
                 <select id="logFormat" name="logFormat">
                   <option value="text">Text</option>
                   <option value="json">JSON</option>
                 </select>
+                <small>Choose human-readable text or structured JSON logs.</small>
               </label>
-
               <label class="field" for="debugMode">
                 <span>Debug mode</span>
                 <input id="debugMode" name="debugMode" type="checkbox">
-                <small>Include DSP internals in telemetry.</small>
+                <small>Include DSP internals in telemetry payloads.</small>
               </label>
             </div>
           </section>
@@ -253,9 +268,8 @@
           <div class="form-actions">
             <button type="submit">Save changes</button>
             <button type="button" id="resetBtn" class="ghost">Reset to defaults</button>
-            <span id="status" class="status hidden"></span>
+            <span id="status" class="status hidden" role="status" aria-live="polite"></span>
           </div>
-
         </form>
       </div>
 
@@ -265,7 +279,6 @@
           <h3>📖 Parameter Help</h3>
           <p>Click the ℹ️ icons next to fields for detailed explanations</p>
         </div>
-
         <div id="helpContentContainer">
           <div class="help-empty">
             <div class="help-empty-icon">ℹ️</div>
@@ -273,14 +286,11 @@
           </div>
         </div>
       </aside>
-
     </div>
-
   </main>
 
   <script src="/static/settings_tooltips.js"></script>
   <script src="/static/settings.js"></script>
-
 </body>
 
 </html>
