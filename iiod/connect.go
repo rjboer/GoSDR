@@ -2,6 +2,7 @@ package iiod
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -57,6 +58,9 @@ func (c *Client) Close() error {
 	err := c.conn.Close()
 	c.conn = nil
 	c.reader = nil
+	c.stateMu.Lock()
+	c.openBuffers = map[string]int{}
+	c.stateMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -333,49 +337,20 @@ func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	deadline := time.Time{}
 	if c.timeout > 0 {
-		_ = c.conn.SetDeadline(time.Now().Add(c.timeout))
+		deadline = time.Now().Add(c.timeout)
+		_ = c.conn.SetDeadline(deadline)
 		defer c.conn.SetDeadline(time.Time{})
 	}
 
-	if _, err := fmt.Fprintf(c.conn, "%s\n", cmd); err != nil {
+	if err := c.writeCommand(cmd, payload); err != nil {
 		return nil, err
 	}
-	if len(payload) > 0 {
-		if _, err := c.conn.Write(payload); err != nil {
-			return nil, err
-		}
-	}
 
-	line, err := c.reader.ReadString('\n')
+	status, resp, err := c.readResponse(deadline)
 	if err != nil {
 		return nil, err
-	}
-	line = strings.TrimSpace(line)
-
-	parts := strings.Fields(line)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("malformed reply header: %q", line)
-	}
-
-	status, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return nil, fmt.Errorf("invalid status code: %w", err)
-	}
-	length, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("invalid payload length: %w", err)
-	}
-	if length < 0 {
-		return nil, fmt.Errorf("negative payload length: %d", length)
-	}
-
-	var resp []byte
-	if length > 0 {
-		resp = make([]byte, length)
-		if _, err := io.ReadFull(c.reader, resp); err != nil {
-			return nil, err
-		}
 	}
 
 	if status != 0 {
@@ -391,6 +366,66 @@ func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
 	c.stateMu.Unlock()
 
 	return resp, nil
+}
+
+func (c *Client) writeCommand(cmd string, payload []byte) error {
+	if _, err := fmt.Fprintf(c.conn, "%s\n", cmd); err != nil {
+		return err
+	}
+
+	if len(payload) == 0 {
+		return nil
+	}
+
+	var lengthPrefix [4]byte
+	binary.BigEndian.PutUint32(lengthPrefix[:], uint32(len(payload)))
+
+	if _, err := c.conn.Write(lengthPrefix[:]); err != nil {
+		return err
+	}
+
+	_, err := c.conn.Write(payload)
+	return err
+}
+
+func (c *Client) readResponse(deadline time.Time) (int, []byte, error) {
+	if !deadline.IsZero() {
+		_ = c.conn.SetReadDeadline(deadline)
+		defer c.conn.SetReadDeadline(time.Time{})
+	}
+
+	line, err := c.reader.ReadString('\n')
+	if err != nil {
+		return 0, nil, err
+	}
+	line = strings.TrimSpace(line)
+
+	parts := strings.Fields(line)
+	if len(parts) != 2 {
+		return 0, nil, fmt.Errorf("malformed reply header: %q", line)
+	}
+
+	status, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, nil, fmt.Errorf("invalid status code: %w", err)
+	}
+	length, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, nil, fmt.Errorf("invalid payload length: %w", err)
+	}
+	if length < 0 {
+		return 0, nil, fmt.Errorf("negative payload length: %d", length)
+	}
+
+	var resp []byte
+	if length > 0 {
+		resp = make([]byte, length)
+		if _, err := io.ReadFull(c.reader, resp); err != nil {
+			return 0, nil, err
+		}
+	}
+
+	return status, resp, nil
 }
 
 // ensureHealthy pings the server when the connection has been idle for longer
