@@ -22,6 +22,7 @@ type PlutoSDR struct {
 	rxBuffer   *iiod.Buffer
 	txBuffer   *iiod.Buffer
 	numSamples int
+	phaseDelta float64
 }
 
 func NewPluto() *PlutoSDR { return &PlutoSDR{} }
@@ -114,6 +115,7 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 	p.rxBuffer = rxBuf
 	p.txBuffer = txBuf
 	p.numSamples = cfg.NumSamples
+	p.phaseDelta = cfg.PhaseDelta
 
 	return nil
 }
@@ -206,11 +208,25 @@ func (p *PlutoSDR) Close() error {
 	return firstErr
 }
 
-// SetPhaseDelta is a no-op for hardware backends.
-func (p *PlutoSDR) SetPhaseDelta(phaseDeltaDeg float64) {}
+// SetPhaseDelta records the requested phase delta without applying it to
+// hardware. Storing the value allows callers to inspect the requested offset
+// for telemetry even though the AD9361 does not expose a direct control.
+func (p *PlutoSDR) SetPhaseDelta(phaseDeltaDeg float64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-// GetPhaseDelta returns 0 for hardware backends.
-func (p *PlutoSDR) GetPhaseDelta() float64 { return 0 }
+	p.phaseDelta = phaseDeltaDeg
+}
+
+// GetPhaseDelta returns the last requested phase delta. Hardware backends do
+// not apply this value, but tracking it keeps the interface consistent with
+// simulators.
+func (p *PlutoSDR) GetPhaseDelta() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.phaseDelta
+}
 
 // identifyAD9361Devices finds the PHY, RX, and TX device identifiers.
 func identifyAD9361Devices(devices []string) (phy, rx, tx string) {
