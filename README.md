@@ -1,8 +1,8 @@
 ## `README.md`
 
 This started when I saw a script from Jon Kraft about beamforming and direction of arrival tracking using an Pluto SDR. 
-I have a pluto+ SDR and I enjoyed this inmensly. 
-However to set this up was a pain and to explain deployment to others was even worse.....
+I have a pluto+ SDR and I enjoyed this very much. 
+However to set this up was a pain and to explain deployment to others was undoable.
 
 So I decided to create a golang version of Jon's idea because it is more easily portable (executables with the IIOD in there!). 
 While I was at it, i thought about also adding a configuration page in there and other features, memory optimizations and multi tracking...
@@ -10,6 +10,11 @@ While I was at it, i thought about also adding a configuration page in there and
 I somewhat created a very nice SDR Radio direction finding suite! 
 After some feedback I added better explainations and an introduction. 
 
+
+My implementation of the IIOD has the additional:
+- Timeout Configuration (Prevent hangs)
+- Trigger Support (Synchronized sampling, but not multidevice sampling)
+- Streaming API (async support)
 
 
 ```markdown
