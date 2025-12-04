@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -269,11 +270,23 @@ func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error
 				return
 			}
 
-			// Handle WRITEBUF specially - need to read binary data
+			// Handle WRITEBUF specially - need to read length-prefixed binary data
 			if strings.HasPrefix(op.cmd, "WRITEBUF") {
 				if op.expectBinary != nil {
-					data := make([]byte, len(op.expectBinary))
-					if _, err := reader.Read(data); err != nil {
+					lenPrefix := make([]byte, 4)
+					if _, err := io.ReadFull(reader, lenPrefix); err != nil {
+						errCh <- fmt.Errorf("failed to read length prefix: %v", err)
+						return
+					}
+
+					expectedLen := binary.BigEndian.Uint32(lenPrefix)
+					if int(expectedLen) != len(op.expectBinary) {
+						errCh <- fmt.Errorf("unexpected binary length: got %d, want %d", expectedLen, len(op.expectBinary))
+						return
+					}
+
+					data := make([]byte, expectedLen)
+					if _, err := io.ReadFull(reader, data); err != nil {
 						errCh <- fmt.Errorf("failed to read binary data: %v", err)
 						return
 					}
