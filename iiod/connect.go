@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,13 @@ import (
 type Client struct {
 	conn   net.Conn
 	reader *bufio.Reader
+
+	mu           sync.Mutex
+	stateMu      sync.Mutex
+	openBuffers  map[string]int
+	timeout      time.Duration
+	healthWindow time.Duration
+	lastPing     time.Time
 }
 
 // Send issues a raw IIOD command and returns the response payload.
@@ -72,8 +80,11 @@ func Dial(addr string) (*Client, error) {
 	}
 
 	return &Client{
-		conn:   c,
-		reader: bufio.NewReader(c),
+		conn:         c,
+		reader:       bufio.NewReader(c),
+		openBuffers:  make(map[string]int),
+		timeout:      5 * time.Second,
+		healthWindow: 10 * time.Second,
 	}, nil
 }
 
@@ -155,8 +166,25 @@ func (c *Client) OpenBuffer(device string, samples int) error {
 	if samples <= 0 {
 		return fmt.Errorf("sample count must be positive")
 	}
+	if err := c.ensureHealthy(); err != nil {
+		return err
+	}
+
+	c.stateMu.Lock()
+	if _, exists := c.openBuffers[device]; exists {
+		c.stateMu.Unlock()
+		return fmt.Errorf("buffer already open for device %s", device)
+	}
+	c.stateMu.Unlock()
 
 	_, err := c.send(fmt.Sprintf("OPEN %s %d", device, samples))
+	if err != nil {
+		return err
+	}
+
+	c.stateMu.Lock()
+	c.openBuffers[device] = samples
+	c.stateMu.Unlock()
 	return err
 }
 
@@ -167,6 +195,19 @@ func (c *Client) ReadBuffer(device string, samples int) ([]byte, error) {
 	}
 	if samples <= 0 {
 		return nil, fmt.Errorf("sample count must be positive")
+	}
+	if err := c.ensureHealthy(); err != nil {
+		return nil, err
+	}
+
+	c.stateMu.Lock()
+	bufSamples, ok := c.openBuffers[device]
+	c.stateMu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("buffer for device %s is not open", device)
+	}
+	if bufSamples != samples {
+		return nil, fmt.Errorf("requested samples %d do not match open buffer size %d", samples, bufSamples)
 	}
 
 	return c.sendBinary(fmt.Sprintf("READBUF %s %d", device, samples), nil)
@@ -180,6 +221,16 @@ func (c *Client) WriteBuffer(device string, data []byte) error {
 	if len(data) == 0 {
 		return fmt.Errorf("no data provided for buffer write")
 	}
+	if err := c.ensureHealthy(); err != nil {
+		return err
+	}
+
+	c.stateMu.Lock()
+	_, ok := c.openBuffers[device]
+	c.stateMu.Unlock()
+	if !ok {
+		return fmt.Errorf("buffer for device %s is not open", device)
+	}
 
 	cmd := fmt.Sprintf("WRITEBUF %s %d", device, len(data))
 	_, err := c.sendBinary(cmd, data)
@@ -191,8 +242,25 @@ func (c *Client) CloseBuffer(device string) error {
 	if strings.TrimSpace(device) == "" {
 		return fmt.Errorf("device name is required")
 	}
+	if err := c.ensureHealthy(); err != nil {
+		return err
+	}
+
+	c.stateMu.Lock()
+	if _, ok := c.openBuffers[device]; !ok {
+		c.stateMu.Unlock()
+		return fmt.Errorf("buffer for device %s is not open", device)
+	}
+	c.stateMu.Unlock()
 
 	_, err := c.send(fmt.Sprintf("CLOSE %s", device))
+	if err != nil {
+		return err
+	}
+
+	c.stateMu.Lock()
+	delete(c.openBuffers, device)
+	c.stateMu.Unlock()
 	return err
 }
 
@@ -250,6 +318,14 @@ func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("command is required")
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.timeout > 0 {
+		_ = c.conn.SetDeadline(time.Now().Add(c.timeout))
+		defer c.conn.SetDeadline(time.Time{})
+	}
+
 	if _, err := fmt.Fprintf(c.conn, "%s\n", cmd); err != nil {
 		return nil, err
 	}
@@ -298,5 +374,45 @@ func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("iiod error %d", status)
 	}
 
+	c.stateMu.Lock()
+	c.lastPing = time.Now()
+	c.stateMu.Unlock()
+
 	return resp, nil
+}
+
+// ensureHealthy pings the server when the connection has been idle for longer
+// than the configured health window.
+func (c *Client) ensureHealthy() error {
+	if c == nil || c.conn == nil || c.reader == nil {
+		return fmt.Errorf("client is not connected")
+	}
+
+	c.stateMu.Lock()
+	needPing := c.lastPing.IsZero() || time.Since(c.lastPing) > c.healthWindow
+	c.stateMu.Unlock()
+
+	if !needPing {
+		return nil
+	}
+
+	return c.Ping()
+}
+
+// Ping issues a lightweight request to verify that the IIOD session is still
+// responsive.
+func (c *Client) Ping() error {
+	if c == nil || c.conn == nil || c.reader == nil {
+		return fmt.Errorf("client is not connected")
+	}
+
+	if _, err := c.GetContextInfo(); err != nil {
+		return fmt.Errorf("health check failed: %w", err)
+	}
+
+	c.stateMu.Lock()
+	c.lastPing = time.Now()
+	c.stateMu.Unlock()
+
+	return nil
 }
