@@ -2,26 +2,6 @@
     padding: 1rem 1.5rem;
 }
 
-/* 70/30 Layout Container */
-.settings-container {
-    display: flex;
-    gap: 2rem;
-    max-width: 100%;
-    min-height: calc(100vh - 120px);
-}
-
-/* Left side - Form (70%) */
-.settings-form-wrapper {
-    flex: 0 0 70%;
-    overflow-y: auto;
-}
-
-.settings-form-wrapper form {
-    display: grid;
-    gap: 1rem;
-}
-
-/* Legacy class for backwards compatibility */
 .settings-form {
     display: grid;
     gap: 1rem;
@@ -272,11 +252,13 @@
 
     .settings-form-wrapper {
         flex: 1 1 100%;
+        max-width: 100%;
     }
 
     .help-sidebar {
         position: static !important;
-        height: auto !important;
+        max-height: none !important;
+        max-width: 100%;
         flex: 1 1 100%;
     }
 }

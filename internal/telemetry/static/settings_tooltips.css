@@ -5,22 +5,25 @@
     display: flex;
     gap: 2rem;
     max-width: 100%;
-    height: calc(100vh - 80px);
+    width: 100%;
 }
 
 /* Left side - Form (70%) */
 .settings-form-wrapper {
-    flex: 0 0 70%;
-    overflow-y: auto;
-    padding-right: 1rem;
+    flex: 1 1 70%;
+    min-width: 0;
+    max-width: 70%;
 }
 
 /* Right side - Help panel (30%) */
 .help-sidebar {
     flex: 0 0 30%;
+    min-width: 0;
+    max-width: 30%;
     position: sticky;
-    top: 0;
-    height: calc(100vh - 80px);
+    top: 1rem;
+    align-self: flex-start;
+    max-height: calc(100vh - 120px);
     overflow-y: auto;
     background: #0d1117;
     border-left: 2px solid #1f2a3a;
