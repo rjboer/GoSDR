@@ -57,6 +57,11 @@ func (c *Client) Close() error {
 	err := c.conn.Close()
 	c.conn = nil
 	c.reader = nil
+
+	c.stateMu.Lock()
+	c.openBuffers = make(map[string]int)
+	c.lastPing = time.Time{}
+	c.stateMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -85,7 +90,19 @@ func Dial(addr string) (*Client, error) {
 		openBuffers:  make(map[string]int),
 		timeout:      5 * time.Second,
 		healthWindow: 10 * time.Second,
+		lastPing:     time.Now(),
 	}, nil
+}
+
+// SetTimeout overrides the default read/write timeout applied to protocol
+// operations. A zero duration disables deadlines.
+func (c *Client) SetTimeout(d time.Duration) {
+	if c == nil {
+		return
+	}
+	c.stateMu.Lock()
+	c.timeout = d
+	c.stateMu.Unlock()
 }
 
 // GetContextInfo queries the remote IIOD context version and description.
@@ -210,7 +227,11 @@ func (c *Client) ReadBuffer(device string, samples int) ([]byte, error) {
 		return nil, fmt.Errorf("requested samples %d do not match open buffer size %d", samples, bufSamples)
 	}
 
-	return c.sendBinary(fmt.Sprintf("READBUF %s %d", device, samples), nil)
+	return c.sendBinaryWithOptions(
+		fmt.Sprintf("READBUF %s %d", device, samples),
+		nil,
+		sendOptions{expectLengthPrefixedRes: true},
+	)
 }
 
 // WriteBuffer writes binary IQ data to the remote buffer.
@@ -233,7 +254,7 @@ func (c *Client) WriteBuffer(device string, data []byte) error {
 	}
 
 	cmd := fmt.Sprintf("WRITEBUF %s %d", device, len(data))
-	_, err := c.sendBinary(cmd, data)
+	_, err := c.sendBinaryWithOptions(cmd, data, sendOptions{prefixRequestLength: true})
 	return err
 }
 
@@ -302,7 +323,7 @@ func (c *Client) WriteAttr(device, channel, attr, value string) error {
 }
 
 func (c *Client) send(cmd string) (string, error) {
-	resp, err := c.sendBinary(cmd, nil)
+	resp, err := c.sendBinaryWithOptions(cmd, nil, sendOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -310,7 +331,16 @@ func (c *Client) send(cmd string) (string, error) {
 	return strings.TrimSpace(string(resp)), nil
 }
 
+type sendOptions struct {
+	prefixRequestLength     bool
+	expectLengthPrefixedRes bool
+}
+
 func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
+	return c.sendBinaryWithOptions(cmd, payload, sendOptions{})
+}
+
+func (c *Client) sendBinaryWithOptions(cmd string, payload []byte, opts sendOptions) ([]byte, error) {
 	if c == nil || c.conn == nil || c.reader == nil {
 		return nil, fmt.Errorf("client is not connected")
 	}
@@ -321,8 +351,12 @@ func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.timeout > 0 {
-		_ = c.conn.SetDeadline(time.Now().Add(c.timeout))
+	c.stateMu.Lock()
+	deadline := c.timeout
+	c.stateMu.Unlock()
+
+	if deadline > 0 {
+		_ = c.conn.SetDeadline(time.Now().Add(deadline))
 		defer c.conn.SetDeadline(time.Time{})
 	}
 
@@ -330,6 +364,11 @@ func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(payload) > 0 {
+		if opts.prefixRequestLength {
+			if _, err := fmt.Fprintf(c.conn, "%d\n", len(payload)); err != nil {
+				return nil, err
+			}
+		}
 		if _, err := c.conn.Write(payload); err != nil {
 			return nil, err
 		}
@@ -358,9 +397,24 @@ func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("negative payload length: %d", length)
 	}
 
+	respLength := length
+	if opts.expectLengthPrefixedRes && respLength == 0 {
+		lenLine, err := c.reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		respLength, err = strconv.Atoi(strings.TrimSpace(lenLine))
+		if err != nil {
+			return nil, fmt.Errorf("invalid length prefix: %w", err)
+		}
+		if respLength < 0 {
+			return nil, fmt.Errorf("negative length prefix: %d", respLength)
+		}
+	}
+
 	var resp []byte
-	if length > 0 {
-		resp = make([]byte, length)
+	if respLength > 0 {
+		resp = make([]byte, respLength)
 		if _, err := io.ReadFull(c.reader, resp); err != nil {
 			return nil, err
 		}

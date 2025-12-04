@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -93,6 +94,48 @@ func TestBufferReadSamples(t *testing.T) {
 	}
 }
 
+func TestBufferReadSamplesLengthPrefixed(t *testing.T) {
+	testData := []byte{1, 2, 3, 4}
+
+	addr, serverErr := startBufferMockServer(t, []mockBufferOp{
+		{cmd: "LIST_CHANNELS test-dev", status: 0, payload: "ch0"},
+		{cmd: "WRITE_ATTR test-dev ch0 en 1", status: 0, payload: ""},
+		{cmd: "OPEN test-dev 2", status: 0, payload: ""},
+		{cmd: "READBUF test-dev 2", status: 0, binaryPayload: testData, lengthPrefixedResponse: true},
+	})
+
+	client, err := Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	buf, err := client.CreateStreamBuffer("test-dev", 2, 0x01)
+	if err != nil {
+		t.Fatalf("CreateStreamBuffer failed: %v", err)
+	}
+	defer buf.Close()
+
+	data, err := buf.ReadSamples()
+	if err != nil {
+		t.Fatalf("ReadSamples failed: %v", err)
+	}
+
+	if len(data) != len(testData) {
+		t.Fatalf("unexpected data length: %d", len(data))
+	}
+
+	for i := range data {
+		if data[i] != testData[i] {
+			t.Fatalf("unexpected byte %d: got %d want %d", i, data[i], testData[i])
+		}
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error: %v", err)
+	}
+}
+
 func TestBufferWriteSamples(t *testing.T) {
 	testData := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 
@@ -100,7 +143,7 @@ func TestBufferWriteSamples(t *testing.T) {
 		{cmd: "LIST_CHANNELS test-dev", status: 0, payload: "ch0"},
 		{cmd: "WRITE_ATTR test-dev ch0 en 1", status: 0, payload: ""},
 		{cmd: "OPEN test-dev 4", status: 0, payload: ""},
-		{cmd: "WRITEBUF test-dev 8", status: 0, payload: "", expectBinary: testData},
+		{cmd: "WRITEBUF test-dev 8", status: 0, payload: "", expectBinary: testData, lengthPrefixedRequest: true},
 	})
 
 	client, err := Dial(addr)
@@ -117,6 +160,37 @@ func TestBufferWriteSamples(t *testing.T) {
 
 	err = buf.WriteSamples(testData)
 	if err != nil {
+		t.Fatalf("WriteSamples failed: %v", err)
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error: %v", err)
+	}
+}
+
+func TestBufferWriteSamplesLengthPrefixed(t *testing.T) {
+	testData := []byte{9, 8, 7, 6}
+
+	addr, serverErr := startBufferMockServer(t, []mockBufferOp{
+		{cmd: "LIST_CHANNELS test-dev", status: 0, payload: "ch0"},
+		{cmd: "WRITE_ATTR test-dev ch0 en 1", status: 0, payload: ""},
+		{cmd: "OPEN test-dev 2", status: 0, payload: ""},
+		{cmd: "WRITEBUF test-dev 4", status: 0, payload: "", expectBinary: testData, lengthPrefixedRequest: true},
+	})
+
+	client, err := Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	buf, err := client.CreateStreamBuffer("test-dev", 2, 0x01)
+	if err != nil {
+		t.Fatalf("CreateStreamBuffer failed: %v", err)
+	}
+	defer buf.Close()
+
+	if err := buf.WriteSamples(testData); err != nil {
 		t.Fatalf("WriteSamples failed: %v", err)
 	}
 
@@ -227,11 +301,13 @@ func TestInterleaveIQ(t *testing.T) {
 // Mock server types and helpers
 
 type mockBufferOp struct {
-	cmd           string
-	status        int
-	payload       string
-	binaryPayload []byte
-	expectBinary  []byte
+	cmd                    string
+	status                 int
+	payload                string
+	binaryPayload          []byte
+	expectBinary           []byte
+	lengthPrefixedRequest  bool
+	lengthPrefixedResponse bool
 }
 
 func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error) {
@@ -272,7 +348,25 @@ func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error
 			// Handle WRITEBUF specially - need to read binary data
 			if strings.HasPrefix(op.cmd, "WRITEBUF") {
 				if op.expectBinary != nil {
-					data := make([]byte, len(op.expectBinary))
+					expectedLen := len(op.expectBinary)
+					if op.lengthPrefixedRequest {
+						lenLine, err := reader.ReadString('\n')
+						if err != nil {
+							errCh <- fmt.Errorf("failed to read length prefix: %v", err)
+							return
+						}
+						length, err := strconv.Atoi(strings.TrimSpace(lenLine))
+						if err != nil {
+							errCh <- fmt.Errorf("invalid length prefix: %v", err)
+							return
+						}
+						if length != expectedLen {
+							errCh <- fmt.Errorf("unexpected length prefix: got %d, want %d", length, expectedLen)
+							return
+						}
+					}
+
+					data := make([]byte, expectedLen)
 					if _, err := reader.Read(data); err != nil {
 						errCh <- fmt.Errorf("failed to read binary data: %v", err)
 						return
@@ -290,10 +384,20 @@ func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error
 			// Send response
 			if op.binaryPayload != nil {
 				// Binary response
-				header := fmt.Sprintf("%d %d\n", op.status, len(op.binaryPayload))
+				headerLen := len(op.binaryPayload)
+				if op.lengthPrefixedResponse {
+					headerLen = 0
+				}
+				header := fmt.Sprintf("%d %d\n", op.status, headerLen)
 				if _, err := fmt.Fprint(conn, header); err != nil {
 					errCh <- err
 					return
+				}
+				if op.lengthPrefixedResponse {
+					if _, err := fmt.Fprintf(conn, "%d\n", len(op.binaryPayload)); err != nil {
+						errCh <- err
+						return
+					}
 				}
 				if _, err := conn.Write(op.binaryPayload); err != nil {
 					errCh <- err
