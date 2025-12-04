@@ -146,6 +146,56 @@ func (c *Client) CreateBuffer(device string, samples int) (string, error) {
 	return c.send(fmt.Sprintf("CREATE_BUFFER %s %d", device, samples))
 }
 
+// OpenBuffer issues the OPEN command to allocate a streaming buffer for the
+// given device and sample count.
+func (c *Client) OpenBuffer(device string, samples int) error {
+	if strings.TrimSpace(device) == "" {
+		return fmt.Errorf("device name is required")
+	}
+	if samples <= 0 {
+		return fmt.Errorf("sample count must be positive")
+	}
+
+	_, err := c.send(fmt.Sprintf("OPEN %s %d", device, samples))
+	return err
+}
+
+// ReadBuffer requests binary sample data from the remote buffer.
+func (c *Client) ReadBuffer(device string, samples int) ([]byte, error) {
+	if strings.TrimSpace(device) == "" {
+		return nil, fmt.Errorf("device name is required")
+	}
+	if samples <= 0 {
+		return nil, fmt.Errorf("sample count must be positive")
+	}
+
+	return c.sendBinary(fmt.Sprintf("READBUF %s %d", device, samples), nil)
+}
+
+// WriteBuffer writes binary IQ data to the remote buffer.
+func (c *Client) WriteBuffer(device string, data []byte) error {
+	if strings.TrimSpace(device) == "" {
+		return fmt.Errorf("device name is required")
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("no data provided for buffer write")
+	}
+
+	cmd := fmt.Sprintf("WRITEBUF %s %d", device, len(data))
+	_, err := c.sendBinary(cmd, data)
+	return err
+}
+
+// CloseBuffer tears down the remote buffer.
+func (c *Client) CloseBuffer(device string) error {
+	if strings.TrimSpace(device) == "" {
+		return fmt.Errorf("device name is required")
+	}
+
+	_, err := c.send(fmt.Sprintf("CLOSE %s", device))
+	return err
+}
+
 // ReadAttr reads a device or channel attribute. An empty channel targets a
 // device attribute; otherwise the attribute is read from the named channel.
 func (c *Client) ReadAttr(device, channel, attr string) (string, error) {
@@ -184,56 +234,69 @@ func (c *Client) WriteAttr(device, channel, attr, value string) error {
 }
 
 func (c *Client) send(cmd string) (string, error) {
+	resp, err := c.sendBinary(cmd, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(resp)), nil
+}
+
+func (c *Client) sendBinary(cmd string, payload []byte) ([]byte, error) {
 	if c == nil || c.conn == nil || c.reader == nil {
-		return "", fmt.Errorf("client is not connected")
+		return nil, fmt.Errorf("client is not connected")
 	}
 	if strings.TrimSpace(cmd) == "" {
-		return "", fmt.Errorf("command is required")
+		return nil, fmt.Errorf("command is required")
 	}
 
 	if _, err := fmt.Fprintf(c.conn, "%s\n", cmd); err != nil {
-		return "", err
+		return nil, err
+	}
+	if len(payload) > 0 {
+		if _, err := c.conn.Write(payload); err != nil {
+			return nil, err
+		}
 	}
 
 	line, err := c.reader.ReadString('\n')
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	line = strings.TrimSpace(line)
 
 	parts := strings.Fields(line)
 	if len(parts) != 2 {
-		return "", fmt.Errorf("malformed reply header: %q", line)
+		return nil, fmt.Errorf("malformed reply header: %q", line)
 	}
 
 	status, err := strconv.Atoi(parts[0])
 	if err != nil {
-		return "", fmt.Errorf("invalid status code: %w", err)
+		return nil, fmt.Errorf("invalid status code: %w", err)
 	}
 	length, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return "", fmt.Errorf("invalid payload length: %w", err)
+		return nil, fmt.Errorf("invalid payload length: %w", err)
 	}
 	if length < 0 {
-		return "", fmt.Errorf("negative payload length: %d", length)
+		return nil, fmt.Errorf("negative payload length: %d", length)
 	}
 
-	var payload string
+	var resp []byte
 	if length > 0 {
-		buf := make([]byte, length)
-		if _, err := io.ReadFull(c.reader, buf); err != nil {
-			return "", err
+		resp = make([]byte, length)
+		if _, err := io.ReadFull(c.reader, resp); err != nil {
+			return nil, err
 		}
-		payload = string(buf)
 	}
 
 	if status != 0 {
-		payload = strings.TrimSpace(payload)
-		if payload != "" {
-			return "", fmt.Errorf("iiod error %d: %s", status, payload)
+		msg := strings.TrimSpace(string(resp))
+		if msg != "" {
+			return nil, fmt.Errorf("iiod error %d: %s", status, msg)
 		}
-		return "", fmt.Errorf("iiod error %d", status)
+		return nil, fmt.Errorf("iiod error %d", status)
 	}
 
-	return strings.TrimSpace(payload), nil
+	return resp, nil
 }
