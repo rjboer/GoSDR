@@ -177,15 +177,16 @@ func (c *Client) OpenBuffer(device string, samples int) error {
 	}
 	c.stateMu.Unlock()
 
-	_, err := c.send(fmt.Sprintf("OPEN %s %d", device, samples))
-	if err != nil {
+	// OPEN replies use the standard binary header. We only care about the
+	// status code; any payload is ignored.
+	if _, err := c.sendBinary(fmt.Sprintf("OPEN %s %d", device, samples), nil); err != nil {
 		return err
 	}
 
 	c.stateMu.Lock()
 	c.openBuffers[device] = samples
 	c.stateMu.Unlock()
-	return err
+	return nil
 }
 
 // ReadBuffer requests binary sample data from the remote buffer.
@@ -210,7 +211,14 @@ func (c *Client) ReadBuffer(device string, samples int) ([]byte, error) {
 		return nil, fmt.Errorf("requested samples %d do not match open buffer size %d", samples, bufSamples)
 	}
 
-	return c.sendBinary(fmt.Sprintf("READBUF %s %d", device, samples), nil)
+	// Parse the binary reply to ensure the status code is checked and the
+	// exact payload length is read.
+	data, err := c.sendBinary(fmt.Sprintf("READBUF %s %d", device, samples), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return data, nil
 }
 
 // WriteBuffer writes binary IQ data to the remote buffer.
@@ -233,8 +241,13 @@ func (c *Client) WriteBuffer(device string, data []byte) error {
 	}
 
 	cmd := fmt.Sprintf("WRITEBUF %s %d", device, len(data))
-	_, err := c.sendBinary(cmd, data)
-	return err
+	// The response uses the same binary header format as other commands;
+	// we ignore any payload and rely on the status code for success.
+	if _, err := c.sendBinary(cmd, data); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // CloseBuffer tears down the remote buffer.
@@ -253,15 +266,14 @@ func (c *Client) CloseBuffer(device string) error {
 	}
 	c.stateMu.Unlock()
 
-	_, err := c.send(fmt.Sprintf("CLOSE %s", device))
-	if err != nil {
+	if _, err := c.sendBinary(fmt.Sprintf("CLOSE %s", device), nil); err != nil {
 		return err
 	}
 
 	c.stateMu.Lock()
 	delete(c.openBuffers, device)
 	c.stateMu.Unlock()
-	return err
+	return nil
 }
 
 // ReadAttr reads a device or channel attribute. An empty channel targets a
