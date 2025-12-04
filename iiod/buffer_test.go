@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -367,7 +368,7 @@ func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error
 					}
 
 					data := make([]byte, expectedLen)
-					if _, err := reader.Read(data); err != nil {
+					if _, err := io.ReadFull(reader, data); err != nil {
 						errCh <- fmt.Errorf("failed to read binary data: %v", err)
 						return
 					}

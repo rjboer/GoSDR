@@ -50,11 +50,27 @@ func (c *Client) Send(cmd string) (string, error) {
 
 // Close terminates the underlying network connection.
 func (c *Client) Close() error {
-	if c == nil || c.conn == nil {
+	if c == nil {
 		return fmt.Errorf("client is not connected")
 	}
 
-	err := c.conn.Close()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		c.cleanupConnLocked()
+		return fmt.Errorf("client is not connected")
+	}
+
+	return c.cleanupConnLocked()
+}
+
+func (c *Client) cleanupConnLocked() error {
+	var err error
+	if c.conn != nil {
+		err = c.conn.Close()
+	}
+
 	c.conn = nil
 	c.reader = nil
 
@@ -62,11 +78,8 @@ func (c *Client) Close() error {
 	c.openBuffers = make(map[string]int)
 	c.lastPing = time.Time{}
 	c.stateMu.Unlock()
-	if err != nil {
-		return err
-	}
 
-	return nil
+	return err
 }
 
 // ContextInfo describes the remote IIOD context reported by the server.
@@ -361,39 +374,47 @@ func (c *Client) sendBinaryWithOptions(cmd string, payload []byte, opts sendOpti
 	}
 
 	if _, err := fmt.Fprintf(c.conn, "%s\n", cmd); err != nil {
+		c.cleanupConnLocked()
 		return nil, err
 	}
 	if len(payload) > 0 {
 		if opts.prefixRequestLength {
 			if _, err := fmt.Fprintf(c.conn, "%d\n", len(payload)); err != nil {
+				c.cleanupConnLocked()
 				return nil, err
 			}
 		}
 		if _, err := c.conn.Write(payload); err != nil {
+			c.cleanupConnLocked()
 			return nil, err
 		}
 	}
 
 	line, err := c.reader.ReadString('\n')
 	if err != nil {
+		c.cleanupConnLocked()
 		return nil, err
 	}
 	line = strings.TrimSpace(line)
 
 	parts := strings.Fields(line)
 	if len(parts) != 2 {
+		c.cleanupConnLocked()
 		return nil, fmt.Errorf("malformed reply header: %q", line)
 	}
 
 	status, err := strconv.Atoi(parts[0])
 	if err != nil {
+		c.cleanupConnLocked()
 		return nil, fmt.Errorf("invalid status code: %w", err)
 	}
 	length, err := strconv.Atoi(parts[1])
 	if err != nil {
+		c.cleanupConnLocked()
 		return nil, fmt.Errorf("invalid payload length: %w", err)
 	}
 	if length < 0 {
+		c.cleanupConnLocked()
 		return nil, fmt.Errorf("negative payload length: %d", length)
 	}
 
@@ -401,13 +422,16 @@ func (c *Client) sendBinaryWithOptions(cmd string, payload []byte, opts sendOpti
 	if opts.expectLengthPrefixedRes && respLength == 0 {
 		lenLine, err := c.reader.ReadString('\n')
 		if err != nil {
+			c.cleanupConnLocked()
 			return nil, err
 		}
 		respLength, err = strconv.Atoi(strings.TrimSpace(lenLine))
 		if err != nil {
+			c.cleanupConnLocked()
 			return nil, fmt.Errorf("invalid length prefix: %w", err)
 		}
 		if respLength < 0 {
+			c.cleanupConnLocked()
 			return nil, fmt.Errorf("negative length prefix: %d", respLength)
 		}
 	}
@@ -416,6 +440,7 @@ func (c *Client) sendBinaryWithOptions(cmd string, payload []byte, opts sendOpti
 	if respLength > 0 {
 		resp = make([]byte, respLength)
 		if _, err := io.ReadFull(c.reader, resp); err != nil {
+			c.cleanupConnLocked()
 			return nil, err
 		}
 	}
