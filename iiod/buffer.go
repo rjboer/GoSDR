@@ -3,7 +3,6 @@ package iiod
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"strings"
 )
 
@@ -126,9 +125,7 @@ func (b *Buffer) open() error {
 		return fmt.Errorf("buffer is already open")
 	}
 
-	cmd := fmt.Sprintf("OPEN %s %d", b.device, b.size)
-	_, err := b.client.send(cmd)
-	if err != nil {
+	if err := b.client.OpenBuffer(b.device, b.size); err != nil {
 		return err
 	}
 
@@ -150,45 +147,12 @@ func (b *Buffer) ReadSamples() ([]byte, error) {
 		return nil, fmt.Errorf("buffer is not open")
 	}
 
-	cmd := fmt.Sprintf("READBUF %s %d", b.device, b.size)
-
-	// Send command
-	if _, err := fmt.Fprintf(b.client.conn, "%s\n", cmd); err != nil {
-		return nil, err
-	}
-
-	// Read response header: "STATUS LENGTH\n"
-	line, err := b.client.reader.ReadString('\n')
+	data, err := b.client.ReadBuffer(b.device, b.size)
 	if err != nil {
 		return nil, err
 	}
-	line = strings.TrimSpace(line)
-
-	var status, length int
-	if _, err := fmt.Sscanf(line, "%d %d", &status, &length); err != nil {
-		return nil, fmt.Errorf("malformed response header: %q", line)
-	}
-
-	if status != 0 {
-		// Read error message if present
-		if length > 0 {
-			errMsg := make([]byte, length)
-			if _, err := io.ReadFull(b.client.reader, errMsg); err != nil {
-				return nil, fmt.Errorf("iiod error %d (failed to read error message: %v)", status, err)
-			}
-			return nil, fmt.Errorf("iiod error %d: %s", status, strings.TrimSpace(string(errMsg)))
-		}
-		return nil, fmt.Errorf("iiod error %d", status)
-	}
-
-	if length <= 0 {
+	if len(data) == 0 {
 		return nil, fmt.Errorf("no data returned from buffer read")
-	}
-
-	// Read binary data
-	data := make([]byte, length)
-	if _, err := io.ReadFull(b.client.reader, data); err != nil {
-		return nil, fmt.Errorf("failed to read buffer data: %w", err)
 	}
 
 	return data, nil
@@ -211,43 +175,7 @@ func (b *Buffer) WriteSamples(data []byte) error {
 		return fmt.Errorf("no data to write")
 	}
 
-	cmd := fmt.Sprintf("WRITEBUF %s %d\n", b.device, len(data))
-
-	// Send command header
-	if _, err := fmt.Fprintf(b.client.conn, "%s", cmd); err != nil {
-		return err
-	}
-
-	// Send binary data
-	if _, err := b.client.conn.Write(data); err != nil {
-		return fmt.Errorf("failed to write buffer data: %w", err)
-	}
-
-	// Read response
-	line, err := b.client.reader.ReadString('\n')
-	if err != nil {
-		return err
-	}
-	line = strings.TrimSpace(line)
-
-	var status, length int
-	if _, err := fmt.Sscanf(line, "%d %d", &status, &length); err != nil {
-		return fmt.Errorf("malformed response header: %q", line)
-	}
-
-	if status != 0 {
-		// Read error message if present
-		if length > 0 {
-			errMsg := make([]byte, length)
-			if _, err := io.ReadFull(b.client.reader, errMsg); err != nil {
-				return fmt.Errorf("iiod error %d (failed to read error message: %v)", status, err)
-			}
-			return fmt.Errorf("iiod error %d: %s", status, strings.TrimSpace(string(errMsg)))
-		}
-		return fmt.Errorf("iiod error %d", status)
-	}
-
-	return nil
+	return b.client.WriteBuffer(b.device, data)
 }
 
 // Close destroys the buffer and releases resources on the remote device.
@@ -256,8 +184,7 @@ func (b *Buffer) Close() error {
 		return nil // Already closed
 	}
 
-	cmd := fmt.Sprintf("CLOSE %s", b.device)
-	_, err := b.client.send(cmd)
+	err := b.client.CloseBuffer(b.device)
 	b.isOpen = false
 	return err
 }
