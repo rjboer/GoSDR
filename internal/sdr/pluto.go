@@ -173,10 +173,15 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 	fmt.Printf("[PLUTO DEBUG] Connected successfully!\n")
 
 	devices, err := client.ListDevices()
-	if err != nil {
+	if err != nil || len(devices) == 0 {
 		// Older IIOD versions: try XML parsing, then fall back to hardcoded names
-		p.logEvent("warn", fmt.Sprintf("IIO: LIST_DEVICES failed (%v), trying XML context", err))
-		fmt.Printf("[PLUTO DEBUG] LIST_DEVICES failed: %v, trying XML context\n", err)
+		if err != nil {
+			p.logEvent("warn", fmt.Sprintf("IIO: LIST_DEVICES failed (%v), trying XML context", err))
+			fmt.Printf("[PLUTO DEBUG] LIST_DEVICES failed: %v, trying XML context\n", err)
+		} else {
+			p.logEvent("warn", "IIO: LIST_DEVICES returned empty, trying XML context")
+			fmt.Printf("[PLUTO DEBUG] LIST_DEVICES returned empty, trying XML context\n")
+		}
 
 		// Try to get devices from XML
 		xmlDevices, xmlErr := client.ListDevicesFromXML(context.Background())

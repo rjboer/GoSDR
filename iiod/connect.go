@@ -23,6 +23,7 @@ type Client struct {
 	reconnectCfg *ReconnectConfig
 	addr         string
 	isConnected  atomic.Bool
+	xmlContext   string // Cached XML context from server
 }
 
 // ClientMetrics tracks IIO client performance and health.
@@ -543,13 +544,38 @@ func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload 
 	c.metrics.BytesReceived.Add(uint64(len(line)))
 	line = strings.TrimSpace(line)
 
+	// Check for XML response BEFORE splitting into fields (XML has many whitespace-separated tokens)
+	if strings.HasPrefix(line, "<?xml") {
+		// Consume and cache the entire XML document
+		xmlBuilder := strings.Builder{}
+		xmlBuilder.WriteString(line)
+		xmlBuilder.WriteString("\n")
+
+		for {
+			xmlLine, readErr := c.reader.ReadString('\n')
+			if readErr != nil {
+				break
+			}
+			c.metrics.BytesReceived.Add(uint64(len(xmlLine)))
+			xmlBuilder.WriteString(xmlLine)
+			if strings.Contains(xmlLine, "</context>") {
+				break
+			}
+		}
+
+		// Cache the XML context
+		c.xmlContext = xmlBuilder.String()
+		c.metrics.LastCommandTime.Store(time.Now())
+		return nil, nil // Treat as success with no data
+	}
+
 	parts := strings.Fields(line)
 
 	// Handle error-only response (e.g., "-22" without length field)
 	if len(parts) == 1 {
 		status, err := strconv.Atoi(parts[0])
 		if err != nil {
-			// Not a number - legacy format returning data directly
+			// Other non-numeric single-field responses - treat as data
 			c.metrics.LastCommandTime.Store(time.Now())
 			return []byte(line), nil
 		}
