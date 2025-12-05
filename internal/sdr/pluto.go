@@ -53,13 +53,10 @@ func (p *PlutoSDR) SetDebugMode(enabled bool) {
 }
 
 func (p *PlutoSDR) logEvent(level, message string) {
-	p.mu.Lock()
-	logger := p.eventLogger
-	debugMode := p.debugMode
-	p.mu.Unlock()
-
-	if logger != nil && debugMode {
-		logger.LogEvent(level, message)
+	// Don't lock mutex here - this is called from within locked sections
+	// Just read the fields directly (they're set before Init is called)
+	if p.eventLogger != nil && p.debugMode {
+		p.eventLogger.LogEvent(level, message)
 	}
 }
 
@@ -139,12 +136,19 @@ func (p *PlutoSDR) GetDebugInfo() (*DebugInfo, error) {
 // Init connects to the IIOD server, discovers the AD9361 devices, programs
 // key attributes, and prepares RX/TX buffers for dual-channel streaming.
 func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
+	fmt.Printf("[PLUTO DEBUG] Init() called with URI=%s, SampleRate=%.0f\n", cfg.URI, cfg.SampleRate)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if cfg.URI == "" {
 		cfg.URI = "192.168.2.1:30431"
 	}
+
+	// Add default IIOD port if not specified
+	if !strings.Contains(cfg.URI, ":") {
+		cfg.URI = cfg.URI + ":30431"
+	}
+
 	if cfg.NumSamples <= 0 {
 		cfg.NumSamples = 1024
 	}
@@ -153,31 +157,54 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 	}
 
 	p.logEvent("info", fmt.Sprintf("IIO: Connecting to %s", cfg.URI))
+	fmt.Printf("[PLUTO DEBUG] Attempting to connect to %s...\n", cfg.URI)
+	fmt.Printf("[PLUTO DEBUG] About to call iiod.Dial()...\n")
 
 	client, err := iiod.Dial(cfg.URI)
+
+	fmt.Printf("[PLUTO DEBUG] iiod.Dial() returned, err=%v\n", err)
 	if err != nil {
 		p.logEvent("error", fmt.Sprintf("IIO: Connection failed: %v", err))
+		fmt.Printf("[PLUTO DEBUG] Connection FAILED: %v\n", err)
 		return fmt.Errorf("connect to IIOD: %w", err)
 	}
 
 	p.logEvent("info", "IIO: Connected successfully")
+	fmt.Printf("[PLUTO DEBUG] Connected successfully!\n")
 
 	devices, err := client.ListDevices()
 	if err != nil {
-		p.logEvent("error", fmt.Sprintf("IIO: Failed to list devices: %v", err))
-		return fmt.Errorf("list devices: %w", err)
+		// Older IIOD versions: try XML parsing, then fall back to hardcoded names
+		p.logEvent("warn", fmt.Sprintf("IIO: LIST_DEVICES failed (%v), trying XML context", err))
+		fmt.Printf("[PLUTO DEBUG] LIST_DEVICES failed: %v, trying XML context\n", err)
+
+		// Try to get devices from XML
+		xmlDevices, xmlErr := client.ListDevicesFromXML(context.Background())
+		if xmlErr == nil && len(xmlDevices) > 0 {
+			devices = xmlDevices
+			p.logEvent("info", "IIO: Successfully parsed devices from XML context")
+			fmt.Printf("[PLUTO DEBUG] Parsed %d devices from XML\n", len(xmlDevices))
+		} else {
+			// Final fallback: hardcoded AD9361 device names
+			p.logEvent("warn", "IIO: XML parsing failed, using hardcoded AD9361 device names")
+			fmt.Printf("[PLUTO DEBUG] XML parsing failed, using hardcoded device names\n")
+			devices = []string{"ad9361-phy", "cf-ad9361-lpc", "cf-ad9361-dds-core-lpc"}
+		}
 	}
 
 	p.logEvent("debug", fmt.Sprintf("IIO: Found %d devices", len(devices)))
+	fmt.Printf("[PLUTO DEBUG] Found %d devices: %v\n", len(devices), devices)
 
 	phy, rx, tx := identifyAD9361Devices(devices)
 	if phy == "" || rx == "" || tx == "" {
 		_ = client.Close()
 		p.logEvent("error", fmt.Sprintf("IIO: AD9361 devices not found (phy=%q rx=%q tx=%q)", phy, rx, tx))
+		fmt.Printf("[PLUTO DEBUG] AD9361 devices not found (phy=%q rx=%q tx=%q)\n", phy, rx, tx)
 		return fmt.Errorf("unable to locate AD9361 devices (phy=%q rx=%q tx=%q)", phy, rx, tx)
 	}
 
 	p.logEvent("info", fmt.Sprintf("IIO: Found AD9361 devices - PHY: %s, RX: %s, TX: %s", phy, rx, tx))
+	fmt.Printf("[PLUTO DEBUG] Found AD9361: PHY=%s, RX=%s, TX=%s\n", phy, rx, tx)
 
 	// Program sample rate and LOs.
 	p.logEvent("debug", fmt.Sprintf("IIO: Setting sample rate to %.0f Hz", cfg.SampleRate))

@@ -34,6 +34,7 @@ type Config struct {
 	MaxTracks         int
 	TrackTimeout      time.Duration
 	MinSNRThreshold   float64
+	URI               string // SDR backend connection URI
 }
 
 // TrackLifecycle represents the lifecycle of a track.
@@ -497,6 +498,7 @@ func (t *Tracker) Init(ctx context.Context) error {
 	// Update cached DSP size if needed
 	t.dsp.UpdateSize(t.cfg.NumSamples)
 	if err := t.sdr.Init(ctx, sdr.Config{
+		URI:        t.cfg.URI,
 		SampleRate: t.cfg.SampleRate,
 		RxLO:       t.cfg.RxLO,
 		RxGain0:    t.cfg.RxGain0,

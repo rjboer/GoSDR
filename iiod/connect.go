@@ -208,12 +208,56 @@ func (c *Client) ListDevices() ([]string, error) {
 func (c *Client) ListDevicesWithContext(ctx context.Context) ([]string, error) {
 	payload, err := c.SendWithContext(ctx, "LIST_DEVICES")
 	if err != nil {
-		return nil, err
+		// Fallback to XML parsing for older IIOD versions
+		return c.ListDevicesFromXML(ctx)
 	}
 	if payload == "" {
 		return nil, nil
 	}
 	return strings.Fields(payload), nil
+}
+
+// GetXMLContext retrieves the full XML context description from the IIOD server.
+func (c *Client) GetXMLContext() (string, error) {
+	return c.GetXMLContextWithContext(context.Background())
+}
+
+// GetXMLContextWithContext retrieves XML context with context support.
+func (c *Client) GetXMLContextWithContext(ctx context.Context) (string, error) {
+	return c.SendWithContext(ctx, "PRINT")
+}
+
+// ListDevicesFromXML parses device names from the XML context.
+// This is a fallback for older IIOD versions that don't support LIST_DEVICES.
+func (c *Client) ListDevicesFromXML(ctx context.Context) ([]string, error) {
+	xml, err := c.GetXMLContextWithContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get XML context: %w", err)
+	}
+
+	// Simple XML parsing to extract device IDs
+	devices := []string{}
+	lines := strings.Split(xml, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Look for <device id="..." name="...">
+		if strings.HasPrefix(line, "<device ") && strings.Contains(line, "id=") {
+			// Extract id attribute
+			idStart := strings.Index(line, "id=\"")
+			if idStart == -1 {
+				continue
+			}
+			idStart += 4 // Skip 'id="'
+			idEnd := strings.Index(line[idStart:], "\"")
+			if idEnd == -1 {
+				continue
+			}
+			deviceID := line[idStart : idStart+idEnd]
+			devices = append(devices, deviceID)
+		}
+	}
+
+	return devices, nil
 }
 
 // GetChannels returns the list of channel IDs for a given device.
@@ -451,7 +495,6 @@ func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload 
 	}
 
 	c.metrics.CommandsSent.Add(1)
-	startTime := time.Now()
 
 	// Set deadline based on context
 	if deadline, ok := ctx.Deadline(); ok {
@@ -501,6 +544,24 @@ func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload 
 	line = strings.TrimSpace(line)
 
 	parts := strings.Fields(line)
+
+	// Handle error-only response (e.g., "-22" without length field)
+	if len(parts) == 1 {
+		status, err := strconv.Atoi(parts[0])
+		if err != nil {
+			// Not a number - legacy format returning data directly
+			c.metrics.LastCommandTime.Store(time.Now())
+			return []byte(line), nil
+		}
+		if status < 0 {
+			c.metrics.CommandsFailed.Add(1)
+			return nil, fmt.Errorf("iiod error %d (EINVAL)", status)
+		}
+		// Positive single number - legacy format, treat as successful response
+		c.metrics.LastCommandTime.Store(time.Now())
+		return []byte(line), nil
+	}
+
 	if len(parts) != 2 {
 		c.metrics.CommandsFailed.Add(1)
 		return nil, fmt.Errorf("malformed reply header: %q", line)

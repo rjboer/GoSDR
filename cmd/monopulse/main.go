@@ -62,24 +62,30 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	logger.Info("selecting SDR backend", logging.Field{Key: "backend", Value: cfg.sdrBackend})
 	backend, err := selectBackend(cfg)
 	if err != nil {
 		logger.Error("select backend", logging.Field{Key: "error", Value: err})
 		os.Exit(1)
 	}
+	logger.Info("backend selected successfully", logging.Field{Key: "backend", Value: cfg.sdrBackend})
+
 	// Only use web telemetry (no stdout spam)
 	var reporters []telemetry.Reporter
 	if cfg.webAddr != "" {
+		logger.Info("initializing telemetry hub")
 		hubLogger := logger.With(logging.Field{Key: "subsystem", Value: "telemetry"})
 		hub := telemetry.NewHub(cfg.historyLimit, hubLogger)
 		reporters = append(reporters, hub)
 
 		// Wire up Pluto SDR event logger if using Pluto backend
 		if pluto, ok := backend.(*sdr.PlutoSDR); ok {
+			logger.Info("configuring Pluto SDR event logging")
 			pluto.SetEventLogger(hub)
 			pluto.SetDebugMode(cfg.debugMode)
 		}
 
+		logger.Info("starting web server", logging.Field{Key: "addr", Value: cfg.webAddr})
 		go telemetry.NewWebServer(cfg.webAddr, hub, backend, hubLogger).Start(ctx)
 		hubLogger.Info("web interface available", logging.Field{Key: "addr", Value: cfg.webAddr})
 	} else {
@@ -87,8 +93,10 @@ func main() {
 		reporters = append(reporters, telemetry.NewStdoutReporter(logger.With(logging.Field{Key: "subsystem", Value: "telemetry"})))
 	}
 
+	logger.Info("creating tracker")
 	trackerLogger := logger.With(logging.Field{Key: "subsystem", Value: "tracker"})
 	tracker := app.NewTracker(backend, telemetry.MultiReporter(reporters), trackerLogger, app.Config{
+		URI:               cfg.sdrURI,
 		SampleRate:        cfg.sampleRate,
 		RxLO:              cfg.rxLO,
 		RxGain0:           cfg.rxGain0,
@@ -111,10 +119,12 @@ func main() {
 		MinSNRThreshold:   cfg.minSNR,
 	})
 
+	logger.Info("initializing tracker (this may take a few seconds)")
 	if err := tracker.Init(ctx); err != nil {
 		trackerLogger.Error("init tracker", logging.Field{Key: "error", Value: err})
 		os.Exit(1)
 	}
+	logger.Info("tracker initialized successfully")
 
 	// Run continuously (no timeout)
 	trackerLogger.Info("starting tracker", logging.Field{Key: "note", Value: "Ctrl+C to stop"})
