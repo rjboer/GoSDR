@@ -297,7 +297,25 @@ const tooltipData = {
         title: "MockSDR Simulated Phase Delta",
         definition: "For MockSDR backend only: Sets the simulated phase difference between channels in degrees. Can be adjusted in real-time via Live Control slider.",
         tip: "Set initial angle here, then use the MockSDR Live Control slider for real-time adjustment."
+    },
+
+    debugMode: {
+        title: "Debug Mode",
+        definition: "Enables detailed diagnostic information in telemetry payloads and event log. Includes DSP internals, IIO protocol messages, and hardware status for troubleshooting.",
+        details: [
+            "<strong>Telemetry:</strong> Adds debug fields to samples (phase delay, monopulse phase, peak bin info)",
+            "<strong>Event Log:</strong> Shows IIO connection events, configuration changes, and hardware diagnostics",
+            "<strong>Pluto SDR:</strong> Logs all IIO operations (connect, init, buffer operations, errors)",
+            "<strong>Hardware Info:</strong> Enables RSSI, temperature, and buffer health monitoring"
+        ],
+        examples: [
+            { value: "Enabled", desc: "Full diagnostics - see IIO messages like 'IIO: Connected successfully', 'IIO: RSSI Ch0 = -45 dB'" },
+            { value: "Disabled", desc: "Production mode - minimal overhead, no debug fields" }
+        ],
+        tip: "Enable when troubleshooting connection issues, phase calibration problems, or hardware errors. Check Event Log in Diagnostics tab for IIO messages.",
+        warning: "Debug mode increases telemetry payload size and may slightly reduce update rate. Disable for production use."
     }
+
 };
 
 // Function to add info icons and setup sidebar interaction

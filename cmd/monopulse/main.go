@@ -73,6 +73,13 @@ func main() {
 		hubLogger := logger.With(logging.Field{Key: "subsystem", Value: "telemetry"})
 		hub := telemetry.NewHub(cfg.historyLimit, hubLogger)
 		reporters = append(reporters, hub)
+
+		// Wire up Pluto SDR event logger if using Pluto backend
+		if pluto, ok := backend.(*sdr.PlutoSDR); ok {
+			pluto.SetEventLogger(hub)
+			pluto.SetDebugMode(cfg.debugMode)
+		}
+
 		go telemetry.NewWebServer(cfg.webAddr, hub, backend, hubLogger).Start(ctx)
 		hubLogger.Info("web interface available", logging.Field{Key: "addr", Value: cfg.webAddr})
 	} else {

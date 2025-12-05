@@ -771,6 +771,12 @@ func (h *Hub) recordEventLocked(level, message string) {
 	}
 }
 
+// LogEvent records an event to the diagnostic event log.
+// This method is thread-safe and can be called from external components like SDR backends.
+func (h *Hub) LogEvent(level, message string) {
+	h.recordEvent(level, message)
+}
+
 // History returns a copy of stored telemetry samples, filtered by optional
 // track IDs.
 func (h *Hub) History(trackIDs ...string) []MultiTrackSample {
