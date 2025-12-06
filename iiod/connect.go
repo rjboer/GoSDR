@@ -29,12 +29,24 @@ type Client struct {
 	isConnected     atomic.Bool
 	ProtocolVersion ProtocolVersion
 	xmlContext      string // Cached XML context from server
+	deviceIndexMap  map[string]uint16
+	attributeCodes  map[attrKey]uint16
+	stateMu         sync.Mutex
+	openBuffers     map[string]int
+	timeout         time.Duration
+	healthWindow    time.Duration
 }
 
 // ProtocolVersion captures the IIOD protocol version reported by the server.
 type ProtocolVersion struct {
 	Major int
 	Minor int
+}
+
+type attrKey struct {
+	device  string
+	channel string
+	attr    string
 }
 
 // ClientMetrics tracks IIO client performance and health.
@@ -114,6 +126,30 @@ type ContextInfo struct {
 	Major       int
 	Minor       int
 	Description string
+}
+
+// AttributeInfo captures metadata for a device or channel attribute parsed from XML.
+type AttributeInfo struct {
+	Name     string
+	Filename string
+	Type     string
+	Unit     string
+	Value    string
+}
+
+// ChannelInfo captures metadata for a device channel parsed from XML.
+type ChannelInfo struct {
+	ID         string
+	Type       string
+	Attributes []AttributeInfo
+}
+
+// DeviceInfo captures metadata for a device parsed from XML.
+type DeviceInfo struct {
+	ID         string
+	Name       string
+	Attributes []AttributeInfo
+	Channels   []ChannelInfo
 }
 
 // Dial opens a TCP connection to an IIOD server.
@@ -254,6 +290,26 @@ func (c *Client) GetContextInfoWithContext(ctx context.Context) (ContextInfo, er
 	return ContextInfo{Major: major, Minor: minor, Description: description}, nil
 }
 
+// GetDeviceInfo retrieves detailed device metadata via the XML command.
+func (c *Client) GetDeviceInfo() ([]DeviceInfo, error) {
+	return c.GetDeviceInfoWithContext(context.Background())
+}
+
+// GetDeviceInfoWithContext retrieves device metadata via the XML command with context support.
+func (c *Client) GetDeviceInfoWithContext(ctx context.Context) ([]DeviceInfo, error) {
+	resp, err := c.SendWithContext(ctx, "XML")
+	if err != nil {
+		return nil, err
+	}
+
+	if resp == "" {
+		return nil, fmt.Errorf("empty XML response")
+	}
+
+	c.cacheXMLMetadata(resp)
+	return parseDeviceInfoFromXML(resp)
+}
+
 // ListDevices returns the set of device identifiers known by the server.
 func (c *Client) ListDevices() ([]string, error) {
 	return c.ListDevicesWithContext(context.Background())
@@ -280,6 +336,11 @@ func (c *Client) GetXMLContext() (string, error) {
 // GetXMLContextWithContext retrieves XML context with context support.
 func (c *Client) GetXMLContextWithContext(ctx context.Context) (string, error) {
 	if c.xmlContext != "" {
+		if c.deviceIndexMap == nil || c.attributeCodes == nil {
+			if err := c.refreshMetadataMaps(c.xmlContext); err != nil {
+				log.Printf("Failed to parse IIOD metadata maps from cached XML: %v", err)
+			}
+		}
 		return c.xmlContext, nil
 	}
 
@@ -296,8 +357,7 @@ func (c *Client) GetXMLContextWithContext(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no XML context received")
 	}
 
-	c.xmlContext = resp
-	c.updateProtocolVersionFromXML(resp)
+	c.cacheXMLMetadata(resp)
 	return c.xmlContext, nil
 }
 
@@ -348,6 +408,26 @@ func (c *Client) updateProtocolVersionFromXML(xmlContent string) {
 	c.ProtocolVersion = version
 }
 
+func (c *Client) cacheXMLMetadata(xmlContent string) {
+	c.xmlContext = xmlContent
+	c.updateProtocolVersionFromXML(xmlContent)
+
+	if err := c.refreshMetadataMaps(xmlContent); err != nil {
+		log.Printf("Failed to parse IIOD metadata maps from XML: %v", err)
+	}
+}
+
+func (c *Client) refreshMetadataMaps(xmlContent string) error {
+	deviceIdx, attrCodes, err := parseDeviceIndexAndAttrCodes(xmlContent)
+	if err != nil {
+		return err
+	}
+
+	c.deviceIndexMap = deviceIdx
+	c.attributeCodes = attrCodes
+	return nil
+}
+
 func parseProtocolVersionFromXML(xmlContent string) (ProtocolVersion, bool) {
 	decoder := xml.NewDecoder(strings.NewReader(xmlContent))
 
@@ -385,6 +465,207 @@ func parseProtocolVersionFromXML(xmlContent string) (ProtocolVersion, bool) {
 		}
 
 		return version, false
+	}
+}
+
+func parseDeviceIndexAndAttrCodes(xmlContent string) (map[string]uint16, map[attrKey]uint16, error) {
+	decoder := xml.NewDecoder(strings.NewReader(xmlContent))
+	deviceIndexes := make(map[string]uint16)
+	attrCodes := make(map[attrKey]uint16)
+
+	var currentDevice string
+	var currentChannel string
+	var nextDeviceIndex uint16
+
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, nil, err
+		}
+
+		switch element := token.(type) {
+		case xml.StartElement:
+			switch element.Name.Local {
+			case "device":
+				currentChannel = ""
+				currentDevice = attrValue(element.Attr, "id")
+				if currentDevice == "" {
+					continue
+				}
+
+				idxStr := attrValue(element.Attr, "index")
+				parsedIdx, err := parseUintWithFallback(idxStr, nextDeviceIndex)
+				if err != nil {
+					log.Printf("iiod: failed to parse device index for %q: %v", currentDevice, err)
+				}
+
+				deviceIndexes[currentDevice] = parsedIdx
+				if parsedIdx >= nextDeviceIndex {
+					nextDeviceIndex = parsedIdx + 1
+				}
+
+			case "channel":
+				currentChannel = attrValue(element.Attr, "id")
+			case "attribute":
+				name := attrValue(element.Attr, "name")
+				codeStr := attrValue(element.Attr, "code")
+
+				if codeStr == "" || name == "" || currentDevice == "" {
+					continue
+				}
+
+				code, err := strconv.ParseUint(codeStr, 0, 16)
+				if err != nil {
+					log.Printf("iiod: failed to parse attribute code %q for %s/%s/%s: %v", codeStr, currentDevice, currentChannel, name, err)
+					continue
+				}
+
+				attrCodes[attrKey{device: currentDevice, channel: currentChannel, attr: name}] = uint16(code)
+			}
+		case xml.EndElement:
+			switch element.Name.Local {
+			case "device":
+				currentDevice = ""
+				currentChannel = ""
+			case "channel":
+				currentChannel = ""
+			}
+		}
+	}
+
+	return deviceIndexes, attrCodes, nil
+}
+
+func parseDeviceInfoFromXML(xmlContent string) ([]DeviceInfo, error) {
+	decoder := xml.NewDecoder(strings.NewReader(xmlContent))
+
+	var devices []DeviceInfo
+	var currentDevice *DeviceInfo
+	var currentChannel *ChannelInfo
+
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+
+		switch element := token.(type) {
+		case xml.StartElement:
+			switch element.Name.Local {
+			case "device":
+				devices = append(devices, DeviceInfo{
+					ID:   attrValue(element.Attr, "id"),
+					Name: attrValue(element.Attr, "name"),
+				})
+				currentDevice = &devices[len(devices)-1]
+				currentChannel = nil
+			case "channel":
+				if currentDevice == nil {
+					continue
+				}
+
+				currentDevice.Channels = append(currentDevice.Channels, ChannelInfo{
+					ID:   attrValue(element.Attr, "id"),
+					Type: attrValue(element.Attr, "type"),
+				})
+				currentChannel = &currentDevice.Channels[len(currentDevice.Channels)-1]
+			case "attribute":
+				if currentDevice == nil {
+					continue
+				}
+
+				attrInfo := AttributeInfo{
+					Name:     attrValue(element.Attr, "name"),
+					Filename: attrValue(element.Attr, "filename"),
+					Type:     attrValue(element.Attr, "type"),
+					Unit:     attrValue(element.Attr, "unit"),
+				}
+
+				var value string
+				if err := decoder.DecodeElement(&value, &element); err == nil {
+					attrInfo.Value = strings.TrimSpace(value)
+				} else {
+					log.Printf("iiod: failed to decode attribute %q content: %v", attrInfo.Name, err)
+				}
+
+				if currentChannel != nil {
+					currentChannel.Attributes = append(currentChannel.Attributes, attrInfo)
+				} else {
+					currentDevice.Attributes = append(currentDevice.Attributes, attrInfo)
+				}
+			}
+		case xml.EndElement:
+			switch element.Name.Local {
+			case "channel":
+				currentChannel = nil
+			case "device":
+				currentDevice = nil
+				currentChannel = nil
+			}
+		}
+	}
+
+	return devices, nil
+}
+
+func parseUintWithFallback(value string, fallback uint16) (uint16, error) {
+	if strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseUint(value, 10, 16)
+	if err != nil {
+		return fallback, err
+	}
+
+	return uint16(parsed), nil
+}
+
+func attrValue(attrs []xml.Attr, local string) string {
+	for _, attr := range attrs {
+		if attr.Name.Local == local {
+			return attr.Value
+		}
+	}
+
+	return ""
+}
+
+func (c *Client) ensureMetadataMaps(ctx context.Context) error {
+	if c.deviceIndexMap != nil && c.attributeCodes != nil {
+		return nil
+	}
+
+	xmlContent := c.xmlContext
+	if xmlContent == "" {
+		var err error
+		xmlContent, err = c.GetXMLContextWithContext(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
+	return c.refreshMetadataMaps(xmlContent)
+}
+
+func (c *Client) logMetadataLookup(ctx context.Context, device, channel, attr string) {
+	if err := c.ensureMetadataMaps(ctx); err != nil {
+		log.Printf("iiod: could not load XML metadata for %s/%s/%s: %v", device, channel, attr, err)
+		return
+	}
+
+	if _, ok := c.deviceIndexMap[device]; !ok {
+		log.Printf("iiod: device %q not found in IIOD XML metadata; binary attribute access may fail", device)
+	}
+
+	if _, ok := c.attributeCodes[attrKey{device: device, channel: channel, attr: attr}]; !ok {
+		log.Printf("iiod: attribute code missing for %q (channel=%q device=%q)", attr, channel, device)
 	}
 }
 
@@ -523,6 +804,8 @@ func (c *Client) ReadAttrBinary(ctx context.Context, device, channel, attr strin
 		return c.SendWithContext(ctx, fmt.Sprintf("READ_ATTR %s", target))
 	}
 
+	c.logMetadataLookup(ctx, device, channel, attr)
+
 	// Legacy v0.25 servers respond with a 32-bit status followed by payload bytes.
 	payload := []byte(target + "\n")
 	cmd := IIODCommand{Opcode: 6, Flags: 0, Address: 0, Length: uint32(len(payload))}
@@ -570,6 +853,8 @@ func (c *Client) WriteAttrBinary(ctx context.Context, device, channel, attr, val
 		_, err := c.SendWithContext(ctx, fmt.Sprintf("WRITE_ATTR %s", targetWithValue))
 		return err
 	}
+
+	c.logMetadataLookup(ctx, device, channel, attr)
 
 	// Legacy binary write: opcode 7 with length-prefixed data.
 	valueBytes := []byte(value)
@@ -826,8 +1111,7 @@ func (c *Client) sendBinaryCommand(ctx context.Context, cmd string, payload []by
 		}
 
 		// Cache the XML context
-		c.xmlContext = xmlBuilder.String()
-		c.updateProtocolVersionFromXML(c.xmlContext)
+		c.cacheXMLMetadata(xmlBuilder.String())
 		c.metrics.LastCommandTime.Store(time.Now())
 		return nil, nil // Treat as success with no data
 	}
