@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rjboer/GoSDR/iiod"
 )
@@ -180,7 +181,13 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	p.logEvent("info", "IIO: Connected successfully")
 	fmt.Printf("[PLUTO DEBUG] Connected successfully!\n")
 
-	devices, err := client.ListDevices()
+	fmt.Printf("[PLUTO DEBUG] Calling ListDevices() with 2s timeout...\n")
+	listCtx, listCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer listCancel()
+
+	devices, err := client.ListDevicesWithContext(listCtx)
+	fmt.Printf("[PLUTO DEBUG] ListDevices() returned: devices=%v, err=%v\n", devices, err)
+
 	if err != nil || len(devices) == 0 {
 		// Older IIOD versions: try XML parsing, then fall back to hardcoded names
 		if err != nil {
@@ -192,7 +199,10 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 		}
 
 		// Try to get devices from XML
+		fmt.Printf("[PLUTO DEBUG] Calling ListDevicesFromXML()...\n")
 		xmlDevices, xmlErr := client.ListDevicesFromXML(context.Background())
+		fmt.Printf("[PLUTO DEBUG] ListDevicesFromXML() returned: devices=%v, err=%v\n", xmlDevices, xmlErr)
+
 		if xmlErr == nil && len(xmlDevices) > 0 {
 			devices = xmlDevices
 			p.logEvent("info", "IIO: Successfully parsed devices from XML context")

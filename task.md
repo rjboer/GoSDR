@@ -25,8 +25,8 @@
 
 ### 1.1 Protocol Version Detection
 - [ ] Extract version from cached XML context (`version-major`, `version-minor`)
-- [ ] Add `ProtocolVersion` struct to Client
-- [ ] Implement version comparison methods (`IsLegacy()`, `SupportsWrite()`, etc.)
+- [ ] Add [ProtocolVersion](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#45-49) struct to Client
+- [ ] Implement version comparison methods ([IsLegacy()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#192-196), [SupportsWrite()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#197-201), etc.)
 - [ ] Log detected protocol version on connection
 
 ### 1.2 Research IIOD v0.25 Protocol
@@ -38,43 +38,46 @@
 - [x] Create comprehensive protocol documentation
 
 ### 1.3 Implement Binary Protocol Support
-- [ ] Create `IIODCommand` struct for binary command headers
-- [ ] Implement `Marshal()` method to serialize commands to 8 bytes
-- [ ] Create `WriteAttrBinary()` method with binary protocol
-- [ ] Create `ReadAttrBinary()` method with binary protocol
-- [ ] Parse XML context to build device/attribute index maps
+- [x] Create [IIODCommand](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#68-74) struct for binary command headers
+- [x] Implement [Marshal()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#75-84) method to serialize commands to 8 bytes
+- [x] Create [WriteAttrBinary()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#851-883) method with binary protocol
+- [x] Create [ReadAttrBinary()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#808-850) method with binary protocol
+- [x] Parse XML context to build device/attribute index maps
 - [ ] Test binary protocol with Pluto SDR hardware
 
 ### 1.4 Cleanup Obsolete Text-Based Protocol Code
 
 **Functions to DELETE** (text-based protocol, no longer needed):
-- [ ] [Send()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#48-52) - Delete (replaced by binary command sending)
-- [ ] [SendWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#53-61) - Delete (replaced by binary command sending)
-- [ ] [sendBinaryWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#487-637) - **KEEP but rename to `sendBinaryCommand()`** (used for binary responses)
+- [x] [Send()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/client_test.go#129-167) - Deleted (replaced by binary command sending)
+- [x] `SendWithContext()` - Deleted (replaced by binary command sending)
+- [x] `sendBinaryWithContext()` - Renamed to [sendBinaryCommand()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#1074-1223)
 
 **Functions to MODIFY** (update to use binary protocol):
-- [ ] [WriteAttr()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#381-385) - Modify to use `WriteAttrBinary()` internally
-- [ ] [WriteAttrWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#386-403) - Modify to use `WriteAttrBinary()` internally
-- [ ] [ReadAttr()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#359-363) - Modify to use `ReadAttrBinary()` internally
-- [ ] [ReadAttrWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#364-380) - Modify to use `ReadAttrBinary()` internally
+- [x] [WriteAttr()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#783-787) - Modified to use [WriteAttrBinary()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#851-883) internally
+- [x] [WriteAttrWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#788-792) - Modified to use [WriteAttrBinary()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#851-883) internally
+- [x] [ReadAttr()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#773-777) - Modified to use [ReadAttrBinary()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#808-850) internally
+- [x] [ReadAttrWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#778-782) - Modified to use [ReadAttrBinary()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#808-850) internally
 
 **Functions to KEEP** (still valid):
-- [ ] [Dial()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#90-94) / [DialWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#95-114) - Keep (connection establishment)
-- [ ] [Close()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/sdr/pluto.go#355-390) - Keep (connection cleanup)
-- [ ] [GetXMLContextWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#226-230) - Keep (uses PRINT opcode, works as-is)
-- [ ] [ListDevicesFromXML()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#231-263) - Keep (parses XML, not protocol-dependent)
+- [x] [Dial()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#161-165) / [DialWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#166-191) - Kept (connection establishment)
+- [x] [Close()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/sdr/sdr.go#31-32) - Kept (connection cleanup)
+- [x] [GetXMLContextWithContext()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#342-369) - Kept (uses PRINT opcode, works as-is)
+- [x] [ListDevicesFromXML()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#370-407) - Kept (parses XML, not protocol-dependent)
 
 **New Functions to ADD**:
-- [ ] `buildDeviceIndexMap()` - Parse XML to map device names → indices
-- [ ] `buildAttributeIndexMap()` - Parse XML to map attribute names → codes
-- [ ] `sendCommand()` - Send binary command header
-- [ ] `readResponse()` - Read binary response (int32 status code)
+- [x] [parseDeviceIndexAndAttrCodes()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#477-547) - Parse XML to map device names → indices
+- [x] [parseProtocolVersionFromXML()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#437-476) - Extract protocol version from XML
+- [x] [sendCommand()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#990-1032) - Send binary command header
+- [x] [readResponse()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#1033-1065) - Read binary response (int32 status code)
+- [x] [WriteAttrCompat()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#793-797) - Compatibility wrapper with SSH fallback
+- [x] [IsLegacy()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#192-196) / [SupportsWrite()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#197-201) - Protocol version detection
 
 ### 1.5 Update PlutoSDR Backend
-- [ ] Replace [WriteAttr()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#381-385) calls with `WriteAttrCompat()`
-- [ ] Add error handling for unsupported operations
-- [ ] Implement graceful degradation for missing features
-- [ ] Test full initialization sequence
+- [x] Replace [WriteAttr()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#783-787) calls with [WriteAttrCompat()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/iiod/connect.go#793-797)
+- [x] Add error handling for unsupported operations
+- [x] Implement SSH sysfs fallback for legacy servers
+- [x] Add SSHConfig and SSHAttributeWriter implementation
+- [ ] Test full initialization sequence with Pluto SDR
 
 ---
 
@@ -105,8 +108,8 @@
 - [ ] Test buffer lifecycle
 
 ### 3.2 PlutoSDR RX/TX Implementation
-- [ ] Implement [RX()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/sdr/sdr.go#23-24) method with buffer reads
-- [ ] Implement [TX()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/sdr/sdr.go#24-25) method with buffer writes
+- [ ] Implement [RX()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/sdr/pluto.go#337-371) method with buffer reads
+- [ ] Implement [TX()](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/sdr/pluto.go#372-401) method with buffer writes
 - [ ] Add IQ data parsing (12-bit to complex64)
 - [ ] Test dual-channel streaming
 - [ ] Verify phase coherence
