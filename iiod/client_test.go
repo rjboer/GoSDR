@@ -3,7 +3,9 @@ package iiod
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -165,6 +167,54 @@ func TestSendErrors(t *testing.T) {
 	}
 }
 
+func TestListDevicesBinary(t *testing.T) {
+	const opcodeListDevices = 2
+	devicePayload := []byte("adc dac")
+	addr, serverErr := startBinaryListDevicesServer(t, opcodeListDevices, int32(len(devicePayload)), devicePayload, "<context></context>")
+	client, err := Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	devices, err := client.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices failed: %v", err)
+	}
+
+	if got, want := strings.Join(devices, " "), string(devicePayload); got != want {
+		t.Fatalf("unexpected devices: got %q want %q", got, want)
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error: %v", err)
+	}
+}
+
+func TestListDevicesFallbackToXML(t *testing.T) {
+	const opcodeListDevices = 2
+	xmlPayload := "<context><device id=\"adc\"></device><device id=\"dac\"></device></context>"
+	addr, serverErr := startBinaryListDevicesServer(t, opcodeListDevices, 0, nil, xmlPayload)
+	client, err := Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer client.Close()
+
+	devices, err := client.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices failed: %v", err)
+	}
+
+	if got, want := strings.Join(devices, " "), "adc dac"; got != want {
+		t.Fatalf("unexpected devices: got %q want %q", got, want)
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error: %v", err)
+	}
+}
+
 func TestCloseIdempotent(t *testing.T) {
 	client := &Client{}
 	if err := client.Close(); err == nil {
@@ -236,6 +286,78 @@ func startMockServer(t *testing.T, expectedReq string, status int, payload, head
 		}
 		if payload != "" && headerOverride == "" {
 			if _, err := fmt.Fprint(conn, payload); err != nil {
+				errCh <- err
+				return
+			}
+		}
+
+		errCh <- nil
+	}()
+
+	return listener.Addr().String(), errCh
+}
+
+func startBinaryListDevicesServer(t *testing.T, expectedOpcode uint8, status int32, payload []byte, xmlContext string) (string, chan error) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		defer listener.Close()
+
+		conn, err := listener.Accept()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		if strings.TrimSpace(line) == "PRINT" {
+			header := fmt.Sprintf("0 %d\n%s", len(xmlContext), xmlContext)
+			if _, err := fmt.Fprint(conn, header); err != nil {
+				errCh <- err
+				return
+			}
+		}
+
+		header := make([]byte, 8)
+		if _, err := io.ReadFull(reader, header); err != nil {
+			errCh <- err
+			return
+		}
+
+		if header[0] != expectedOpcode {
+			errCh <- fmt.Errorf("unexpected opcode %d", header[0])
+			return
+		}
+
+		payloadLen := binary.BigEndian.Uint32(header[4:])
+		if payloadLen > 0 {
+			received := make([]byte, payloadLen)
+			if _, err := io.ReadFull(reader, received); err != nil {
+				errCh <- err
+				return
+			}
+		}
+
+		if err := binary.Write(conn, binary.BigEndian, status); err != nil {
+			errCh <- err
+			return
+		}
+
+		if status > 0 {
+			if _, err := conn.Write(payload[:status]); err != nil {
 				errCh <- err
 				return
 			}
