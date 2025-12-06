@@ -323,15 +323,36 @@ func (c *Client) ListDevices() ([]string, error) {
 
 // ListDevicesWithContext lists devices with context support.
 func (c *Client) ListDevicesWithContext(ctx context.Context) ([]string, error) {
-	payload, err := c.sendCommandString(ctx, "LIST_DEVICES")
+	const opcodeListDevices = 2
+	cmd := IIODCommand{Opcode: opcodeListDevices, Flags: 0, Address: 0, Length: 0}
+	if err := c.sendCommand(ctx, cmd, nil); err != nil {
+		return nil, err
+	}
+
+	status, err := c.readResponse(ctx)
 	if err != nil {
-		// Fallback to XML parsing for older IIOD versions
+		return nil, err
+	}
+
+	// Legacy v0.25 servers reply with status 0; fall back to XML parsing.
+	if status == 0 {
 		return c.ListDevicesFromXML(ctx)
 	}
-	if payload == "" {
+
+	buf := make([]byte, status)
+	if _, err := io.ReadFull(c.reader, buf); err != nil {
+		return nil, err
+	}
+	if status > 0 {
+		c.metrics.BytesReceived.Add(uint64(status))
+	}
+	c.metrics.LastCommandTime.Store(time.Now())
+
+	if len(buf) == 0 {
 		return nil, nil
 	}
-	return strings.Fields(payload), nil
+
+	return strings.Fields(string(buf)), nil
 }
 
 // GetXMLContext retrieves the full XML context description from the IIOD server.
