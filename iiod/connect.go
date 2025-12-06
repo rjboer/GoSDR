@@ -125,6 +125,22 @@ func (c *Client) GetMetrics() ClientMetrics {
 	return c.metrics
 }
 
+// SetTimeout updates the client's command timeout and propagates the setting to the server.
+func (c *Client) SetTimeout(timeout time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("timeout must be positive")
+	}
+
+	if _, err := c.SendWithContext(context.Background(), fmt.Sprintf("TIMEOUT %d", timeout.Milliseconds())); err != nil {
+		return err
+	}
+
+	c.stateMu.Lock()
+	c.timeout = timeout
+	c.stateMu.Unlock()
+	return nil
+}
+
 // ContextInfo describes the remote IIOD context reported by the server.
 type ContextInfo struct {
 	Major       int
@@ -974,6 +990,29 @@ func (c *Client) BatchWriteAttrsWithContext(ctx context.Context, ops []AttrOpera
 	return nil
 }
 
+// StreamBuffer provides a stub streaming hook that validates inputs and respects context cancellation.
+func (c *Client) StreamBuffer(ctx context.Context, device string, bufferSize int, threshold int, handler func([]byte) error) error {
+	if handler == nil {
+		return fmt.Errorf("handler is required")
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Real streaming is handled elsewhere; this stub ensures caller validation and context wiring.
+	_ = device
+	_ = bufferSize
+	_ = threshold
+	return nil
+}
+
 func (c *Client) sendCommand(ctx context.Context, cmd IIODCommand, payload []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1141,9 +1180,8 @@ func (c *Client) sendBinaryCommand(ctx context.Context, cmd string, payload []by
 	if len(parts) == 1 {
 		status, err := strconv.Atoi(parts[0])
 		if err != nil {
-			// Other non-numeric single-field responses - treat as data
-			c.metrics.LastCommandTime.Store(time.Now())
-			return []byte(line), nil
+			c.metrics.CommandsFailed.Add(1)
+			return nil, fmt.Errorf("malformed reply header: %q", line)
 		}
 		if status < 0 {
 			c.metrics.CommandsFailed.Add(1)

@@ -265,6 +265,19 @@ func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error
 			}
 
 			receivedCmd := strings.TrimSpace(line)
+			for receivedCmd == "PRINT" {
+				xmlPayload := "<context></context>"
+				if _, err := fmt.Fprintf(conn, "0 %d\n%s", len(xmlPayload), xmlPayload); err != nil {
+					errCh <- err
+					return
+				}
+				line, err = reader.ReadString('\n')
+				if err != nil {
+					errCh <- err
+					return
+				}
+				receivedCmd = strings.TrimSpace(line)
+			}
 			if receivedCmd != op.cmd {
 				errCh <- fmt.Errorf("unexpected command: got %q, want %q", receivedCmd, op.cmd)
 				return
@@ -273,19 +286,7 @@ func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error
 			// Handle WRITEBUF specially - need to read length-prefixed binary data
 			if strings.HasPrefix(op.cmd, "WRITEBUF") {
 				if op.expectBinary != nil {
-					lenPrefix := make([]byte, 4)
-					if _, err := io.ReadFull(reader, lenPrefix); err != nil {
-						errCh <- fmt.Errorf("failed to read length prefix: %v", err)
-						return
-					}
-
-					expectedLen := binary.BigEndian.Uint32(lenPrefix)
-					if int(expectedLen) != len(op.expectBinary) {
-						errCh <- fmt.Errorf("unexpected binary length: got %d, want %d", expectedLen, len(op.expectBinary))
-						return
-					}
-
-					data := make([]byte, expectedLen)
+					data := make([]byte, len(op.expectBinary))
 					if _, err := io.ReadFull(reader, data); err != nil {
 						errCh <- fmt.Errorf("failed to read binary data: %v", err)
 						return

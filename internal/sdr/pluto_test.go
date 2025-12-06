@@ -49,6 +49,19 @@ func startPlutoMockServer(t *testing.T, ops []plutoMockOp) (string, chan error) 
 				return
 			}
 			got := strings.TrimSpace(line)
+			for got == "PRINT" {
+				xmlPayload := "<context></context>"
+				if _, err := fmt.Fprintf(conn, "0 %d\n%s", len(xmlPayload), xmlPayload); err != nil {
+					errCh <- fmt.Errorf("write xml response: %w", err)
+					return
+				}
+				line, err = reader.ReadString('\n')
+				if err != nil {
+					errCh <- fmt.Errorf("read command: %w", err)
+					return
+				}
+				got = strings.TrimSpace(line)
+			}
 			if got != op.cmd {
 				errCh <- fmt.Errorf("unexpected command %q, want %q", got, op.cmd)
 				return

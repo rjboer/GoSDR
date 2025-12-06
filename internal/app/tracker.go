@@ -35,6 +35,12 @@ type Config struct {
 	TrackTimeout      time.Duration
 	MinSNRThreshold   float64
 	URI               string // SDR backend connection URI
+	SSHHost           string
+	SSHUser           string
+	SSHPassword       string
+	SSHKeyPath        string
+	SSHPort           int
+	SysfsRoot         string
 }
 
 // TrackLifecycle represents the lifecycle of a track.
@@ -498,15 +504,21 @@ func (t *Tracker) Init(ctx context.Context) error {
 	// Update cached DSP size if needed
 	t.dsp.UpdateSize(t.cfg.NumSamples)
 	if err := t.sdr.Init(ctx, sdr.Config{
-		URI:        t.cfg.URI,
-		SampleRate: t.cfg.SampleRate,
-		RxLO:       t.cfg.RxLO,
-		RxGain0:    t.cfg.RxGain0,
-		RxGain1:    t.cfg.RxGain1,
-		TxGain:     t.cfg.TxGain,
-		ToneOffset: t.cfg.ToneOffset,
-		NumSamples: t.cfg.NumSamples,
-		PhaseDelta: t.cfg.PhaseDelta,
+		URI:         t.cfg.URI,
+		SampleRate:  t.cfg.SampleRate,
+		RxLO:        t.cfg.RxLO,
+		RxGain0:     t.cfg.RxGain0,
+		RxGain1:     t.cfg.RxGain1,
+		TxGain:      t.cfg.TxGain,
+		ToneOffset:  t.cfg.ToneOffset,
+		NumSamples:  t.cfg.NumSamples,
+		PhaseDelta:  t.cfg.PhaseDelta,
+		SSHHost:     t.cfg.SSHHost,
+		SSHUser:     t.cfg.SSHUser,
+		SSHPassword: t.cfg.SSHPassword,
+		SSHKeyPath:  t.cfg.SSHKeyPath,
+		SSHPort:     t.cfg.SSHPort,
+		SysfsRoot:   t.cfg.SysfsRoot,
 	}); err != nil {
 		return fmt.Errorf("init SDR: %w", err)
 	}
