@@ -109,16 +109,21 @@ func TestBatchReadAndWriteAttrs(t *testing.T) {
 
 	go runScriptedServer(t, serverConn, script)
 
-	reads, err := client.BatchReadAttrs("dev0", "", []string{"freq", "gain"})
+	readOps := []AttrOperation{{Device: "dev0", Attr: "freq"}, {Device: "dev0", Attr: "gain"}}
+	reads, err := client.BatchReadAttrsWithContext(context.Background(), readOps)
 	if err != nil {
 		t.Fatalf("BatchReadAttrs failed: %v", err)
 	}
 
-	if reads["freq"] != "100" || reads["gain"] != "10" {
+	if reads[0] != "100" || reads[1] != "10" {
 		t.Fatalf("unexpected read results: %+v", reads)
 	}
 
-	if err := client.BatchWriteAttrs("dev0", "", map[string]string{"phase": "5", "mode": "fast"}); err != nil {
+	writeOps := []AttrOperation{
+		{Device: "dev0", Attr: "phase", Value: "5", IsWrite: true},
+		{Device: "dev0", Attr: "mode", Value: "fast", IsWrite: true},
+	}
+	if err := client.BatchWriteAttrsWithContext(context.Background(), writeOps); err != nil {
 		t.Fatalf("BatchWriteAttrs failed: %v", err)
 	}
 }
