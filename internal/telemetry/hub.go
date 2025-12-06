@@ -97,6 +97,12 @@ type persistentConfig struct {
 	LogLevel       string  `json:"log_level"`
 	LogFormat      string  `json:"log_format"`
 	DebugMode      bool    `json:"debug_mode"`
+	SSHHost        string  `json:"ssh_host"`
+	SSHUser        string  `json:"ssh_user"`
+	SSHPassword    string  `json:"ssh_password"`
+	SSHKeyPath     string  `json:"ssh_key_path"`
+	SSHPort        int     `json:"ssh_port"`
+	SysfsRoot      string  `json:"sysfs_root"`
 }
 
 // LockState represents the current tracking lock quality.
@@ -169,6 +175,8 @@ func defaultPersistentConfig() persistentConfig {
 		LogLevel:       "warn",
 		LogFormat:      "text",
 		DebugMode:      false,
+		SSHPort:        22,
+		SysfsRoot:      "/sys/bus/iio/devices",
 	}
 }
 

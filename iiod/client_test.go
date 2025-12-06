@@ -208,6 +208,18 @@ func startMockServer(t *testing.T, expectedReq string, status int, payload, head
 			errCh <- err
 			return
 		}
+		for strings.TrimSpace(line) == "PRINT" {
+			xmlPayload := "<context></context>"
+			if _, err := fmt.Fprintf(conn, "0 %d\n%s", len(xmlPayload), xmlPayload); err != nil {
+				errCh <- err
+				return
+			}
+			line, err = reader.ReadString('\n')
+			if err != nil {
+				errCh <- err
+				return
+			}
+		}
 		if strings.TrimSpace(line) != expectedReq {
 			errCh <- fmt.Errorf("unexpected request %q", strings.TrimSpace(line))
 			return

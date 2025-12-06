@@ -117,6 +117,12 @@ func main() {
 		MaxTracks:         cfg.maxTracks,
 		TrackTimeout:      cfg.trackTimeout,
 		MinSNRThreshold:   cfg.minSNR,
+		SSHHost:           cfg.sshHost,
+		SSHUser:           cfg.sshUser,
+		SSHPassword:       cfg.sshPassword,
+		SSHKeyPath:        cfg.sshKeyPath,
+		SSHPort:           cfg.sshPort,
+		SysfsRoot:         cfg.sysfsRoot,
 	})
 
 	logger.Info("initializing tracker (this may take a few seconds)")
@@ -161,6 +167,12 @@ type cliConfig struct {
 	logFormat      string
 	debugMode      bool
 	verbose        bool
+	sshHost        string
+	sshUser        string
+	sshPassword    string
+	sshKeyPath     string
+	sshPort        int
+	sysfsRoot      string
 }
 
 type persistentConfig struct {
@@ -189,6 +201,12 @@ type persistentConfig struct {
 	LogLevel       string  `json:"log_level"`
 	LogFormat      string  `json:"log_format"`
 	DebugMode      bool    `json:"debug_mode"`
+	SSHHost        string  `json:"ssh_host"`
+	SSHUser        string  `json:"ssh_user"`
+	SSHPassword    string  `json:"ssh_password"`
+	SSHKeyPath     string  `json:"ssh_key_path"`
+	SSHPort        int     `json:"ssh_port"`
+	SysfsRoot      string  `json:"sysfs_root"`
 }
 
 func logStartupBanner(logger logging.Logger, cfg cliConfig) {
@@ -212,6 +230,10 @@ func logStartupBanner(logger logging.Logger, cfg cliConfig) {
 		"min_snr":          cfg.minSNR,
 		"sdr_backend":      cfg.sdrBackend,
 		"sdr_uri":          cfg.sdrURI,
+		"ssh_host":         cfg.sshHost,
+		"ssh_user":         cfg.sshUser,
+		"ssh_port":         cfg.sshPort,
+		"sysfs_root":       cfg.sysfsRoot,
 		"log_level":        cfg.logLevel,
 		"log_format":       cfg.logFormat,
 		"debug_mode":       cfg.debugMode,
@@ -243,6 +265,12 @@ func parseConfig(args []string, lookup func(string) (string, bool), defaults per
 	fs.Float64Var(&cfg.minSNR, "min-snr-threshold", envFloat(lookup, "MONO_MIN_SNR_THRESHOLD", defaults.MinSNR), "Minimum SNR required to create or update a track")
 	fs.StringVar(&cfg.sdrBackend, "sdr-backend", envString(lookup, "MONO_SDR_BACKEND", defaults.SDRBackend), "SDR backend (mock|pluto)")
 	fs.StringVar(&cfg.sdrURI, "sdr-uri", envString(lookup, "MONO_SDR_URI", defaults.SDRURI), "SDR URI")
+	fs.StringVar(&cfg.sshHost, "sdr-ssh-host", envString(lookup, "MONO_SDR_SSH_HOST", defaults.SSHHost), "SSH hostname/IP for sysfs fallback when IIOD writes are disabled")
+	fs.StringVar(&cfg.sshUser, "sdr-ssh-user", envString(lookup, "MONO_SDR_SSH_USER", defaults.SSHUser), "SSH username for sysfs fallback (default root)")
+	fs.StringVar(&cfg.sshPassword, "sdr-ssh-password", envString(lookup, "MONO_SDR_SSH_PASSWORD", defaults.SSHPassword), "SSH password for sysfs fallback")
+	fs.StringVar(&cfg.sshKeyPath, "sdr-ssh-key", envString(lookup, "MONO_SDR_SSH_KEY", defaults.SSHKeyPath), "Path to private key for SSH sysfs fallback")
+	fs.IntVar(&cfg.sshPort, "sdr-ssh-port", envInt(lookup, "MONO_SDR_SSH_PORT", defaults.SSHPort), "SSH port for sysfs fallback (default 22)")
+	fs.StringVar(&cfg.sysfsRoot, "sdr-sysfs-root", envString(lookup, "MONO_SDR_SYSFS_ROOT", defaults.SysfsRoot), "Sysfs root on device (default /sys/bus/iio/devices)")
 	fs.IntVar(&cfg.warmupBuffers, "warmup-buffers", envInt(lookup, "MONO_WARMUP_BUFFERS", defaults.WarmupBuffers), "Number of RX buffers to discard for warm-up")
 	fs.IntVar(&cfg.historyLimit, "history-limit", envInt(lookup, "MONO_HISTORY_LIMIT", defaults.HistoryLimit), "Maximum samples to keep in telemetry history")
 	fs.StringVar(&cfg.webAddr, "web-addr", envString(lookup, "MONO_WEB_ADDR", defaults.WebAddr), "Optional web telemetry listen address (e.g. :8080)")
@@ -290,6 +318,12 @@ func persistentFromCLI(cfg cliConfig) persistentConfig {
 		LogLevel:       cfg.logLevel,
 		LogFormat:      cfg.logFormat,
 		DebugMode:      cfg.debugMode,
+		SSHHost:        cfg.sshHost,
+		SSHUser:        cfg.sshUser,
+		SSHPassword:    cfg.sshPassword,
+		SSHKeyPath:     cfg.sshKeyPath,
+		SSHPort:        cfg.sshPort,
+		SysfsRoot:      cfg.sysfsRoot,
 	}
 }
 
@@ -352,6 +386,8 @@ func defaultPersistentConfig() persistentConfig {
 		LogLevel:       "warn",
 		LogFormat:      "text",
 		DebugMode:      false,
+		SSHPort:        22,
+		SysfsRoot:      "/sys/bus/iio/devices",
 	}
 }
 

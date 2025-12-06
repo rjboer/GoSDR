@@ -88,6 +88,19 @@ This Go project recreates the original behaviour with an emphasis on:
 
 ```
 
+## IIOD write fallback (SSH sysfs)
+
+- Pluto firmware shipping IIOD protocol v0.25 does **not** support attribute writes. When the IIOD client reports that writes are unsupported (protocol < v0.26), the Pluto backend logs a warning and switches to an SSH-based sysfs writer to mirror the same attributes under `/sys/bus/iio/devices`.
+- Attribute paths follow standard IIO naming: device attributes are written directly under the device directory, while channel attributes expand to `in_<channel>_<attr>` (or `out_<channel>_<attr>` for `altvoltage*`).
+- Configure SSH/sysfs access with CLI flags or environment variables:
+  - `--sdr-ssh-host` / `MONO_SDR_SSH_HOST` (defaults to the host portion of `--sdr-uri`)
+  - `--sdr-ssh-user` / `MONO_SDR_SSH_USER` (default `root`)
+  - `--sdr-ssh-password` / `MONO_SDR_SSH_PASSWORD`
+  - `--sdr-ssh-key` / `MONO_SDR_SSH_KEY` (private key path)
+  - `--sdr-ssh-port` / `MONO_SDR_SSH_PORT` (default `22`)
+  - `--sdr-sysfs-root` / `MONO_SDR_SYSFS_ROOT` (default `/sys/bus/iio/devices`)
+- A clear log entry is emitted the first time the fallback is used, including the SSH target host. Subsequent sysfs writes are logged only on error.
+
 Now with impoved explainations:
 <img width="2045" height="1694" alt="image" src="https://github.com/user-attachments/assets/60baacd2-143f-4410-92cc-8084efa64705" />
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,7 @@ type PlutoSDR struct {
 	rxUnderruns uint64
 	txOverruns  uint64
 	debugMode   bool
+	sshWriter   *SSHAttributeWriter
 }
 
 func NewPluto() *PlutoSDR { return &PlutoSDR{} }
@@ -136,13 +138,18 @@ func (p *PlutoSDR) GetDebugInfo() (*DebugInfo, error) {
 
 // Init connects to the IIOD server, discovers the AD9361 devices, programs
 // key attributes, and prepares RX/TX buffers for dual-channel streaming.
-func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
+func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	fmt.Printf("[PLUTO DEBUG] Init() called with URI=%s, SampleRate=%.0f\n", cfg.URI, cfg.SampleRate)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if cfg.URI == "" {
 		cfg.URI = "192.168.2.1:30431"
+	}
+
+	sshHost := cfg.SSHHost
+	if sshHost == "" {
+		sshHost = extractHostFromURI(cfg.URI)
 	}
 
 	// Add default IIOD port if not specified
@@ -209,12 +216,38 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 		return fmt.Errorf("unable to locate AD9361 devices (phy=%q rx=%q tx=%q)", phy, rx, tx)
 	}
 
-	writeAttr := func(action string, writeFn func() error) error {
-		if err := writeFn(); err != nil {
+	iiodWriteSupported := client.SupportsWrite()
+	if !iiodWriteSupported {
+		p.logEvent("warn", fmt.Sprintf("IIO: Remote IIOD protocol v0.%d does not support attribute writes; enabling SSH sysfs fallback", client.ProtocolVersion.Minor))
+	}
+
+	sshCfg := SSHConfig{
+		Host:      sshHost,
+		User:      cfg.SSHUser,
+		Password:  cfg.SSHPassword,
+		KeyPath:   cfg.SSHKeyPath,
+		Port:      cfg.SSHPort,
+		SysfsRoot: cfg.SysfsRoot,
+	}
+
+	var warnedFallback bool
+	writeAttr := func(action, device, channel, attr, value string) error {
+		if err := client.WriteAttrCompat(device, channel, attr, value); err != nil {
 			if errors.Is(err, iiod.ErrWriteNotSupported) {
-				msg := fmt.Sprintf("%s unsupported on IIOD protocol v0.%d", action, client.ProtocolVersion.Minor)
-				p.logEvent("error", "IIO: "+msg)
-				return fmt.Errorf("%s: %w", action, err)
+				writer, sshErr := p.ensureSSHFallbackLocked(sshCfg)
+				if sshErr != nil {
+					p.logEvent("error", fmt.Sprintf("IIO: %s unsupported via IIOD and SSH fallback unavailable: %v", action, sshErr))
+					return fmt.Errorf("%s: %w", action, err)
+				}
+				if !warnedFallback {
+					p.logEvent("warn", fmt.Sprintf("IIO: %s unsupported via IIOD; using SSH sysfs fallback to %s", action, sshHost))
+					warnedFallback = true
+				}
+				if sshErr := writer.WriteAttribute(ctx, device, channel, attr, value); sshErr != nil {
+					p.logEvent("error", fmt.Sprintf("IIO: SSH sysfs %s failed: %v", action, sshErr))
+					return fmt.Errorf("%s via ssh: %w", action, sshErr)
+				}
+				return nil
 			}
 
 			p.logEvent("error", fmt.Sprintf("IIO: Failed to %s: %v", action, err))
@@ -229,26 +262,20 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 
 	// Program sample rate and LOs.
 	p.logEvent("debug", fmt.Sprintf("IIO: Setting sample rate to %.0f Hz", cfg.SampleRate))
-	if err := writeAttr("set sample rate", func() error {
-		return client.WriteAttrCompat(phy, "", "sampling_frequency", fmt.Sprintf("%.0f", cfg.SampleRate))
-	}); err != nil {
+	if err := writeAttr("set sample rate", phy, "", "sampling_frequency", fmt.Sprintf("%.0f", cfg.SampleRate)); err != nil {
 		_ = client.Close()
 		return err
 	}
 
 	if cfg.RxLO > 0 {
 		p.logEvent("debug", fmt.Sprintf("IIO: Setting RX LO to %.0f Hz", cfg.RxLO))
-		if err := writeAttr("set RX LO", func() error {
-			return client.WriteAttrCompat(phy, "altvoltage1", "frequency", fmt.Sprintf("%.0f", cfg.RxLO))
-		}); err != nil {
+		if err := writeAttr("set RX LO", phy, "altvoltage1", "frequency", fmt.Sprintf("%.0f", cfg.RxLO)); err != nil {
 			_ = client.Close()
 			return err
 		}
 
 		p.logEvent("debug", fmt.Sprintf("IIO: Setting TX LO to %.0f Hz", cfg.RxLO))
-		if err := writeAttr("set TX LO", func() error {
-			return client.WriteAttrCompat(phy, "altvoltage0", "frequency", fmt.Sprintf("%.0f", cfg.RxLO))
-		}); err != nil {
+		if err := writeAttr("set TX LO", phy, "altvoltage0", "frequency", fmt.Sprintf("%.0f", cfg.RxLO)); err != nil {
 			_ = client.Close()
 			return err
 		}
@@ -256,37 +283,25 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 
 	// Configure RX gains.
 	p.logEvent("debug", "IIO: Configuring RX gains")
-	if err := writeAttr("set rx0 gain mode", func() error {
-		return client.WriteAttrCompat(phy, "voltage0", "gain_control_mode", "manual")
-	}); err != nil {
+	if err := writeAttr("set rx0 gain mode", phy, "voltage0", "gain_control_mode", "manual"); err != nil {
 		_ = client.Close()
 		return err
 	}
-	if err := writeAttr("set rx1 gain mode", func() error {
-		return client.WriteAttrCompat(phy, "voltage1", "gain_control_mode", "manual")
-	}); err != nil {
+	if err := writeAttr("set rx1 gain mode", phy, "voltage1", "gain_control_mode", "manual"); err != nil {
 		_ = client.Close()
 		return err
 	}
-	if err := writeAttr("set rx0 gain", func() error {
-		return client.WriteAttrCompat(phy, "voltage0", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain0))
-	}); err != nil {
+	if err := writeAttr("set rx0 gain", phy, "voltage0", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain0)); err != nil {
 		_ = client.Close()
 		return err
 	}
-	if err := writeAttr("set rx1 gain", func() error {
-		return client.WriteAttrCompat(phy, "voltage1", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain1))
-	}); err != nil {
+	if err := writeAttr("set rx1 gain", phy, "voltage1", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain1)); err != nil {
 		_ = client.Close()
 		return err
 	}
-	if err := client.WriteAttrCompat(phy, "out", "hardwaregain", fmt.Sprintf("%d", cfg.TxGain)); err != nil {
-		if errors.Is(err, iiod.ErrWriteNotSupported) {
-			p.logEvent("warn", fmt.Sprintf("IIO: TX gain not applied (write unsupported): %v", err))
-		} else {
-			// Some firmware exposes TX gain per-channel; fall back without failing hard.
-			p.logEvent("warn", fmt.Sprintf("IIO: TX gain not applied: %v", err))
-		}
+	if err := writeAttr("set tx gain", phy, "out", "hardwaregain", fmt.Sprintf("%d", cfg.TxGain)); err != nil {
+		// Some firmware exposes TX gain per-channel; fall back without failing hard.
+		p.logEvent("warn", fmt.Sprintf("IIO: TX gain not applied: %v", err))
 	}
 
 	p.logEvent("info", fmt.Sprintf("IIO: Creating RX buffer (%d samples)", cfg.NumSamples))
@@ -425,6 +440,33 @@ func (p *PlutoSDR) SetPhaseDelta(phaseDeltaDeg float64) {}
 
 // GetPhaseDelta returns 0 for hardware backends.
 func (p *PlutoSDR) GetPhaseDelta() float64 { return 0 }
+
+func (p *PlutoSDR) ensureSSHFallbackLocked(cfg SSHConfig) (*SSHAttributeWriter, error) {
+	if p.sshWriter != nil {
+		return p.sshWriter, nil
+	}
+
+	writer, err := NewSSHAttributeWriter(cfg)
+	if err != nil {
+		return nil, err
+	}
+	p.sshWriter = writer
+	return p.sshWriter, nil
+}
+
+func extractHostFromURI(uri string) string {
+	parts := strings.Split(uri, ":")
+	if len(parts) == 0 {
+		return ""
+	}
+	last := parts[len(parts)-1]
+	if len(parts) >= 2 {
+		if _, err := strconv.Atoi(last); err == nil {
+			return parts[len(parts)-2]
+		}
+	}
+	return last
+}
 
 // identifyAD9361Devices finds the PHY, RX, and TX device identifiers.
 func identifyAD9361Devices(devices []string) (phy, rx, tx string) {
