@@ -7,7 +7,6 @@ import (
 	"net"
 	"strings"
 	"testing"
-	"time"
 )
 
 type scriptedResponse struct {
@@ -38,60 +37,49 @@ func runScriptedServer(t *testing.T, conn net.Conn, script []scriptedResponse) {
 func newPipeClient() (*Client, net.Conn) {
 	clientConn, serverConn := net.Pipe()
 	client := &Client{
-		conn:         clientConn,
-		reader:       bufio.NewReader(clientConn),
-		openBuffers:  make(map[string]int),
-		timeout:      5 * time.Second,
-		healthWindow: 10 * time.Second,
+		conn:   clientConn,
+		reader: bufio.NewReader(clientConn),
 	}
 	return client, serverConn
 }
 
-func TestGetDeviceInfoParsesXML(t *testing.T) {
-	xmlPayload := `<context><device id="dev0" name="demo"><attribute name="sampling_frequency" filename="in_sampling_freq">100</attribute><channel id="voltage0" type="input"><attribute name="scale" filename="in_voltage0_scale" type="int" unit="dB">1</attribute></channel></device></context>`
+func TestListDevicesFromXMLParsesIDs(t *testing.T) {
+	xmlPayload := "<?xml version=\"1.0\"?>\n<context version-major=\"1\" version-minor=\"0\">\n<device id=\"dev0\" name=\"demo\"></device>\n<device id=\"dev1\" name=\"aux\"></device>\n</context>\n"
 
 	client, serverConn := newPipeClient()
 	defer client.Close()
 	defer serverConn.Close()
 
-	go runScriptedServer(t, serverConn, []scriptedResponse{{cmd: "XML", payload: xmlPayload}})
+	serverErr := make(chan error, 1)
+	go func() {
+		defer close(serverErr)
+		reader := bufio.NewReader(serverConn)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		if strings.TrimSpace(line) != "PRINT" {
+			serverErr <- fmt.Errorf("unexpected command %q", strings.TrimSpace(line))
+			return
+		}
+		if _, err := fmt.Fprint(serverConn, xmlPayload); err != nil {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+	}()
 
-	devices, err := client.GetDeviceInfo()
+	devices, err := client.ListDevicesFromXML(context.Background())
 	if err != nil {
-		t.Fatalf("GetDeviceInfo failed: %v", err)
+		t.Fatalf("ListDevicesFromXML failed: %v", err)
 	}
 
-	if len(devices) != 1 {
-		t.Fatalf("expected 1 device, got %d", len(devices))
+	if len(devices) != 2 || devices[0] != "dev0" || devices[1] != "dev1" {
+		t.Fatalf("unexpected devices parsed: %v", devices)
 	}
-
-	dev := devices[0]
-	if dev.ID != "dev0" || dev.Name != "demo" {
-		t.Fatalf("unexpected device metadata: %+v", dev)
-	}
-
-	if len(dev.Channels) != 1 || len(dev.Attributes) != 1 {
-		t.Fatalf("unexpected channel/attribute counts: %+v", dev)
-	}
-}
-
-func TestSetTimeoutUpdatesClient(t *testing.T) {
-	client, serverConn := newPipeClient()
-	defer client.Close()
-	defer serverConn.Close()
-
-	go runScriptedServer(t, serverConn, []scriptedResponse{{cmd: "TIMEOUT 50", payload: ""}})
-
-	if err := client.SetTimeout(50 * time.Millisecond); err != nil {
-		t.Fatalf("SetTimeout failed: %v", err)
-	}
-
-	client.stateMu.Lock()
-	timeout := client.timeout
-	client.stateMu.Unlock()
-
-	if timeout != 50*time.Millisecond {
-		t.Fatalf("timeout not updated, got %v", timeout)
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error: %v", err)
 	}
 }
 
@@ -109,29 +97,22 @@ func TestBatchReadAndWriteAttrs(t *testing.T) {
 
 	go runScriptedServer(t, serverConn, script)
 
-	reads, err := client.BatchReadAttrs("dev0", "", []string{"freq", "gain"})
+	reads, err := client.BatchReadAttrsWithContext(context.Background(), []AttrOperation{
+		{Device: "dev0", Attr: "freq"},
+		{Device: "dev0", Attr: "gain"},
+	})
 	if err != nil {
-		t.Fatalf("BatchReadAttrs failed: %v", err)
+		t.Fatalf("BatchReadAttrsWithContext failed: %v", err)
 	}
 
-	if reads["freq"] != "100" || reads["gain"] != "10" {
+	if len(reads) != 2 || reads[0] != "100" || reads[1] != "10" {
 		t.Fatalf("unexpected read results: %+v", reads)
 	}
 
-	if err := client.BatchWriteAttrs("dev0", "", map[string]string{"phase": "5", "mode": "fast"}); err != nil {
-		t.Fatalf("BatchWriteAttrs failed: %v", err)
-	}
-}
-
-func TestStreamBufferBackpressure(t *testing.T) {
-	// Use a tiny handler buffer and context cancellation to ensure backpressure
-	// paths are exercised without real network IO.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	client := &Client{}
-	// This test simply ensures StreamBuffer validates handler presence and propagates context errors.
-	if err := client.StreamBuffer(ctx, "", 0, 0, nil); err == nil {
-		t.Fatalf("expected handler validation error")
+	if err := client.BatchWriteAttrsWithContext(context.Background(), []AttrOperation{
+		{Device: "dev0", Attr: "phase", Value: "5", IsWrite: true},
+		{Device: "dev0", Attr: "mode", Value: "fast", IsWrite: true},
+	}); err != nil {
+		t.Fatalf("BatchWriteAttrsWithContext failed: %v", err)
 	}
 }

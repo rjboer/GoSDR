@@ -591,11 +591,18 @@ type DiagnosticEvent struct {
 // Diagnostics bundles runtime metrics and spectrum data.
 type Diagnostics struct {
 	Version  string            `json:"version"`
+	Versions SoftwareVersions  `json:"versions"`
 	Process  ProcessMetrics    `json:"process"`
 	Spectrum SpectrumSnapshot  `json:"spectrum"`
 	Signal   SignalQuality     `json:"signal"`
 	Debug    *DebugInfo        `json:"debug,omitempty"`
 	Events   []DiagnosticEvent `json:"events"`
+}
+
+// SoftwareVersions aggregates application and device firmware versions for quick reference.
+type SoftwareVersions struct {
+	App        string            `json:"app"`
+	Components map[string]string `json:"components,omitempty"`
 }
 
 // HealthStatus surfaces overall process health.
@@ -640,6 +647,7 @@ type Hub struct {
 	eventLimit     int
 	lastLockState  LockState
 	version        string
+	versions       SoftwareVersions
 }
 
 // NewHub builds a telemetry hub with the provided history limit.
@@ -670,6 +678,7 @@ func NewHub(historyLimit int, logger logging.Logger) *Hub {
 		startTime:    time.Now(),
 		eventLimit:   100,
 		version:      resolveVersion(),
+		versions:     SoftwareVersions{App: resolveVersion(), Components: make(map[string]string)},
 	}
 	h.mockSpectrum = mockSpectrumSnapshot()
 	h.process = h.collectProcessMetrics()
@@ -761,6 +770,22 @@ func (h *Hub) recordEvent(level, message string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recordEventLocked(level, message)
+}
+
+// RecordVersions merges reported component versions into the diagnostics state.
+// Blank names or values are ignored.
+func (h *Hub) RecordVersions(components map[string]string) {
+	h.mu.Lock()
+	if h.versions.Components == nil {
+		h.versions.Components = make(map[string]string)
+	}
+	for name, value := range components {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(value) == "" {
+			continue
+		}
+		h.versions.Components[name] = value
+	}
+	h.mu.Unlock()
 }
 
 func (h *Hub) recordEventLocked(level, message string) {
@@ -986,6 +1011,16 @@ func (h *Hub) processSnapshot() ProcessMetrics {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.process
+}
+
+func (h *Hub) versionsSnapshot() SoftwareVersions {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	components := make(map[string]string, len(h.versions.Components))
+	for k, v := range h.versions.Components {
+		components[k] = v
+	}
+	return SoftwareVersions{App: h.versions.App, Components: components}
 }
 
 func (h *Hub) spectrumSnapshot() SpectrumSnapshot {
@@ -1382,6 +1417,7 @@ func (h *Hub) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	response := Diagnostics{
 		Version:  h.version,
+		Versions: h.versionsSnapshot(),
 		Process:  process,
 		Spectrum: spectrum,
 		Signal:   signal,

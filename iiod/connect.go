@@ -3,6 +3,8 @@ package iiod
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +14,47 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// ProtocolVersion describes the IIOD protocol major/minor version pair.
+// It provides comparison helpers for feature detection.
+type ProtocolVersion struct {
+	Major int
+	Minor int
+}
+
+// Compare returns -1 if v < other, 0 if equal, and 1 if v > other.
+func (v ProtocolVersion) Compare(other ProtocolVersion) int {
+	if v.Major != other.Major {
+		if v.Major < other.Major {
+			return -1
+		}
+		return 1
+	}
+	if v.Minor < other.Minor {
+		return -1
+	}
+	if v.Minor > other.Minor {
+		return 1
+	}
+	return 0
+}
+
+// AtLeast reports whether the version is greater than or equal to the provided version.
+func (v ProtocolVersion) AtLeast(other ProtocolVersion) bool {
+	return v.Compare(other) >= 0
+}
+
+// IsZero reports whether the version is unset.
+func (v ProtocolVersion) IsZero() bool {
+	return v.Major == 0 && v.Minor == 0
+}
+
+func (v ProtocolVersion) String() string {
+	if v.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d", v.Major, v.Minor)
+}
 
 // Client implements the IIOD TCP protocol with enhanced reliability and performance features.
 type Client struct {
@@ -24,6 +67,7 @@ type Client struct {
 	addr         string
 	isConnected  atomic.Bool
 	xmlContext   string // Cached XML context from server
+	protoVersion ProtocolVersion
 }
 
 // ClientMetrics tracks IIO client performance and health.
@@ -197,7 +241,69 @@ func (c *Client) GetContextInfoWithContext(ctx context.Context) (ContextInfo, er
 		description = strings.Join(parts[2:], " ")
 	}
 
-	return ContextInfo{Major: major, Minor: minor, Description: description}, nil
+	info := ContextInfo{Major: major, Minor: minor, Description: description}
+	c.cacheProtocolVersion(ProtocolVersion{Major: major, Minor: minor})
+	return info, nil
+}
+
+func (c *Client) cacheProtocolVersion(version ProtocolVersion) {
+	if version.IsZero() {
+		return
+	}
+
+	c.mu.Lock()
+	if c.protoVersion.IsZero() {
+		c.protoVersion = version
+	}
+	c.mu.Unlock()
+}
+
+// DetectProtocolVersion attempts to populate and return the negotiated protocol version.
+// It prefers extracting attributes from the XML context and falls back to the VERSION command.
+func (c *Client) DetectProtocolVersion(ctx context.Context) (ProtocolVersion, error) {
+	c.mu.Lock()
+	if !c.protoVersion.IsZero() {
+		v := c.protoVersion
+		c.mu.Unlock()
+		return v, nil
+	}
+	c.mu.Unlock()
+
+	if xml, err := c.GetXMLContextWithContext(ctx); err == nil {
+		if version := parseProtocolVersionFromXML(xml); !version.IsZero() {
+			c.cacheProtocolVersion(version)
+			return version, nil
+		}
+	}
+
+	info, err := c.GetContextInfoWithContext(ctx)
+	if err != nil {
+		return ProtocolVersion{}, err
+	}
+
+	version := ProtocolVersion{Major: info.Major, Minor: info.Minor}
+	c.cacheProtocolVersion(version)
+	return version, nil
+}
+
+// SupportsWriteCommand reports whether the IIOD server exposes the WRITE command.
+// WRITEBUF support arrived alongside protocol refinements; require at least v1.1.
+func (c *Client) SupportsWriteCommand(ctx context.Context) (bool, error) {
+	version, err := c.DetectProtocolVersion(ctx)
+	if err != nil {
+		return false, err
+	}
+	return version.AtLeast(ProtocolVersion{Major: 1, Minor: 1}), nil
+}
+
+// SupportsStreamingBuffers reports whether the server can open persistent streaming buffers.
+// This is available on protocol versions 1.3+.
+func (c *Client) SupportsStreamingBuffers(ctx context.Context) (bool, error) {
+	version, err := c.DetectProtocolVersion(ctx)
+	if err != nil {
+		return false, err
+	}
+	return version.AtLeast(ProtocolVersion{Major: 1, Minor: 3}), nil
 }
 
 // ListDevices returns the set of device identifiers known by the server.
@@ -225,7 +331,35 @@ func (c *Client) GetXMLContext() (string, error) {
 
 // GetXMLContextWithContext retrieves XML context with context support.
 func (c *Client) GetXMLContextWithContext(ctx context.Context) (string, error) {
-	return c.SendWithContext(ctx, "PRINT")
+	c.mu.Lock()
+	if c.xmlContext != "" {
+		xml := c.xmlContext
+		c.mu.Unlock()
+		return xml, nil
+	}
+	c.mu.Unlock()
+
+	payload, err := c.SendWithContext(ctx, "PRINT")
+	if err != nil {
+		return "", err
+	}
+
+	c.mu.Lock()
+	xml := c.xmlContext
+	if xml == "" {
+		xml = payload
+		c.xmlContext = payload
+	}
+	if xmlVersion := parseProtocolVersionFromXML(xml); !xmlVersion.IsZero() {
+		c.protoVersion = xmlVersion
+	}
+	c.mu.Unlock()
+
+	if strings.TrimSpace(xml) == "" {
+		return "", fmt.Errorf("empty XML context")
+	}
+
+	return xml, nil
 }
 
 // ListDevicesFromXML parses device names from the XML context.
@@ -234,6 +368,10 @@ func (c *Client) ListDevicesFromXML(ctx context.Context) ([]string, error) {
 	xml, err := c.GetXMLContextWithContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get XML context: %w", err)
+	}
+
+	if xmlVersion := parseProtocolVersionFromXML(xml); !xmlVersion.IsZero() {
+		c.cacheProtocolVersion(xmlVersion)
 	}
 
 	// Simple XML parsing to extract device IDs
@@ -259,6 +397,38 @@ func (c *Client) ListDevicesFromXML(ctx context.Context) ([]string, error) {
 	}
 
 	return devices, nil
+}
+
+func parseProtocolVersionFromXML(xmlPayload string) ProtocolVersion {
+	decoder := xml.NewDecoder(strings.NewReader(xmlPayload))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return ProtocolVersion{}
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if start.Name.Local != "context" {
+			continue
+		}
+
+		var version ProtocolVersion
+		for _, attr := range start.Attr {
+			switch attr.Name.Local {
+			case "version-major":
+				if val, err := strconv.Atoi(attr.Value); err == nil {
+					version.Major = val
+				}
+			case "version-minor":
+				if val, err := strconv.Atoi(attr.Value); err == nil {
+					version.Minor = val
+				}
+			}
+		}
+		return version
+	}
 }
 
 // GetChannels returns the list of channel IDs for a given device.
@@ -526,7 +696,16 @@ func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload 
 
 	// Send payload if present
 	if len(payload) > 0 {
-		n, err := c.conn.Write(payload)
+		lenPrefix := make([]byte, 4)
+		binary.BigEndian.PutUint32(lenPrefix, uint32(len(payload)))
+		n, err := c.conn.Write(lenPrefix)
+		if err != nil {
+			c.metrics.CommandsFailed.Add(1)
+			return nil, err
+		}
+		c.metrics.BytesSent.Add(uint64(n))
+
+		n, err = c.conn.Write(payload)
 		if err != nil {
 			c.metrics.CommandsFailed.Add(1)
 			return nil, err
@@ -550,6 +729,15 @@ func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload 
 		xmlBuilder := strings.Builder{}
 		xmlBuilder.WriteString(line)
 		xmlBuilder.WriteString("\n")
+		if strings.Contains(line, "</context>") {
+			xmlPayload := xmlBuilder.String()
+			c.xmlContext = xmlPayload
+			if version := parseProtocolVersionFromXML(xmlPayload); !version.IsZero() {
+				c.protoVersion = version
+			}
+			c.metrics.LastCommandTime.Store(time.Now())
+			return nil, nil
+		}
 
 		for {
 			xmlLine, readErr := c.reader.ReadString('\n')
@@ -564,7 +752,11 @@ func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload 
 		}
 
 		// Cache the XML context
-		c.xmlContext = xmlBuilder.String()
+		xmlPayload := xmlBuilder.String()
+		c.xmlContext = xmlPayload
+		if version := parseProtocolVersionFromXML(xmlPayload); !version.IsZero() {
+			c.protoVersion = version
+		}
 		c.metrics.LastCommandTime.Store(time.Now())
 		return nil, nil // Treat as success with no data
 	}
@@ -575,9 +767,8 @@ func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload 
 	if len(parts) == 1 {
 		status, err := strconv.Atoi(parts[0])
 		if err != nil {
-			// Other non-numeric single-field responses - treat as data
-			c.metrics.LastCommandTime.Store(time.Now())
-			return []byte(line), nil
+			c.metrics.CommandsFailed.Add(1)
+			return nil, fmt.Errorf("malformed reply header: %q", line)
 		}
 		if status < 0 {
 			c.metrics.CommandsFailed.Add(1)

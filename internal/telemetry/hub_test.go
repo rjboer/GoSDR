@@ -36,6 +36,9 @@ func TestHandleDiagnosticsReturnsMetricsAndSpectrum(t *testing.T) {
 	if resp.Version == "" {
 		t.Fatal("expected diagnostics to include version")
 	}
+	if resp.Versions.App == "" {
+		t.Fatal("expected diagnostics to include app version details")
+	}
 	if resp.Process.NumGoroutine == 0 {
 		t.Fatal("expected goroutine count to be reported")
 	}

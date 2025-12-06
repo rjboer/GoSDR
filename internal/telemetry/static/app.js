@@ -275,6 +275,11 @@ const METRIC_THRESHOLDS = {
 const debugStatus = document.getElementById('debugStatus');
 const healthStatusBadge = document.getElementById('healthStatusBadge');
 const diagVersion = document.getElementById('diagVersion');
+const versionApp = document.getElementById('versionApp');
+const versionIiod = document.getElementById('versionIiod');
+const versionIiodDescription = document.getElementById('versionIiodDescription');
+const versionProtocol = document.getElementById('versionProtocol');
+const versionFirmware = document.getElementById('versionFirmware');
 const healthReason = document.getElementById('healthReason');
 const healthChecks = document.getElementById('healthChecks');
 const diagLastUpdated = document.getElementById('debugLastUpdated');
@@ -932,6 +937,26 @@ function renderHealthStatus(health) {
   });
 }
 
+function renderVersions(versions) {
+  const components = (versions && versions.components) || {};
+
+  if (versionApp) {
+    versionApp.textContent = versions?.app || diagVersion?.textContent || '--';
+  }
+  if (versionIiod) {
+    versionIiod.textContent = components['IIOD'] || '--';
+  }
+  if (versionIiodDescription) {
+    versionIiodDescription.textContent = components['IIOD description'] || '--';
+  }
+  if (versionProtocol) {
+    versionProtocol.textContent = components['IIOD protocol'] || components['Protocol'] || '--';
+  }
+  if (versionFirmware) {
+    versionFirmware.textContent = components.Firmware || components['Firmware'] || '--';
+  }
+}
+
 function renderDiagnostics(diag) {
   if (!diag || !diag.process) {
     if (debugStatus) debugStatus.textContent = 'Diagnostics unavailable';
@@ -940,6 +965,7 @@ function renderDiagnostics(diag) {
 
   if (debugStatus) debugStatus.textContent = 'Diagnostics live';
   if (diagVersion && diag.version) diagVersion.textContent = diag.version;
+  renderVersions(diag.versions);
   if (diag.health) renderHealthStatus(diag.health);
 
   const process = { ...diag.process, lastSample: diag.process.lastSample || diag.signal?.updatedAt };
