@@ -16,6 +16,10 @@ type EventLogger interface {
 	LogEvent(level, message string)
 }
 
+type versionRecorder interface {
+	RecordVersions(map[string]string)
+}
+
 // PlutoSDR implements a minimal AD9361/Pluto backend using the IIOD client.
 // It configures sample rate, LO, and gain attributes on initialization and
 // provides dual-channel RX/TX streaming helpers.
@@ -58,6 +62,14 @@ func (p *PlutoSDR) logEvent(level, message string) {
 	if p.eventLogger != nil && p.debugMode {
 		p.eventLogger.LogEvent(level, message)
 	}
+}
+
+func (p *PlutoSDR) recordVersions(versions map[string]string) {
+	recorder, ok := p.eventLogger.(versionRecorder)
+	if !ok || len(versions) == 0 {
+		return
+	}
+	recorder.RecordVersions(versions)
 }
 
 // DebugInfo contains IIO hardware debug information.
@@ -135,7 +147,7 @@ func (p *PlutoSDR) GetDebugInfo() (*DebugInfo, error) {
 
 // Init connects to the IIOD server, discovers the AD9361 devices, programs
 // key attributes, and prepares RX/TX buffers for dual-channel streaming.
-func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
+func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	fmt.Printf("[PLUTO DEBUG] Init() called with URI=%s, SampleRate=%.0f\n", cfg.URI, cfg.SampleRate)
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -160,7 +172,7 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 	fmt.Printf("[PLUTO DEBUG] Attempting to connect to %s...\n", cfg.URI)
 	fmt.Printf("[PLUTO DEBUG] About to call iiod.Dial()...\n")
 
-	client, err := iiod.Dial(cfg.URI)
+	client, err := iiod.DialWithContext(ctx, cfg.URI, nil)
 
 	fmt.Printf("[PLUTO DEBUG] iiod.Dial() returned, err=%v\n", err)
 	if err != nil {
@@ -171,6 +183,21 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 
 	p.logEvent("info", "IIO: Connected successfully")
 	fmt.Printf("[PLUTO DEBUG] Connected successfully!\n")
+
+	var versionInfo map[string]string
+	if p.eventLogger != nil {
+		versionInfo = make(map[string]string)
+		if proto, err := client.DetectProtocolVersion(ctx); err == nil && !proto.IsZero() {
+			versionInfo["IIOD protocol"] = proto.String()
+		}
+		if info, err := client.GetContextInfoWithContext(ctx); err == nil {
+			versionInfo["IIOD"] = fmt.Sprintf("%d.%d", info.Major, info.Minor)
+			if strings.TrimSpace(info.Description) != "" {
+				versionInfo["IIOD description"] = info.Description
+			}
+		}
+		defer p.recordVersions(versionInfo)
+	}
 
 	devices, err := client.ListDevices()
 	if err != nil || len(devices) == 0 {
@@ -210,6 +237,13 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 
 	p.logEvent("info", fmt.Sprintf("IIO: Found AD9361 devices - PHY: %s, RX: %s, TX: %s", phy, rx, tx))
 	fmt.Printf("[PLUTO DEBUG] Found AD9361: PHY=%s, RX=%s, TX=%s\n", phy, rx, tx)
+
+	if versionInfo != nil {
+		if fw, err := client.ReadAttr(phy, "", "fw_version"); err == nil {
+			versionInfo["Firmware"] = fw
+		}
+		p.recordVersions(versionInfo)
+	}
 
 	// Program sample rate and LOs.
 	p.logEvent("debug", fmt.Sprintf("IIO: Setting sample rate to %.0f Hz", cfg.SampleRate))

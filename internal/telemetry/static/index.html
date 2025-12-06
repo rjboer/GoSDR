@@ -97,7 +97,7 @@
           </p>
           <ol style="color: #9fb3c8; line-height: 1.8;">
             <li>Go to <a href="/settings" style="color: #2f80ed;">Settings</a> ? <strong>MockSDR Live Control</strong></li>
-            <li>Use the slider to change the simulated phase delta from -90� to +90�</li>
+            <li>Use the slider to change the simulated phase delta from -90° to +90°</li>
             <li>Watch the radar display update in real-time as the target moves</li>
           </ol>
           <p style="background: rgba(47, 128, 237, 0.1); border-left: 3px solid #2f80ed; padding: 0.75rem; color: #cbd5e1; margin-top: 1rem;">
@@ -340,7 +340,35 @@
         <div class="debug-header">
           <div>
             <h2>Debug telemetry</h2>
-            <p id="debugStatus" class="muted">Waiting for diagnostics…</p>
+          <div class="debug-section">
+            <div class="debug-section-header">
+              <h3>Software Versions</h3>
+              <span class="muted">Reported by IIOD and firmware</span>
+            </div>
+            <div class="debug-grid">
+              <div class="debug-card">
+                <h4>Application</h4>
+                <div class="debug-value" id="versionApp">--</div>
+                <p class="muted">UI build</p>
+              </div>
+              <div class="debug-card">
+                <h4>IIOD</h4>
+                <div class="debug-value" id="versionIiod">--</div>
+                <p class="muted" id="versionIiodDescription">--</p>
+              </div>
+              <div class="debug-card">
+                <h4>Protocol</h4>
+                <div class="debug-value" id="versionProtocol">--</div>
+                <p class="muted">Command support</p>
+              </div>
+              <div class="debug-card">
+                <h4>Firmware</h4>
+                <div class="debug-value" id="versionFirmware">--</div>
+                <p class="muted">Radio stack</p>
+              </div>
+            </div>
+          </div>
+            <p id="debugStatus" class="muted">Waiting for diagnosticsâ¦</p>
           </div>
           <div class="health-summary">
             <span id="healthStatusBadge" class="status-badge">--</span>
