@@ -3,6 +3,7 @@ package iiod
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -37,6 +38,24 @@ type ClientMetrics struct {
 	ReconnectCount  atomic.Uint32
 }
 
+// IIODCommand represents the 8-byte binary header used by the IIOD protocol.
+type IIODCommand struct {
+	Opcode  uint8
+	Flags   uint8
+	Address uint16
+	Length  uint32
+}
+
+// Marshal encodes the command into its 8-byte network representation.
+func (cmd IIODCommand) Marshal() ([]byte, error) {
+	header := make([]byte, 8)
+	header[0] = cmd.Opcode
+	header[1] = cmd.Flags
+	binary.BigEndian.PutUint16(header[2:], cmd.Address)
+	binary.BigEndian.PutUint32(header[4:], cmd.Length)
+	return header, nil
+}
+
 // ReconnectConfig configures automatic reconnection behavior.
 type ReconnectConfig struct {
 	MaxRetries   int
@@ -52,7 +71,7 @@ func (c *Client) Send(cmd string) (string, error) {
 
 // SendWithContext issues a raw IIOD command with context support.
 func (c *Client) SendWithContext(ctx context.Context, cmd string) (string, error) {
-	resp, err := c.sendBinaryWithContext(ctx, cmd, nil)
+	resp, err := c.sendBinaryCommand(ctx, cmd, nil)
 	if err != nil {
 		return "", err
 	}
@@ -319,7 +338,7 @@ func (c *Client) ReadBufferWithContext(ctx context.Context, device string, sampl
 		return nil, fmt.Errorf("sample count must be positive")
 	}
 
-	return c.sendBinaryWithContext(ctx, fmt.Sprintf("READBUF %s %d", device, samples), nil)
+	return c.sendBinaryCommand(ctx, fmt.Sprintf("READBUF %s %d", device, samples), nil)
 }
 
 // WriteBuffer writes binary IQ data to the remote buffer.
@@ -337,7 +356,7 @@ func (c *Client) WriteBufferWithContext(ctx context.Context, device string, data
 	}
 
 	cmd := fmt.Sprintf("WRITEBUF %s %d", device, len(data))
-	_, err := c.sendBinaryWithContext(ctx, cmd, data)
+	_, err := c.sendBinaryCommand(ctx, cmd, data)
 	return err
 }
 
@@ -484,7 +503,83 @@ func (c *Client) BatchWriteAttrsWithContext(ctx context.Context, ops []AttrOpera
 	return nil
 }
 
-func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload []byte) ([]byte, error) {
+func (c *Client) sendCommand(ctx context.Context, cmd IIODCommand, payload []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil || c.reader == nil {
+		return fmt.Errorf("client is not connected")
+	}
+
+	header, err := cmd.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal command: %w", err)
+	}
+
+	c.metrics.CommandsSent.Add(1)
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := c.conn.SetDeadline(deadline); err != nil {
+			c.metrics.CommandsFailed.Add(1)
+			return err
+		}
+		defer c.conn.SetDeadline(time.Time{})
+	}
+
+	n, err := c.conn.Write(header)
+	if err != nil {
+		c.metrics.CommandsFailed.Add(1)
+		c.isConnected.Store(false)
+		return err
+	}
+	c.metrics.BytesSent.Add(uint64(n))
+
+	if len(payload) > 0 {
+		n, err = c.conn.Write(payload)
+		if err != nil {
+			c.metrics.CommandsFailed.Add(1)
+			return err
+		}
+		c.metrics.BytesSent.Add(uint64(n))
+	}
+
+	return nil
+}
+
+func (c *Client) readResponse(ctx context.Context) (int32, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil || c.reader == nil {
+		return 0, fmt.Errorf("client is not connected")
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := c.conn.SetDeadline(deadline); err != nil {
+			c.metrics.CommandsFailed.Add(1)
+			return 0, err
+		}
+		defer c.conn.SetDeadline(time.Time{})
+	}
+
+	var status int32
+	if err := binary.Read(c.reader, binary.BigEndian, &status); err != nil {
+		c.metrics.CommandsFailed.Add(1)
+		c.isConnected.Store(false)
+		return 0, err
+	}
+	c.metrics.BytesReceived.Add(4)
+
+	if status < 0 {
+		c.metrics.CommandsFailed.Add(1)
+		return status, fmt.Errorf("iiod error %d", status)
+	}
+
+	c.metrics.LastCommandTime.Store(time.Now())
+	return status, nil
+}
+
+func (c *Client) sendBinaryCommand(ctx context.Context, cmd string, payload []byte) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -517,7 +612,7 @@ func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload 
 		if c.reconnectCfg != nil {
 			if reconnectErr := c.reconnect(ctx); reconnectErr == nil {
 				// Retry command after reconnect
-				return c.sendBinaryWithContext(ctx, cmd, payload)
+				return c.sendBinaryCommand(ctx, cmd, payload)
 			}
 		}
 		return nil, err
