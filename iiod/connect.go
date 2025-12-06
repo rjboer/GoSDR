@@ -531,6 +531,18 @@ func (c *Client) ReadAttr(device, channel, attr string) (string, error) {
 	return c.ReadAttrWithContext(context.Background(), device, channel, attr)
 }
 
+// ReadAttrLegacy reads an attribute using the legacy READ command (v0.25 protocol).
+func (c *Client) ReadAttrLegacy(device, channel, attr string) (string, error) {
+	return c.ReadAttrLegacyWithContext(context.Background(), device, channel, attr)
+}
+
+// ReadAttrCompat reads an attribute using the best protocol supported by the server.
+// It dispatches to the modern READ_ATTR command for v0.26+ and falls back to the
+// legacy READ command with sysfs-style paths for v0.25.
+func (c *Client) ReadAttrCompat(device, channel, attr string) (string, error) {
+	return c.ReadAttrCompatWithContext(context.Background(), device, channel, attr)
+}
+
 // ReadAttrWithContext reads attribute with context support.
 func (c *Client) ReadAttrWithContext(ctx context.Context, device, channel, attr string) (string, error) {
 	if strings.TrimSpace(device) == "" {
@@ -548,9 +560,48 @@ func (c *Client) ReadAttrWithContext(ctx context.Context, device, channel, attr 
 	return c.SendWithContext(ctx, fmt.Sprintf("READ_ATTR %s", target))
 }
 
+// ReadAttrLegacyWithContext issues the legacy READ command with a sysfs-style path.
+func (c *Client) ReadAttrLegacyWithContext(ctx context.Context, device, channel, attr string) (string, error) {
+	path, err := mapLegacyAttrPath(device, channel, attr)
+	if err != nil {
+		return "", err
+	}
+
+	return c.SendWithContext(ctx, fmt.Sprintf("READ %s %s", device, path))
+}
+
+// ReadAttrCompatWithContext chooses the appropriate attribute read command based
+// on the detected IIOD protocol version.
+func (c *Client) ReadAttrCompatWithContext(ctx context.Context, device, channel, attr string) (string, error) {
+	version, err := c.DetectProtocolVersion(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	switch {
+	case version.AtLeast(ProtocolVersion{Major: 0, Minor: 26}):
+		return c.ReadAttrWithContext(ctx, device, channel, attr)
+	case version.AtLeast(ProtocolVersion{Major: 0, Minor: 25}):
+		return c.ReadAttrLegacyWithContext(ctx, device, channel, attr)
+	default:
+		return "", fmt.Errorf("attribute reads unsupported on protocol version %s", version.String())
+	}
+}
+
 // WriteAttr writes a device or channel attribute value.
 func (c *Client) WriteAttr(device, channel, attr, value string) error {
 	return c.WriteAttrWithContext(context.Background(), device, channel, attr, value)
+}
+
+// WriteAttrLegacy writes an attribute using the legacy WRITE command (v0.25 protocol).
+func (c *Client) WriteAttrLegacy(device, channel, attr, value string) error {
+	return c.WriteAttrLegacyWithContext(context.Background(), device, channel, attr, value)
+}
+
+// WriteAttrCompat writes an attribute using the best command supported by the server.
+// It uses WRITE_ATTR for v0.26+ and falls back to the legacy WRITE command for v0.25.
+func (c *Client) WriteAttrCompat(device, channel, attr, value string) error {
+	return c.WriteAttrCompatWithContext(context.Background(), device, channel, attr, value)
 }
 
 // WriteAttrWithContext writes attribute with context support.
@@ -569,6 +620,35 @@ func (c *Client) WriteAttrWithContext(ctx context.Context, device, channel, attr
 
 	_, err := c.SendWithContext(ctx, fmt.Sprintf("WRITE_ATTR %s", target))
 	return err
+}
+
+// WriteAttrLegacyWithContext issues the legacy WRITE command with a sysfs-style path.
+func (c *Client) WriteAttrLegacyWithContext(ctx context.Context, device, channel, attr, value string) error {
+	path, err := mapLegacyAttrPath(device, channel, attr)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.SendWithContext(ctx, fmt.Sprintf("WRITE %s %s %s", device, path, value))
+	return err
+}
+
+// WriteAttrCompatWithContext chooses the appropriate attribute write command based
+// on the detected IIOD protocol version.
+func (c *Client) WriteAttrCompatWithContext(ctx context.Context, device, channel, attr, value string) error {
+	version, err := c.DetectProtocolVersion(ctx)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case version.AtLeast(ProtocolVersion{Major: 0, Minor: 26}):
+		return c.WriteAttrWithContext(ctx, device, channel, attr, value)
+	case version.AtLeast(ProtocolVersion{Major: 0, Minor: 25}):
+		return c.WriteAttrLegacyWithContext(ctx, device, channel, attr, value)
+	default:
+		return fmt.Errorf("attribute writes unsupported on protocol version %s", version.String())
+	}
 }
 
 // ReadDebugAttr reads a debug attribute (direct register access).
@@ -652,6 +732,37 @@ func (c *Client) BatchWriteAttrsWithContext(ctx context.Context, ops []AttrOpera
 		}
 	}
 	return nil
+}
+
+func mapLegacyAttrPath(device, channel, attr string) (string, error) {
+	if strings.TrimSpace(device) == "" {
+		return "", fmt.Errorf("device name is required")
+	}
+	attr = strings.TrimSpace(attr)
+	if attr == "" {
+		return "", fmt.Errorf("attribute name is required")
+	}
+
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return attr, nil
+	}
+
+	// If the attribute already includes the channel prefix, use it directly.
+	if strings.HasPrefix(attr, channel) || strings.HasPrefix(attr, "in_"+channel) || strings.HasPrefix(attr, "out_"+channel) {
+		return attr, nil
+	}
+
+	prefix := channel
+	if !strings.HasPrefix(prefix, "in_") && !strings.HasPrefix(prefix, "out_") {
+		if strings.HasPrefix(prefix, "altvoltage") || prefix == "out" {
+			prefix = "out_" + strings.TrimPrefix(prefix, "out_")
+		} else {
+			prefix = "in_" + strings.TrimPrefix(prefix, "in_")
+		}
+	}
+
+	return fmt.Sprintf("%s_%s", prefix, attr), nil
 }
 
 func (c *Client) sendBinaryWithContext(ctx context.Context, cmd string, payload []byte) ([]byte, error) {

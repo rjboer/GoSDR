@@ -116,3 +116,91 @@ func TestBatchReadAndWriteAttrs(t *testing.T) {
 		t.Fatalf("BatchWriteAttrsWithContext failed: %v", err)
 	}
 }
+
+func TestMapLegacyAttrPath(t *testing.T) {
+	cases := []struct {
+		name     string
+		device   string
+		channel  string
+		attr     string
+		expected string
+	}{
+		{name: "device attr", device: "dev0", channel: "", attr: "sampling_frequency", expected: "sampling_frequency"},
+		{name: "input channel", device: "dev0", channel: "voltage0", attr: "sampling_frequency", expected: "in_voltage0_sampling_frequency"},
+		{name: "altvoltage", device: "dev0", channel: "altvoltage1", attr: "frequency", expected: "out_altvoltage1_frequency"},
+		{name: "prefixed attr", device: "dev0", channel: "voltage0", attr: "in_voltage0_rssi", expected: "in_voltage0_rssi"},
+	}
+
+	for _, tc := range cases {
+		path, err := mapLegacyAttrPath(tc.device, tc.channel, tc.attr)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", tc.name, err)
+		}
+		if path != tc.expected {
+			t.Fatalf("%s: expected %q, got %q", tc.name, tc.expected, path)
+		}
+	}
+}
+
+func TestLegacyAttrCommands(t *testing.T) {
+	client, serverConn := newPipeClient()
+	defer client.Close()
+	defer serverConn.Close()
+
+	script := []scriptedResponse{
+		{cmd: "READ dev0 in_voltage1_rssi", payload: "-72"},
+		{cmd: "WRITE dev0 in_voltage0_hardwaregain 30", payload: ""},
+	}
+
+	go runScriptedServer(t, serverConn, script)
+
+	if val, err := client.ReadAttrLegacyWithContext(context.Background(), "dev0", "voltage1", "rssi"); err != nil || val != "-72" {
+		t.Fatalf("ReadAttrLegacyWithContext failed: val=%q err=%v", val, err)
+	}
+
+	if err := client.WriteAttrLegacyWithContext(context.Background(), "dev0", "voltage0", "hardwaregain", "30"); err != nil {
+		t.Fatalf("WriteAttrLegacyWithContext failed: %v", err)
+	}
+}
+
+func TestAttrCompatVersionSelection(t *testing.T) {
+	client, serverConn := newPipeClient()
+	defer client.Close()
+	defer serverConn.Close()
+
+	client.protoVersion = ProtocolVersion{Major: 0, Minor: 26}
+
+	script := []scriptedResponse{{cmd: "READ_ATTR dev0 voltage0 rssi", payload: "-40"}}
+	go runScriptedServer(t, serverConn, script)
+
+	if val, err := client.ReadAttrCompatWithContext(context.Background(), "dev0", "voltage0", "rssi"); err != nil || val != "-40" {
+		t.Fatalf("ReadAttrCompatWithContext failed: val=%q err=%v", val, err)
+	}
+}
+
+func TestAttrCompatLegacyFallback(t *testing.T) {
+	client, serverConn := newPipeClient()
+	defer client.Close()
+	defer serverConn.Close()
+
+	client.protoVersion = ProtocolVersion{Major: 0, Minor: 25}
+
+	script := []scriptedResponse{{cmd: "WRITE dev0 in_voltage0_sampling_frequency 12288000", payload: ""}}
+	go runScriptedServer(t, serverConn, script)
+
+	if err := client.WriteAttrCompatWithContext(context.Background(), "dev0", "voltage0", "sampling_frequency", "12288000"); err != nil {
+		t.Fatalf("WriteAttrCompatWithContext failed: %v", err)
+	}
+}
+
+func TestAttrCompatUnsupported(t *testing.T) {
+	client := &Client{protoVersion: ProtocolVersion{Major: 0, Minor: 24}}
+
+	if _, err := client.ReadAttrCompatWithContext(context.Background(), "dev0", "", "foo"); err == nil {
+		t.Fatalf("expected error for unsupported read protocol")
+	}
+
+	if err := client.WriteAttrCompatWithContext(context.Background(), "dev0", "", "foo", "bar"); err == nil {
+		t.Fatalf("expected error for unsupported write protocol")
+	}
+}
