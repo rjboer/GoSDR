@@ -2,6 +2,7 @@ package iiod
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/xml"
@@ -489,6 +490,22 @@ func (c *Client) ReadAttr(device, channel, attr string) (string, error) {
 
 // ReadAttrWithContext reads attribute with context support.
 func (c *Client) ReadAttrWithContext(ctx context.Context, device, channel, attr string) (string, error) {
+	return c.ReadAttrBinary(ctx, device, channel, attr)
+}
+
+// WriteAttr writes a device or channel attribute value.
+func (c *Client) WriteAttr(device, channel, attr, value string) error {
+	return c.WriteAttrWithContext(context.Background(), device, channel, attr, value)
+}
+
+// WriteAttrWithContext writes attribute with context support.
+func (c *Client) WriteAttrWithContext(ctx context.Context, device, channel, attr, value string) error {
+	return c.WriteAttrBinary(ctx, device, channel, attr, value)
+}
+
+// ReadAttrBinary reads a device or channel attribute using the binary protocol.
+// It automatically adapts to legacy (v0.25) response formats.
+func (c *Client) ReadAttrBinary(ctx context.Context, device, channel, attr string) (string, error) {
 	if strings.TrimSpace(device) == "" {
 		return "", fmt.Errorf("device name is required")
 	}
@@ -501,16 +518,40 @@ func (c *Client) ReadAttrWithContext(ctx context.Context, device, channel, attr 
 		target = fmt.Sprintf("%s %s %s", device, channel, attr)
 	}
 
-	return c.SendWithContext(ctx, fmt.Sprintf("READ_ATTR %s", target))
+	// Modern servers still expect the text-based READ_ATTR command.
+	if !c.IsLegacy() {
+		return c.SendWithContext(ctx, fmt.Sprintf("READ_ATTR %s", target))
+	}
+
+	// Legacy v0.25 servers respond with a 32-bit status followed by payload bytes.
+	payload := []byte(target + "\n")
+	cmd := IIODCommand{Opcode: 6, Flags: 0, Address: 0, Length: uint32(len(payload))}
+	if err := c.sendCommand(ctx, cmd, payload); err != nil {
+		return "", err
+	}
+	status, err := c.readResponse(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// In legacy responses, a positive status is the payload length.
+	if status == 0 {
+		return "", nil
+	}
+
+	buf := make([]byte, status)
+	if _, err := io.ReadFull(c.reader, buf); err != nil {
+		return "", err
+	}
+	c.metrics.BytesReceived.Add(uint64(status))
+	c.metrics.LastCommandTime.Store(time.Now())
+
+	return strings.TrimSpace(string(buf)), nil
 }
 
-// WriteAttr writes a device or channel attribute value.
-func (c *Client) WriteAttr(device, channel, attr, value string) error {
-	return c.WriteAttrWithContext(context.Background(), device, channel, attr, value)
-}
-
-// WriteAttrWithContext writes attribute with context support.
-func (c *Client) WriteAttrWithContext(ctx context.Context, device, channel, attr, value string) error {
+// WriteAttrBinary writes a device or channel attribute using the binary protocol (opcode 7).
+// The payload includes the attribute target and the length-prefixed data, matching v0.25 expectations.
+func (c *Client) WriteAttrBinary(ctx context.Context, device, channel, attr, value string) error {
 	if strings.TrimSpace(device) == "" {
 		return fmt.Errorf("device name is required")
 	}
@@ -518,12 +559,31 @@ func (c *Client) WriteAttrWithContext(ctx context.Context, device, channel, attr
 		return fmt.Errorf("attribute name is required")
 	}
 
-	target := fmt.Sprintf("%s %s %s", device, attr, value)
+	target := fmt.Sprintf("%s %s", device, attr)
 	if channel != "" {
-		target = fmt.Sprintf("%s %s %s %s", device, channel, attr, value)
+		target = fmt.Sprintf("%s %s %s", device, channel, attr)
 	}
 
-	_, err := c.SendWithContext(ctx, fmt.Sprintf("WRITE_ATTR %s", target))
+	// Modern servers: keep using the text-based command path.
+	if !c.IsLegacy() {
+		targetWithValue := fmt.Sprintf("%s %s", target, value)
+		_, err := c.SendWithContext(ctx, fmt.Sprintf("WRITE_ATTR %s", targetWithValue))
+		return err
+	}
+
+	// Legacy binary write: opcode 7 with length-prefixed data.
+	valueBytes := []byte(value)
+	buf := bytes.NewBufferString(target + "\n")
+	if err := binary.Write(buf, binary.BigEndian, uint64(len(valueBytes))); err != nil {
+		return fmt.Errorf("encode value length: %w", err)
+	}
+	buf.Write(valueBytes)
+
+	cmd := IIODCommand{Opcode: 7, Flags: 0, Address: 0, Length: uint32(buf.Len())}
+	if err := c.sendCommand(ctx, cmd, buf.Bytes()); err != nil {
+		return err
+	}
+	_, err := c.readResponse(ctx)
 	return err
 }
 
