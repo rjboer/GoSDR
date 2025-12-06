@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -19,12 +21,19 @@ type Client struct {
 	conn   net.Conn
 	reader *bufio.Reader
 
-	mu           sync.Mutex
-	metrics      ClientMetrics
-	reconnectCfg *ReconnectConfig
-	addr         string
-	isConnected  atomic.Bool
-	xmlContext   string // Cached XML context from server
+	mu              sync.Mutex
+	metrics         ClientMetrics
+	reconnectCfg    *ReconnectConfig
+	addr            string
+	isConnected     atomic.Bool
+	ProtocolVersion ProtocolVersion
+	xmlContext      string // Cached XML context from server
+}
+
+// ProtocolVersion captures the IIOD protocol version reported by the server.
+type ProtocolVersion struct {
+	Major int
+	Minor int
 }
 
 // ClientMetrics tracks IIO client performance and health.
@@ -128,7 +137,32 @@ func DialWithContext(ctx context.Context, addr string, reconnectCfg *ReconnectCo
 	client.isConnected.Store(true)
 	client.metrics.ConnectedAt = time.Now()
 
+	if _, err := client.GetXMLContextWithContext(ctx); err != nil {
+		log.Printf("Connected to %s but failed to fetch IIOD XML context: %v", addr, err)
+	} else {
+		client.logProtocolVersion()
+	}
+
 	return client, nil
+}
+
+// IsLegacy reports whether the remote server is using a legacy IIOD protocol (v0.25).
+func (c *Client) IsLegacy() bool {
+	return c.ProtocolVersion.Major == 0 && c.ProtocolVersion.Minor > 0 && c.ProtocolVersion.Minor < 26
+}
+
+// SupportsWrite reports whether the server is expected to support attribute write operations.
+func (c *Client) SupportsWrite() bool {
+	return !c.IsLegacy()
+}
+
+func (c *Client) logProtocolVersion() {
+	if c.ProtocolVersion.Major == 0 && c.ProtocolVersion.Minor == 0 {
+		log.Printf("Connected to %s (IIOD protocol version unknown)", c.addr)
+		return
+	}
+
+	log.Printf("Connected to %s using IIOD protocol v%d.%d", c.addr, c.ProtocolVersion.Major, c.ProtocolVersion.Minor)
 }
 
 // reconnect attempts to re-establish connection with exponential backoff.
@@ -244,40 +278,113 @@ func (c *Client) GetXMLContext() (string, error) {
 
 // GetXMLContextWithContext retrieves XML context with context support.
 func (c *Client) GetXMLContextWithContext(ctx context.Context) (string, error) {
-	return c.SendWithContext(ctx, "PRINT")
+	if c.xmlContext != "" {
+		return c.xmlContext, nil
+	}
+
+	resp, err := c.SendWithContext(ctx, "PRINT")
+	if err != nil {
+		return "", err
+	}
+
+	if c.xmlContext != "" {
+		return c.xmlContext, nil
+	}
+
+	if resp == "" {
+		return "", fmt.Errorf("no XML context received")
+	}
+
+	c.xmlContext = resp
+	c.updateProtocolVersionFromXML(resp)
+	return c.xmlContext, nil
 }
 
 // ListDevicesFromXML parses device names from the XML context.
 // This is a fallback for older IIOD versions that don't support LIST_DEVICES.
 func (c *Client) ListDevicesFromXML(ctx context.Context) ([]string, error) {
-	xml, err := c.GetXMLContextWithContext(ctx)
+	xmlContent, err := c.GetXMLContextWithContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get XML context: %w", err)
 	}
 
-	// Simple XML parsing to extract device IDs
+	decoder := xml.NewDecoder(strings.NewReader(xmlContent))
 	devices := []string{}
-	lines := strings.Split(xml, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// Look for <device id="..." name="...">
-		if strings.HasPrefix(line, "<device ") && strings.Contains(line, "id=") {
-			// Extract id attribute
-			idStart := strings.Index(line, "id=\"")
-			if idStart == -1 {
+
+	for {
+		token, tokenErr := decoder.Token()
+		if tokenErr != nil {
+			if tokenErr == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("parse XML context: %w", tokenErr)
+		}
+
+		switch element := token.(type) {
+		case xml.StartElement:
+			if element.Name.Local != "device" {
 				continue
 			}
-			idStart += 4 // Skip 'id="'
-			idEnd := strings.Index(line[idStart:], "\"")
-			if idEnd == -1 {
-				continue
+
+			for _, attr := range element.Attr {
+				if attr.Name.Local == "id" {
+					devices = append(devices, attr.Value)
+					break
+				}
 			}
-			deviceID := line[idStart : idStart+idEnd]
-			devices = append(devices, deviceID)
 		}
 	}
 
 	return devices, nil
+}
+
+func (c *Client) updateProtocolVersionFromXML(xmlContent string) {
+	version, ok := parseProtocolVersionFromXML(xmlContent)
+	if !ok {
+		return
+	}
+
+	c.ProtocolVersion = version
+}
+
+func parseProtocolVersionFromXML(xmlContent string) (ProtocolVersion, bool) {
+	decoder := xml.NewDecoder(strings.NewReader(xmlContent))
+
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return ProtocolVersion{}, false
+		}
+
+		startElement, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+
+		if startElement.Name.Local != "context" {
+			continue
+		}
+
+		version := ProtocolVersion{}
+		for _, attr := range startElement.Attr {
+			switch attr.Name.Local {
+			case "version-major":
+				if major, convErr := strconv.Atoi(attr.Value); convErr == nil {
+					version.Major = major
+				}
+			case "version-minor":
+				if minor, convErr := strconv.Atoi(attr.Value); convErr == nil {
+					version.Minor = minor
+				}
+			}
+		}
+
+		if version.Major != 0 || version.Minor != 0 {
+			return version, true
+		}
+
+		return version, false
+	}
 }
 
 // GetChannels returns the list of channel IDs for a given device.
@@ -660,6 +767,7 @@ func (c *Client) sendBinaryCommand(ctx context.Context, cmd string, payload []by
 
 		// Cache the XML context
 		c.xmlContext = xmlBuilder.String()
+		c.updateProtocolVersionFromXML(c.xmlContext)
 		c.metrics.LastCommandTime.Store(time.Now())
 		return nil, nil // Treat as success with no data
 	}
