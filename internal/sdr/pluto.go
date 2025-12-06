@@ -2,6 +2,7 @@ package sdr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -208,53 +209,84 @@ func (p *PlutoSDR) Init(_ context.Context, cfg Config) error {
 		return fmt.Errorf("unable to locate AD9361 devices (phy=%q rx=%q tx=%q)", phy, rx, tx)
 	}
 
+	writeAttr := func(action string, writeFn func() error) error {
+		if err := writeFn(); err != nil {
+			if errors.Is(err, iiod.ErrWriteNotSupported) {
+				msg := fmt.Sprintf("%s unsupported on IIOD protocol v0.%d", action, client.ProtocolVersion.Minor)
+				p.logEvent("error", "IIO: "+msg)
+				return fmt.Errorf("%s: %w", action, err)
+			}
+
+			p.logEvent("error", fmt.Sprintf("IIO: Failed to %s: %v", action, err))
+			return fmt.Errorf("%s: %w", action, err)
+		}
+
+		return nil
+	}
+
 	p.logEvent("info", fmt.Sprintf("IIO: Found AD9361 devices - PHY: %s, RX: %s, TX: %s", phy, rx, tx))
 	fmt.Printf("[PLUTO DEBUG] Found AD9361: PHY=%s, RX=%s, TX=%s\n", phy, rx, tx)
 
 	// Program sample rate and LOs.
 	p.logEvent("debug", fmt.Sprintf("IIO: Setting sample rate to %.0f Hz", cfg.SampleRate))
-	if err := client.WriteAttr(phy, "", "sampling_frequency", fmt.Sprintf("%.0f", cfg.SampleRate)); err != nil {
+	if err := writeAttr("set sample rate", func() error {
+		return client.WriteAttrCompat(phy, "", "sampling_frequency", fmt.Sprintf("%.0f", cfg.SampleRate))
+	}); err != nil {
 		_ = client.Close()
-		p.logEvent("error", fmt.Sprintf("IIO: Failed to set sample rate: %v", err))
-		return fmt.Errorf("set sample rate: %w", err)
+		return err
 	}
 
 	if cfg.RxLO > 0 {
 		p.logEvent("debug", fmt.Sprintf("IIO: Setting RX LO to %.0f Hz", cfg.RxLO))
-		if err := client.WriteAttr(phy, "altvoltage1", "frequency", fmt.Sprintf("%.0f", cfg.RxLO)); err != nil {
+		if err := writeAttr("set RX LO", func() error {
+			return client.WriteAttrCompat(phy, "altvoltage1", "frequency", fmt.Sprintf("%.0f", cfg.RxLO))
+		}); err != nil {
 			_ = client.Close()
-			p.logEvent("error", fmt.Sprintf("IIO: Failed to set RX LO: %v", err))
-			return fmt.Errorf("set RX LO: %w", err)
+			return err
 		}
 
 		p.logEvent("debug", fmt.Sprintf("IIO: Setting TX LO to %.0f Hz", cfg.RxLO))
-		if err := client.WriteAttr(phy, "altvoltage0", "frequency", fmt.Sprintf("%.0f", cfg.RxLO)); err != nil {
+		if err := writeAttr("set TX LO", func() error {
+			return client.WriteAttrCompat(phy, "altvoltage0", "frequency", fmt.Sprintf("%.0f", cfg.RxLO))
+		}); err != nil {
 			_ = client.Close()
-			p.logEvent("error", fmt.Sprintf("IIO: Failed to set TX LO: %v", err))
-			return fmt.Errorf("set TX LO: %w", err)
+			return err
 		}
 	}
 
 	// Configure RX gains.
 	p.logEvent("debug", "IIO: Configuring RX gains")
-	if err := client.WriteAttr(phy, "voltage0", "gain_control_mode", "manual"); err != nil {
+	if err := writeAttr("set rx0 gain mode", func() error {
+		return client.WriteAttrCompat(phy, "voltage0", "gain_control_mode", "manual")
+	}); err != nil {
 		_ = client.Close()
-		return fmt.Errorf("set rx0 gain mode: %w", err)
+		return err
 	}
-	if err := client.WriteAttr(phy, "voltage1", "gain_control_mode", "manual"); err != nil {
+	if err := writeAttr("set rx1 gain mode", func() error {
+		return client.WriteAttrCompat(phy, "voltage1", "gain_control_mode", "manual")
+	}); err != nil {
 		_ = client.Close()
-		return fmt.Errorf("set rx1 gain mode: %w", err)
+		return err
 	}
-	if err := client.WriteAttr(phy, "voltage0", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain0)); err != nil {
+	if err := writeAttr("set rx0 gain", func() error {
+		return client.WriteAttrCompat(phy, "voltage0", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain0))
+	}); err != nil {
 		_ = client.Close()
-		return fmt.Errorf("set rx0 gain: %w", err)
+		return err
 	}
-	if err := client.WriteAttr(phy, "voltage1", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain1)); err != nil {
+	if err := writeAttr("set rx1 gain", func() error {
+		return client.WriteAttrCompat(phy, "voltage1", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain1))
+	}); err != nil {
 		_ = client.Close()
-		return fmt.Errorf("set rx1 gain: %w", err)
+		return err
 	}
-	if err := client.WriteAttr(phy, "out", "hardwaregain", fmt.Sprintf("%d", cfg.TxGain)); err != nil {
-		// Some firmware exposes TX gain per-channel; fall back without failing hard.
+	if err := client.WriteAttrCompat(phy, "out", "hardwaregain", fmt.Sprintf("%d", cfg.TxGain)); err != nil {
+		if errors.Is(err, iiod.ErrWriteNotSupported) {
+			p.logEvent("warn", fmt.Sprintf("IIO: TX gain not applied (write unsupported): %v", err))
+		} else {
+			// Some firmware exposes TX gain per-channel; fall back without failing hard.
+			p.logEvent("warn", fmt.Sprintf("IIO: TX gain not applied: %v", err))
+		}
 	}
 
 	p.logEvent("info", fmt.Sprintf("IIO: Creating RX buffer (%d samples)", cfg.NumSamples))

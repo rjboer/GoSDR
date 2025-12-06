@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -36,6 +37,9 @@ type Client struct {
 	timeout         time.Duration
 	healthWindow    time.Duration
 }
+
+// ErrWriteNotSupported indicates that the connected IIOD server does not allow attribute writes (e.g., protocol v0.25).
+var ErrWriteNotSupported = errors.New("iiod protocol does not support attribute writes")
 
 // ProtocolVersion captures the IIOD protocol version reported by the server.
 type ProtocolVersion struct {
@@ -781,6 +785,21 @@ func (c *Client) WriteAttr(device, channel, attr, value string) error {
 
 // WriteAttrWithContext writes attribute with context support.
 func (c *Client) WriteAttrWithContext(ctx context.Context, device, channel, attr, value string) error {
+	return c.WriteAttrBinary(ctx, device, channel, attr, value)
+}
+
+// WriteAttrCompat writes an attribute while handling legacy servers that do not support write operations.
+func (c *Client) WriteAttrCompat(device, channel, attr, value string) error {
+	return c.WriteAttrCompatWithContext(context.Background(), device, channel, attr, value)
+}
+
+// WriteAttrCompatWithContext writes an attribute and returns a descriptive error when the server reports no write support.
+func (c *Client) WriteAttrCompatWithContext(ctx context.Context, device, channel, attr, value string) error {
+	if c.IsLegacy() {
+		log.Printf("IIOD protocol v0.%d does not support attribute writes; skipping %s/%s/%s", c.ProtocolVersion.Minor, device, channel, attr)
+		return fmt.Errorf("%w: protocol v0.%d", ErrWriteNotSupported, c.ProtocolVersion.Minor)
+	}
+
 	return c.WriteAttrBinary(ctx, device, channel, attr, value)
 }
 
