@@ -90,20 +90,6 @@ type ReconnectConfig struct {
 	OnReconnect  func(*Client) error // Called after successful reconnect to restore state
 }
 
-// Send issues a raw IIOD command and returns the response payload.
-func (c *Client) Send(cmd string) (string, error) {
-	return c.SendWithContext(context.Background(), cmd)
-}
-
-// SendWithContext issues a raw IIOD command with context support.
-func (c *Client) SendWithContext(ctx context.Context, cmd string) (string, error) {
-	resp, err := c.sendBinaryCommand(ctx, cmd, nil)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(resp)), nil
-}
-
 // Close terminates the underlying network connection.
 func (c *Client) Close() error {
 	c.mu.Lock()
@@ -131,7 +117,7 @@ func (c *Client) SetTimeout(timeout time.Duration) error {
 		return fmt.Errorf("timeout must be positive")
 	}
 
-	if _, err := c.SendWithContext(context.Background(), fmt.Sprintf("TIMEOUT %d", timeout.Milliseconds())); err != nil {
+	if _, err := c.sendCommandString(context.Background(), fmt.Sprintf("TIMEOUT %d", timeout.Milliseconds())); err != nil {
 		return err
 	}
 
@@ -283,7 +269,7 @@ func (c *Client) GetContextInfo() (ContextInfo, error) {
 
 // GetContextInfoWithContext queries context info with context support.
 func (c *Client) GetContextInfoWithContext(ctx context.Context) (ContextInfo, error) {
-	payload, err := c.SendWithContext(ctx, "VERSION")
+	payload, err := c.sendCommandString(ctx, "VERSION")
 	if err != nil {
 		return ContextInfo{}, err
 	}
@@ -317,7 +303,7 @@ func (c *Client) GetDeviceInfo() ([]DeviceInfo, error) {
 
 // GetDeviceInfoWithContext retrieves device metadata via the XML command with context support.
 func (c *Client) GetDeviceInfoWithContext(ctx context.Context) ([]DeviceInfo, error) {
-	resp, err := c.SendWithContext(ctx, "XML")
+	resp, err := c.sendCommandString(ctx, "XML")
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +323,7 @@ func (c *Client) ListDevices() ([]string, error) {
 
 // ListDevicesWithContext lists devices with context support.
 func (c *Client) ListDevicesWithContext(ctx context.Context) ([]string, error) {
-	payload, err := c.SendWithContext(ctx, "LIST_DEVICES")
+	payload, err := c.sendCommandString(ctx, "LIST_DEVICES")
 	if err != nil {
 		// Fallback to XML parsing for older IIOD versions
 		return c.ListDevicesFromXML(ctx)
@@ -364,7 +350,7 @@ func (c *Client) GetXMLContextWithContext(ctx context.Context) (string, error) {
 		return c.xmlContext, nil
 	}
 
-	resp, err := c.SendWithContext(ctx, "PRINT")
+	resp, err := c.sendCommandString(ctx, "PRINT")
 	if err != nil {
 		return "", err
 	}
@@ -700,7 +686,7 @@ func (c *Client) GetChannelsWithContext(ctx context.Context, device string) ([]s
 		return nil, fmt.Errorf("device name is required")
 	}
 
-	payload, err := c.SendWithContext(ctx, fmt.Sprintf("LIST_CHANNELS %s", device))
+	payload, err := c.sendCommandString(ctx, fmt.Sprintf("LIST_CHANNELS %s", device))
 	if err != nil {
 		return nil, err
 	}
@@ -712,7 +698,7 @@ func (c *Client) GetChannelsWithContext(ctx context.Context, device string) ([]s
 
 // CreateBuffer is deprecated. Use CreateStreamBuffer instead.
 func (c *Client) CreateBuffer(device string, samples int) (string, error) {
-	return c.SendWithContext(context.Background(), fmt.Sprintf("CREATE_BUFFER %s %d", device, samples))
+	return c.sendCommandString(context.Background(), fmt.Sprintf("CREATE_BUFFER %s %d", device, samples))
 }
 
 // OpenBuffer issues the OPEN command to allocate a streaming buffer.
@@ -729,7 +715,7 @@ func (c *Client) OpenBufferWithContext(ctx context.Context, device string, sampl
 		return fmt.Errorf("sample count must be positive")
 	}
 
-	_, err := c.SendWithContext(ctx, fmt.Sprintf("OPEN %s %d", device, samples))
+	_, err := c.sendCommandString(ctx, fmt.Sprintf("OPEN %s %d", device, samples))
 	return err
 }
 
@@ -780,7 +766,7 @@ func (c *Client) CloseBufferWithContext(ctx context.Context, device string) erro
 		return fmt.Errorf("device name is required")
 	}
 
-	_, err := c.SendWithContext(ctx, fmt.Sprintf("CLOSE %s", device))
+	_, err := c.sendCommandString(ctx, fmt.Sprintf("CLOSE %s", device))
 	return err
 }
 
@@ -834,11 +820,6 @@ func (c *Client) ReadAttrBinary(ctx context.Context, device, channel, attr strin
 		target = fmt.Sprintf("%s %s %s", device, channel, attr)
 	}
 
-	// Modern servers still expect the text-based READ_ATTR command.
-	if !c.IsLegacy() {
-		return c.SendWithContext(ctx, fmt.Sprintf("READ_ATTR %s", target))
-	}
-
 	c.logMetadataLookup(ctx, device, channel, attr)
 
 	// Legacy v0.25 servers respond with a 32-bit status followed by payload bytes.
@@ -882,13 +863,6 @@ func (c *Client) WriteAttrBinary(ctx context.Context, device, channel, attr, val
 		target = fmt.Sprintf("%s %s %s", device, channel, attr)
 	}
 
-	// Modern servers: keep using the text-based command path.
-	if !c.IsLegacy() {
-		targetWithValue := fmt.Sprintf("%s %s", target, value)
-		_, err := c.SendWithContext(ctx, fmt.Sprintf("WRITE_ATTR %s", targetWithValue))
-		return err
-	}
-
 	c.logMetadataLookup(ctx, device, channel, attr)
 
 	// Legacy binary write: opcode 7 with length-prefixed data.
@@ -921,7 +895,7 @@ func (c *Client) ReadDebugAttrWithContext(ctx context.Context, device, attr stri
 		return "", fmt.Errorf("attribute name is required")
 	}
 
-	return c.SendWithContext(ctx, fmt.Sprintf("READ %s DEBUG %s", device, attr))
+	return c.sendCommandString(ctx, fmt.Sprintf("READ %s DEBUG %s", device, attr))
 }
 
 // WriteDebugAttr writes a debug attribute (direct register access).
@@ -938,7 +912,7 @@ func (c *Client) WriteDebugAttrWithContext(ctx context.Context, device, attr, va
 		return fmt.Errorf("attribute name is required")
 	}
 
-	_, err := c.SendWithContext(ctx, fmt.Sprintf("WRITE %s DEBUG %s %s", device, attr, value))
+	_, err := c.sendCommandString(ctx, fmt.Sprintf("WRITE %s DEBUG %s %s", device, attr, value))
 	return err
 }
 
@@ -1087,6 +1061,14 @@ func (c *Client) readResponse(ctx context.Context) (int32, error) {
 
 	c.metrics.LastCommandTime.Store(time.Now())
 	return status, nil
+}
+
+func (c *Client) sendCommandString(ctx context.Context, cmd string) (string, error) {
+	resp, err := c.sendBinaryCommand(ctx, cmd, nil)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(resp)), nil
 }
 
 func (c *Client) sendBinaryCommand(ctx context.Context, cmd string, payload []byte) ([]byte, error) {

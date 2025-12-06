@@ -2,6 +2,7 @@ package iiod
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -131,7 +132,7 @@ func TestSendErrors(t *testing.T) {
 			name:     "malformed header",
 			request:  "VERSION",
 			header:   "MALFORMED\n",
-			invoke:   func(c *Client) (string, error) { return c.Send("VERSION") },
+			invoke:   func(c *Client) (string, error) { return c.sendCommandString(context.Background(), "VERSION") },
 			wantsErr: true,
 		},
 		{
@@ -139,7 +140,7 @@ func TestSendErrors(t *testing.T) {
 			request:  "LIST_DEVICES",
 			status:   5,
 			payload:  "error",
-			invoke:   func(c *Client) (string, error) { return c.Send("LIST_DEVICES") },
+			invoke:   func(c *Client) (string, error) { return c.sendCommandString(context.Background(), "LIST_DEVICES") },
 			wantsErr: true,
 		},
 	}
