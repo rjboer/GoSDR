@@ -269,11 +269,40 @@ func (c *Client) GetContextInfo() (ContextInfo, error) {
 
 // GetContextInfoWithContext queries context info with context support.
 func (c *Client) GetContextInfoWithContext(ctx context.Context) (ContextInfo, error) {
-	payload, err := c.sendCommandString(ctx, "VERSION")
+	const opcodeVersion = 0
+
+	cmd := IIODCommand{Opcode: opcodeVersion, Flags: 0, Address: 0, Length: 0}
+	if err := c.sendCommand(ctx, cmd, nil); err != nil {
+		return ContextInfo{}, err
+	}
+
+	status, err := c.readResponse(ctx)
 	if err != nil {
 		return ContextInfo{}, err
 	}
 
+	// Legacy servers reply with status 0 and no payload; fall back to the text command.
+	if status == 0 {
+		payload, legacyErr := c.sendCommandString(ctx, "VERSION")
+		if legacyErr != nil {
+			return ContextInfo{}, legacyErr
+		}
+		return parseContextInfo(payload)
+	}
+
+	buf := make([]byte, status)
+	if _, err := io.ReadFull(c.reader, buf); err != nil {
+		return ContextInfo{}, err
+	}
+	if status > 0 {
+		c.metrics.BytesReceived.Add(uint64(status))
+	}
+	c.metrics.LastCommandTime.Store(time.Now())
+
+	return parseContextInfo(string(buf))
+}
+
+func parseContextInfo(payload string) (ContextInfo, error) {
 	parts := strings.Fields(payload)
 	if len(parts) < 2 {
 		return ContextInfo{}, fmt.Errorf("unexpected context info: %q", payload)
@@ -303,17 +332,16 @@ func (c *Client) GetDeviceInfo() ([]DeviceInfo, error) {
 
 // GetDeviceInfoWithContext retrieves device metadata via the XML command with context support.
 func (c *Client) GetDeviceInfoWithContext(ctx context.Context) ([]DeviceInfo, error) {
-	resp, err := c.sendCommandString(ctx, "XML")
+	xmlContext, err := c.GetXMLContextWithContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp == "" {
+	if xmlContext == "" {
 		return nil, fmt.Errorf("empty XML response")
 	}
 
-	c.cacheXMLMetadata(resp)
-	return parseDeviceInfoFromXML(resp)
+	return parseDeviceInfoFromXML(xmlContext)
 }
 
 // ListDevices returns the set of device identifiers known by the server.
@@ -371,15 +399,40 @@ func (c *Client) GetXMLContextWithContext(ctx context.Context) (string, error) {
 		return c.xmlContext, nil
 	}
 
-	resp, err := c.sendCommandString(ctx, "PRINT")
+	const opcodePrint = 1
+	cmd := IIODCommand{Opcode: opcodePrint, Flags: 0, Address: 0, Length: 0}
+	if err := c.sendCommand(ctx, cmd, nil); err != nil {
+		return "", err
+	}
+
+	status, err := c.readResponse(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	if c.xmlContext != "" {
+	// Legacy text response with no payload length; fall back to command string.
+	if status == 0 {
+		resp, legacyErr := c.sendCommandString(ctx, "PRINT")
+		if legacyErr != nil {
+			return "", legacyErr
+		}
+		if resp == "" {
+			return "", fmt.Errorf("no XML context received")
+		}
+		c.cacheXMLMetadata(resp)
 		return c.xmlContext, nil
 	}
 
+	buf := make([]byte, status)
+	if _, err := io.ReadFull(c.reader, buf); err != nil {
+		return "", err
+	}
+	if status > 0 {
+		c.metrics.BytesReceived.Add(uint64(status))
+	}
+	c.metrics.LastCommandTime.Store(time.Now())
+
+	resp := string(buf)
 	if resp == "" {
 		return "", fmt.Errorf("no XML context received")
 	}
