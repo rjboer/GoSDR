@@ -213,6 +213,14 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 			fmt.Printf("[PLUTO DEBUG] XML parsing failed, using hardcoded device names\n")
 			devices = []string{"ad9361-phy", "cf-ad9361-lpc", "cf-ad9361-dds-core-lpc"}
 		}
+		xml, err := client.DumpRawXML()
+		if err != nil {
+			fmt.Printf("Failed to dump XML: %v", err)
+		}
+
+		fmt.Println("=== RAW PLUTO XML ===")
+		fmt.Println(xml)
+
 	}
 
 	p.logEvent("debug", fmt.Sprintf("IIO: Found %d devices", len(devices)))

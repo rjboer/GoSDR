@@ -1,8 +1,10 @@
 package iiod
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 )
@@ -237,4 +239,42 @@ func isLikelyXML(err error) bool {
 		strings.Contains(msg, "<context") ||
 		strings.Contains(msg, "DOCTYPE") ||
 		strings.Contains(msg, "<device")
+}
+
+// / DumpRawXML retrieves the full XML context using the IIOD text protocol.
+// This works on PlutoSDR (IIOD v0.25–v0.38).
+func (c *Client) DumpRawXML() (string, error) {
+	if c.conn == nil {
+		return "", fmt.Errorf("text-based IIOD connection is not initialized")
+	}
+
+	// Send PRINT\n to request the XML dump
+	if _, err := c.conn.Write([]byte("PRINT\n")); err != nil {
+		return "", fmt.Errorf("failed to send PRINT command: %w", err)
+	}
+
+	// Read until we have the closing </context>
+	var buf bytes.Buffer
+	tmp := make([]byte, 4096)
+
+	for {
+		n, err := c.conn.Read(tmp)
+		if n > 0 {
+			buf.Write(tmp[:n])
+
+			// Stop once closing tag is seen
+			if bytes.Contains(buf.Bytes(), []byte("</context>")) {
+				break
+			}
+		}
+
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("error reading XML: %w", err)
+		}
+	}
+
+	return buf.String(), nil
 }
