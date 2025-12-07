@@ -27,7 +27,7 @@ func TestClientCommands(t *testing.T) {
 		{
 			name:    "context info",
 			request: "VERSION",
-			status:  0,
+			status:  len("1 0 Test IIOD"),
 			payload: "1 0 Test IIOD",
 			invoke: func(c *Client) (string, error) {
 				info, err := c.GetContextInfo()
@@ -41,7 +41,7 @@ func TestClientCommands(t *testing.T) {
 		{
 			name:        "list devices",
 			request:     "LIST_DEVICES",
-			status:      0,
+			status:      len("adc dac"),
 			payload:     "adc dac",
 			wantPayload: "adc dac",
 			invoke: func(c *Client) (string, error) {
@@ -55,7 +55,7 @@ func TestClientCommands(t *testing.T) {
 		{
 			name:        "get channels",
 			request:     "LIST_CHANNELS adc",
-			status:      0,
+			status:      len("voltage0 voltage1"),
 			payload:     "voltage0 voltage1",
 			wantPayload: "voltage0 voltage1",
 			invoke: func(c *Client) (string, error) {
@@ -79,7 +79,7 @@ func TestClientCommands(t *testing.T) {
 		{
 			name:    "read attr",
 			request: "READ_ATTR adc voltage0 sampling_frequency",
-			status:  0,
+			status:  len("2000000"),
 			payload: "2000000",
 			invoke: func(c *Client) (string, error) {
 				return c.ReadAttr("adc", "voltage0", "sampling_frequency")
@@ -89,7 +89,7 @@ func TestClientCommands(t *testing.T) {
 		{
 			name:    "write attr",
 			request: "WRITE_ATTR adc voltage0 sampling_frequency 1000000",
-			status:  0,
+                        status:  len("2000000"),
 			payload: "",
 			invoke: func(c *Client) (string, error) {
 				return "", c.WriteAttr("adc", "voltage0", "sampling_frequency", "1000000")
@@ -254,40 +254,57 @@ func startMockServer(t *testing.T, expectedReq string, status int, payload, head
 		defer conn.Close()
 
 		reader := bufio.NewReader(conn)
-		line, err := reader.ReadString('\n')
+		cmdStr, _, isBinary, _, err := readMockCommandWithMode(reader)
 		if err != nil {
 			errCh <- err
 			return
 		}
-		for strings.TrimSpace(line) == "PRINT" {
+		for cmdStr == "PRINT" {
 			xmlPayload := "<context></context>"
-			if _, err := fmt.Fprintf(conn, "0 %d\n%s", len(xmlPayload), xmlPayload); err != nil {
-				errCh <- err
-				return
+			if isBinary {
+				if err := sendMockResponse(conn, len(xmlPayload), []byte(xmlPayload)); err != nil {
+					errCh <- err
+					return
+				}
+			} else {
+				if _, err := fmt.Fprintf(conn, "%d %d\n%s", len(xmlPayload), len(xmlPayload), xmlPayload); err != nil {
+					errCh <- err
+					return
+				}
 			}
-			line, err = reader.ReadString('\n')
+
+			cmdStr, _, isBinary, _, err = readMockCommandWithMode(reader)
 			if err != nil {
 				errCh <- err
 				return
 			}
 		}
-		if strings.TrimSpace(line) != expectedReq {
-			errCh <- fmt.Errorf("unexpected request %q", strings.TrimSpace(line))
+		if strings.TrimSpace(cmdStr) != expectedReq {
+			errCh <- fmt.Errorf("unexpected request %q", strings.TrimSpace(cmdStr))
 			return
 		}
 
-		header := headerOverride
-		if header == "" {
-			header = fmt.Sprintf("%d %d\n", status, len(payload))
-		}
-		if _, err := fmt.Fprint(conn, header); err != nil {
-			errCh <- err
-			return
-		}
-		if payload != "" && headerOverride == "" {
-			if _, err := fmt.Fprint(conn, payload); err != nil {
+		if headerOverride != "" {
+			if _, err := fmt.Fprint(conn, headerOverride); err != nil {
 				errCh <- err
 				return
+			}
+		} else if isBinary {
+			if err := sendMockResponse(conn, status, []byte(payload)); err != nil {
+				errCh <- err
+				return
+			}
+		} else {
+			header := fmt.Sprintf("%d %d\n", status, len(payload))
+			if _, err := fmt.Fprint(conn, header); err != nil {
+				errCh <- err
+				return
+			}
+			if payload != "" {
+				if _, err := fmt.Fprint(conn, payload); err != nil {
+					errCh <- err
+					return
+				}
 			}
 		}
 
@@ -295,6 +312,35 @@ func startMockServer(t *testing.T, expectedReq string, status int, payload, head
 	}()
 
 	return listener.Addr().String(), errCh
+}
+
+func readMockCommandWithMode(reader *bufio.Reader) (string, []byte, bool, uint8, error) {
+	peek, err := reader.Peek(1)
+	if err != nil {
+		return "", nil, false, 0, err
+	}
+
+	if peek[0] >= 'A' && peek[0] <= 'Z' {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return "", nil, false, 0, err
+		}
+		return strings.TrimSpace(line), nil, false, 0, nil
+	}
+
+	header := make([]byte, 8)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return "", nil, true, 0, err
+	}
+
+	cmd := IIODCommand{Opcode: header[0], Flags: header[1], Address: binary.BigEndian.Uint16(header[2:]), Length: binary.BigEndian.Uint32(header[4:])}
+	payload := make([]byte, cmd.Length)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return "", nil, true, 0, err
+	}
+
+	cmdStr, data, err := decodeBinaryBufferCommand(cmd, payload)
+	return cmdStr, data, true, cmd.Opcode, err
 }
 
 func startBinaryListDevicesServer(t *testing.T, expectedOpcode uint8, status int32, payload []byte, xmlContext string) (string, chan error) {
@@ -317,38 +363,37 @@ func startBinaryListDevicesServer(t *testing.T, expectedOpcode uint8, status int
 		defer conn.Close()
 
 		reader := bufio.NewReader(conn)
-		line, err := reader.ReadString('\n')
+
+		cmdStr, _, isBinary, opcode, err := readMockCommandWithMode(reader)
 		if err != nil {
 			errCh <- err
 			return
 		}
 
-		if strings.TrimSpace(line) == "PRINT" {
-			header := fmt.Sprintf("0 %d\n%s", len(xmlContext), xmlContext)
-			if _, err := fmt.Fprint(conn, header); err != nil {
+		for cmdStr == "PRINT" {
+			if isBinary {
+				if err := sendMockResponse(conn, len(xmlContext), []byte(xmlContext)); err != nil {
+					errCh <- err
+					return
+				}
+			} else {
+				header := fmt.Sprintf("%d %d\n%s", len(xmlContext), len(xmlContext), xmlContext)
+				if _, err := fmt.Fprint(conn, header); err != nil {
+					errCh <- err
+					return
+				}
+			}
+
+			cmdStr, _, isBinary, opcode, err = readMockCommandWithMode(reader)
+			if err != nil {
 				errCh <- err
 				return
 			}
 		}
 
-		header := make([]byte, 8)
-		if _, err := io.ReadFull(reader, header); err != nil {
-			errCh <- err
+		if isBinary && opcode != expectedOpcode {
+			errCh <- fmt.Errorf("unexpected opcode %d", opcode)
 			return
-		}
-
-		if header[0] != expectedOpcode {
-			errCh <- fmt.Errorf("unexpected opcode %d", header[0])
-			return
-		}
-
-		payloadLen := binary.BigEndian.Uint32(header[4:])
-		if payloadLen > 0 {
-			received := make([]byte, payloadLen)
-			if _, err := io.ReadFull(reader, received); err != nil {
-				errCh <- err
-				return
-			}
 		}
 
 		if err := binary.Write(conn, binary.BigEndian, status); err != nil {
