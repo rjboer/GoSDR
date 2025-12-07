@@ -2,6 +2,7 @@ package sdr
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -43,42 +44,30 @@ func startPlutoMockServer(t *testing.T, ops []plutoMockOp) (string, chan error) 
 		reader := bufio.NewReader(conn)
 
 		for _, op := range ops {
-			line, err := reader.ReadString('\n')
+			cmdStr, data, err := readPlutoCommand(reader)
 			if err != nil {
 				errCh <- fmt.Errorf("read command: %w", err)
 				return
 			}
-			got := strings.TrimSpace(line)
-			for got == "PRINT" {
+			for cmdStr == "PRINT" {
 				xmlPayload := "<context></context>"
-				if _, err := fmt.Fprintf(conn, "0 %d\n%s", len(xmlPayload), xmlPayload); err != nil {
+				if err := sendPlutoResponse(conn, len(xmlPayload), []byte(xmlPayload)); err != nil {
 					errCh <- fmt.Errorf("write xml response: %w", err)
 					return
 				}
-				line, err = reader.ReadString('\n')
+				cmdStr, data, err = readPlutoCommand(reader)
 				if err != nil {
 					errCh <- fmt.Errorf("read command: %w", err)
 					return
 				}
-				got = strings.TrimSpace(line)
 			}
-			if got != op.cmd {
-				errCh <- fmt.Errorf("unexpected command %q, want %q", got, op.cmd)
+
+			if cmdStr != op.cmd {
+				errCh <- fmt.Errorf("unexpected command %q, want %q", cmdStr, op.cmd)
 				return
 			}
 
 			if len(op.expectBinary) > 0 {
-				var lengthPrefix [4]byte
-				if _, err := io.ReadFull(reader, lengthPrefix[:]); err != nil {
-					errCh <- fmt.Errorf("read length prefix: %w", err)
-					return
-				}
-				length := binary.BigEndian.Uint32(lengthPrefix[:])
-				data := make([]byte, length)
-				if _, err := io.ReadFull(reader, data); err != nil {
-					errCh <- fmt.Errorf("read binary payload: %w", err)
-					return
-				}
 				if string(data) != string(op.expectBinary) {
 					errCh <- fmt.Errorf("binary payload mismatch: got %v want %v", data, op.expectBinary)
 					return
@@ -90,15 +79,9 @@ func startPlutoMockServer(t *testing.T, ops []plutoMockOp) (string, chan error) 
 				payload = op.binaryPayload
 			}
 
-			if _, err := fmt.Fprintf(conn, "%d %d\n", op.status, len(payload)); err != nil {
-				errCh <- fmt.Errorf("write response header: %w", err)
+			if err := sendPlutoResponse(conn, op.status, payload); err != nil {
+				errCh <- err
 				return
-			}
-			if len(payload) > 0 {
-				if _, err := conn.Write(payload); err != nil {
-					errCh <- fmt.Errorf("write response payload: %w", err)
-					return
-				}
 			}
 		}
 
@@ -106,6 +89,146 @@ func startPlutoMockServer(t *testing.T, ops []plutoMockOp) (string, chan error) 
 	}()
 
 	return listener.Addr().String(), errCh
+}
+
+const (
+	plutoOpcodeVersion      = 0
+	plutoOpcodePrint        = 1
+	plutoOpcodeListDevices  = 2
+	plutoOpcodeListChannels = 3
+	plutoOpcodeOpenBuffer   = 4
+	plutoOpcodeCloseBuffer  = 5
+	plutoOpcodeWriteAttr    = 7
+	plutoOpcodeReadBuffer   = 8
+	plutoOpcodeWriteBuffer  = 9
+)
+
+func readPlutoCommand(reader *bufio.Reader) (string, []byte, error) {
+	peek, err := reader.Peek(1)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if peek[0] >= 'A' && peek[0] <= 'Z' {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return "", nil, err
+		}
+		return strings.TrimSpace(line), nil, nil
+	}
+
+	header := make([]byte, 8)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return "", nil, err
+	}
+
+	cmd := iiod.IIODCommand{Opcode: header[0], Flags: header[1], Address: binary.BigEndian.Uint16(header[2:]), Length: binary.BigEndian.Uint32(header[4:])}
+	payload := make([]byte, cmd.Length)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return "", nil, err
+	}
+
+	return decodePlutoCommand(cmd, payload)
+}
+
+func decodePlutoCommand(cmd iiod.IIODCommand, payload []byte) (string, []byte, error) {
+	switch cmd.Opcode {
+	case plutoOpcodePrint:
+		return "PRINT", nil, nil
+	case plutoOpcodeVersion:
+		return "VERSION", nil, nil
+	case plutoOpcodeListDevices:
+		return "LIST_DEVICES", nil, nil
+	case plutoOpcodeListChannels:
+		return fmt.Sprintf("LIST_CHANNELS %s", strings.TrimSpace(string(payload))), nil, nil
+	case plutoOpcodeWriteAttr:
+		target, value, err := parseWritePayload(payload)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("WRITE_ATTR %s %s", target, value), nil, nil
+	case plutoOpcodeOpenBuffer, plutoOpcodeReadBuffer:
+		device, count, err := parseDeviceCountPayload(payload)
+		if err != nil {
+			return "", nil, err
+		}
+		if cmd.Opcode == plutoOpcodeOpenBuffer {
+			return fmt.Sprintf("OPEN %s %d", device, count), nil, nil
+		}
+		return fmt.Sprintf("READBUF %s %d", device, count), nil, nil
+	case plutoOpcodeWriteBuffer:
+		device, data, err := parseWriteBufferPayload(payload)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("WRITEBUF %s %d", device, len(data)), data, nil
+	case plutoOpcodeCloseBuffer:
+		return fmt.Sprintf("CLOSE %s", strings.TrimSpace(string(payload))), nil, nil
+	default:
+		return fmt.Sprintf("UNKNOWN_%d", cmd.Opcode), nil, nil
+	}
+}
+
+func parseDeviceCountPayload(payload []byte) (string, uint64, error) {
+	parts := bytes.SplitN(payload, []byte{'\n'}, 2)
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("payload missing device separator")
+	}
+	if len(parts[1]) < 8 {
+		return "", 0, fmt.Errorf("payload too short for count")
+	}
+	count := binary.BigEndian.Uint64(parts[1][:8])
+	return string(parts[0]), count, nil
+}
+
+func parseWriteBufferPayload(payload []byte) (string, []byte, error) {
+	parts := bytes.SplitN(payload, []byte{'\n'}, 2)
+	if len(parts) != 2 {
+		return "", nil, fmt.Errorf("payload missing device separator")
+	}
+	if len(parts[1]) < 8 {
+		return "", nil, fmt.Errorf("payload too short for data length")
+	}
+	length := binary.BigEndian.Uint64(parts[1][:8])
+	remaining := parts[1][8:]
+	if uint64(len(remaining)) < length {
+		return "", nil, fmt.Errorf("payload truncated: have %d want %d", len(remaining), length)
+	}
+	return string(parts[0]), remaining[:length], nil
+}
+
+func parseWritePayload(payload []byte) (string, string, error) {
+	parts := bytes.SplitN(payload, []byte{'\n'}, 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("payload missing target separator")
+	}
+	if len(parts[1]) < 8 {
+		return "", "", fmt.Errorf("payload too short for value length")
+	}
+	length := binary.BigEndian.Uint64(parts[1][:8])
+	value := parts[1][8:]
+	if uint64(len(value)) < length {
+		return "", "", fmt.Errorf("payload truncated: have %d want %d", len(value), length)
+	}
+	return string(parts[0]), string(value[:length]), nil
+}
+
+func sendPlutoResponse(conn net.Conn, status int, payload []byte) error {
+	header := make([]byte, 4)
+	binary.BigEndian.PutUint32(header, uint32(status))
+	if _, err := conn.Write(header); err != nil {
+		return fmt.Errorf("write response header: %w", err)
+	}
+
+	if status < 0 || len(payload) == 0 {
+		return nil
+	}
+
+	if _, err := conn.Write(payload); err != nil {
+		return fmt.Errorf("write response payload: %w", err)
+	}
+
+	return nil
 }
 
 func TestPlutoBufferLifecycle(t *testing.T) {
@@ -130,7 +253,7 @@ func TestPlutoBufferLifecycle(t *testing.T) {
 	txPayload := iiod.FormatInt16Samples(interleaved)
 
 	ops := []plutoMockOp{
-		{cmd: "LIST_DEVICES", status: 0, payload: "ad9361-phy cf-ad9361-lpc cf-ad9361-dds"},
+		{cmd: "LIST_DEVICES", status: len("ad9361-phy cf-ad9361-lpc cf-ad9361-dds"), payload: "ad9361-phy cf-ad9361-lpc cf-ad9361-dds"},
 		{cmd: "WRITE_ATTR ad9361-phy sampling_frequency 2000000", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR ad9361-phy altvoltage1 frequency 2300000000", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR ad9361-phy altvoltage0 frequency 2300000000", status: 0, payload: ""},
@@ -139,15 +262,15 @@ func TestPlutoBufferLifecycle(t *testing.T) {
 		{cmd: "WRITE_ATTR ad9361-phy voltage0 hardwaregain 10", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR ad9361-phy voltage1 hardwaregain 11", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR ad9361-phy out hardwaregain 0", status: 0, payload: ""},
-		{cmd: "LIST_CHANNELS cf-ad9361-lpc", status: 0, payload: "voltage0 voltage1"},
+		{cmd: "LIST_CHANNELS cf-ad9361-lpc", status: len("voltage0 voltage1"), payload: "voltage0 voltage1"},
 		{cmd: "WRITE_ATTR cf-ad9361-lpc voltage0 en 1", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR cf-ad9361-lpc voltage1 en 1", status: 0, payload: ""},
 		{cmd: fmt.Sprintf("OPEN %s %d", "cf-ad9361-lpc", numSamples), status: 0, payload: ""},
-		{cmd: "LIST_CHANNELS cf-ad9361-dds", status: 0, payload: "voltage0 voltage1"},
+		{cmd: "LIST_CHANNELS cf-ad9361-dds", status: len("voltage0 voltage1"), payload: "voltage0 voltage1"},
 		{cmd: "WRITE_ATTR cf-ad9361-dds voltage0 en 1", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR cf-ad9361-dds voltage1 en 1", status: 0, payload: ""},
 		{cmd: fmt.Sprintf("OPEN %s %d", "cf-ad9361-dds", numSamples), status: 0, payload: ""},
-		{cmd: fmt.Sprintf("READBUF %s %d", "cf-ad9361-lpc", numSamples), status: 0, binaryPayload: iqPayload},
+		{cmd: fmt.Sprintf("READBUF %s %d", "cf-ad9361-lpc", numSamples), status: len(iqPayload), binaryPayload: iqPayload},
 		{cmd: fmt.Sprintf("WRITEBUF %s %d", "cf-ad9361-dds", len(txPayload)), status: 0, expectBinary: txPayload},
 		{cmd: fmt.Sprintf("CLOSE %s", "cf-ad9361-lpc"), status: 0, payload: ""},
 		{cmd: fmt.Sprintf("CLOSE %s", "cf-ad9361-dds"), status: 0, payload: ""},
@@ -200,7 +323,7 @@ func TestPlutoRecoverableReadError(t *testing.T) {
 	}
 
 	ops := []plutoMockOp{
-		{cmd: "LIST_DEVICES", status: 0, payload: "ad9361-phy cf-ad9361-lpc cf-ad9361-dds"},
+		{cmd: "LIST_DEVICES", status: len("ad9361-phy cf-ad9361-lpc cf-ad9361-dds"), payload: "ad9361-phy cf-ad9361-lpc cf-ad9361-dds"},
 		{cmd: "WRITE_ATTR ad9361-phy sampling_frequency 4000000", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR ad9361-phy altvoltage1 frequency 2300000000", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR ad9361-phy altvoltage0 frequency 2300000000", status: 0, payload: ""},
@@ -209,16 +332,16 @@ func TestPlutoRecoverableReadError(t *testing.T) {
 		{cmd: "WRITE_ATTR ad9361-phy voltage0 hardwaregain 5", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR ad9361-phy voltage1 hardwaregain 5", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR ad9361-phy out hardwaregain 0", status: 0, payload: ""},
-		{cmd: "LIST_CHANNELS cf-ad9361-lpc", status: 0, payload: "voltage0 voltage1"},
+		{cmd: "LIST_CHANNELS cf-ad9361-lpc", status: len("voltage0 voltage1"), payload: "voltage0 voltage1"},
 		{cmd: "WRITE_ATTR cf-ad9361-lpc voltage0 en 1", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR cf-ad9361-lpc voltage1 en 1", status: 0, payload: ""},
 		{cmd: fmt.Sprintf("OPEN %s %d", "cf-ad9361-lpc", numSamples), status: 0, payload: ""},
-		{cmd: "LIST_CHANNELS cf-ad9361-dds", status: 0, payload: "voltage0 voltage1"},
+		{cmd: "LIST_CHANNELS cf-ad9361-dds", status: len("voltage0 voltage1"), payload: "voltage0 voltage1"},
 		{cmd: "WRITE_ATTR cf-ad9361-dds voltage0 en 1", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR cf-ad9361-dds voltage1 en 1", status: 0, payload: ""},
 		{cmd: fmt.Sprintf("OPEN %s %d", "cf-ad9361-dds", numSamples), status: 0, payload: ""},
 		{cmd: fmt.Sprintf("READBUF %s %d", "cf-ad9361-lpc", numSamples), status: 1, payload: "rx stall"},
-		{cmd: fmt.Sprintf("READBUF %s %d", "cf-ad9361-lpc", numSamples), status: 0, binaryPayload: iqPayload},
+		{cmd: fmt.Sprintf("READBUF %s %d", "cf-ad9361-lpc", numSamples), status: len(iqPayload), binaryPayload: iqPayload},
 		{cmd: fmt.Sprintf("CLOSE %s", "cf-ad9361-lpc"), status: 0, payload: ""},
 		{cmd: fmt.Sprintf("CLOSE %s", "cf-ad9361-dds"), status: 0, payload: ""},
 	}

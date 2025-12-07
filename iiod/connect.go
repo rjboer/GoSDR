@@ -64,6 +64,19 @@ type ClientMetrics struct {
 	ReconnectCount  atomic.Uint32
 }
 
+const (
+	opcodeVersion      uint8 = 0
+	opcodePrint        uint8 = 1
+	opcodeListDevices  uint8 = 2
+	opcodeListChannels uint8 = 3
+	opcodeOpenBuffer   uint8 = 4
+	opcodeCloseBuffer  uint8 = 5
+	opcodeReadAttr     uint8 = 6
+	opcodeWriteAttr    uint8 = 7
+	opcodeReadBuffer   uint8 = 8
+	opcodeWriteBuffer  uint8 = 9
+)
+
 // IIODCommand represents the 8-byte binary header used by the IIOD protocol.
 type IIODCommand struct {
 	Opcode  uint8
@@ -180,11 +193,18 @@ func DialWithContext(ctx context.Context, addr string, reconnectCfg *ReconnectCo
 	client.isConnected.Store(true)
 	client.metrics.ConnectedAt = time.Now()
 
-	if _, err := client.GetXMLContextWithContext(ctx); err != nil {
-		log.Printf("Connected to %s but failed to fetch IIOD XML context: %v", addr, err)
-	} else {
-		client.logProtocolVersion()
+	ctxForMetadata := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctxForMetadata, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 	}
+
+	if _, err := client.GetXMLContextWithContext(ctxForMetadata); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("fetch IIOD XML context: %w", err)
+	}
+	client.logProtocolVersion()
 
 	return client, nil
 }
@@ -269,8 +289,6 @@ func (c *Client) GetContextInfo() (ContextInfo, error) {
 
 // GetContextInfoWithContext queries context info with context support.
 func (c *Client) GetContextInfoWithContext(ctx context.Context) (ContextInfo, error) {
-	const opcodeVersion = 0
-
 	cmd := IIODCommand{Opcode: opcodeVersion, Flags: 0, Address: 0, Length: 0}
 	if err := c.sendCommand(ctx, cmd, nil); err != nil {
 		return ContextInfo{}, err
@@ -351,7 +369,6 @@ func (c *Client) ListDevices() ([]string, error) {
 
 // ListDevicesWithContext lists devices with context support.
 func (c *Client) ListDevicesWithContext(ctx context.Context) ([]string, error) {
-	const opcodeListDevices = 2
 	cmd := IIODCommand{Opcode: opcodeListDevices, Flags: 0, Address: 0, Length: 0}
 	if err := c.sendCommand(ctx, cmd, nil); err != nil {
 		return nil, err
@@ -399,7 +416,6 @@ func (c *Client) GetXMLContextWithContext(ctx context.Context) (string, error) {
 		return c.xmlContext, nil
 	}
 
-	const opcodePrint = 1
 	cmd := IIODCommand{Opcode: opcodePrint, Flags: 0, Address: 0, Length: 0}
 	if err := c.sendCommand(ctx, cmd, nil); err != nil {
 		return "", err
@@ -760,14 +776,38 @@ func (c *Client) GetChannelsWithContext(ctx context.Context, device string) ([]s
 		return nil, fmt.Errorf("device name is required")
 	}
 
-	payload, err := c.sendCommandString(ctx, fmt.Sprintf("LIST_CHANNELS %s", device))
+	payload := []byte(device + "\n")
+	cmd := IIODCommand{Opcode: opcodeListChannels, Flags: 0, Address: 0, Length: uint32(len(payload))}
+	if err := c.sendCommand(ctx, cmd, payload); err != nil {
+		return nil, err
+	}
+
+	status, err := c.readResponse(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if payload == "" {
+
+	// Legacy fallback to text command for servers that return no payload length.
+	if status == 0 {
+		legacyPayload, legacyErr := c.sendCommandString(ctx, fmt.Sprintf("LIST_CHANNELS %s", device))
+		if legacyErr != nil {
+			return nil, legacyErr
+		}
+		if legacyPayload == "" {
+			return nil, nil
+		}
+		return strings.Fields(legacyPayload), nil
+	}
+
+	buf, err := c.readPayload(status)
+	if err != nil {
+		return nil, err
+	}
+	if len(buf) == 0 {
 		return nil, nil
 	}
-	return strings.Fields(payload), nil
+
+	return strings.Fields(string(buf)), nil
 }
 
 // CreateBuffer is deprecated. Use CreateStreamBuffer instead.
@@ -789,8 +829,31 @@ func (c *Client) OpenBufferWithContext(ctx context.Context, device string, sampl
 		return fmt.Errorf("sample count must be positive")
 	}
 
-	_, err := c.sendCommandString(ctx, fmt.Sprintf("OPEN %s %d", device, samples))
-	return err
+	buf := bytes.NewBufferString(device + "\n")
+	if err := binary.Write(buf, binary.BigEndian, uint64(samples)); err != nil {
+		return fmt.Errorf("encode sample count: %w", err)
+	}
+
+	cmd := IIODCommand{Opcode: opcodeOpenBuffer, Flags: 0, Address: 0, Length: uint32(buf.Len())}
+	if err := c.sendCommand(ctx, cmd, buf.Bytes()); err != nil {
+		return err
+	}
+
+	status, err := c.readResponse(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Treat zero-length responses as success for legacy servers.
+	if status == 0 {
+		return nil
+	}
+
+	if _, err := c.readPayload(status); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ReadBuffer requests binary sample data from the remote buffer.
@@ -807,7 +870,26 @@ func (c *Client) ReadBufferWithContext(ctx context.Context, device string, sampl
 		return nil, fmt.Errorf("sample count must be positive")
 	}
 
-	return c.sendBinaryCommand(ctx, fmt.Sprintf("READBUF %s %d", device, samples), nil)
+	buf := bytes.NewBufferString(device + "\n")
+	if err := binary.Write(buf, binary.BigEndian, uint64(samples)); err != nil {
+		return nil, fmt.Errorf("encode sample count: %w", err)
+	}
+
+	cmd := IIODCommand{Opcode: opcodeReadBuffer, Flags: 0, Address: 0, Length: uint32(buf.Len())}
+	if err := c.sendCommand(ctx, cmd, buf.Bytes()); err != nil {
+		return nil, err
+	}
+
+	status, err := c.readResponse(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if status == 0 {
+		return c.sendBinaryCommand(ctx, fmt.Sprintf("READBUF %s %d", device, samples), nil)
+	}
+
+	return c.readPayload(status)
 }
 
 // WriteBuffer writes binary IQ data to the remote buffer.
@@ -824,8 +906,27 @@ func (c *Client) WriteBufferWithContext(ctx context.Context, device string, data
 		return fmt.Errorf("no data provided for buffer write")
 	}
 
-	cmd := fmt.Sprintf("WRITEBUF %s %d", device, len(data))
-	_, err := c.sendBinaryCommand(ctx, cmd, data)
+	buf := bytes.NewBufferString(device + "\n")
+	if err := binary.Write(buf, binary.BigEndian, uint64(len(data))); err != nil {
+		return fmt.Errorf("encode data length: %w", err)
+	}
+	buf.Write(data)
+
+	cmd := IIODCommand{Opcode: opcodeWriteBuffer, Flags: 0, Address: 0, Length: uint32(buf.Len())}
+	if err := c.sendCommand(ctx, cmd, buf.Bytes()); err != nil {
+		return err
+	}
+
+	status, err := c.readResponse(ctx)
+	if err != nil {
+		return err
+	}
+
+	if status == 0 {
+		return nil
+	}
+
+	_, err = c.readPayload(status)
 	return err
 }
 
@@ -840,7 +941,22 @@ func (c *Client) CloseBufferWithContext(ctx context.Context, device string) erro
 		return fmt.Errorf("device name is required")
 	}
 
-	_, err := c.sendCommandString(ctx, fmt.Sprintf("CLOSE %s", device))
+	payload := []byte(device + "\n")
+	cmd := IIODCommand{Opcode: opcodeCloseBuffer, Flags: 0, Address: 0, Length: uint32(len(payload))}
+	if err := c.sendCommand(ctx, cmd, payload); err != nil {
+		return err
+	}
+
+	status, err := c.readResponse(ctx)
+	if err != nil {
+		return err
+	}
+
+	if status == 0 {
+		return nil
+	}
+
+	_, err = c.readPayload(status)
 	return err
 }
 
@@ -898,7 +1014,7 @@ func (c *Client) ReadAttrBinary(ctx context.Context, device, channel, attr strin
 
 	// Legacy v0.25 servers respond with a 32-bit status followed by payload bytes.
 	payload := []byte(target + "\n")
-	cmd := IIODCommand{Opcode: 6, Flags: 0, Address: 0, Length: uint32(len(payload))}
+	cmd := IIODCommand{Opcode: opcodeReadAttr, Flags: 0, Address: 0, Length: uint32(len(payload))}
 	if err := c.sendCommand(ctx, cmd, payload); err != nil {
 		return "", err
 	}
@@ -947,7 +1063,7 @@ func (c *Client) WriteAttrBinary(ctx context.Context, device, channel, attr, val
 	}
 	buf.Write(valueBytes)
 
-	cmd := IIODCommand{Opcode: 7, Flags: 0, Address: 0, Length: uint32(buf.Len())}
+	cmd := IIODCommand{Opcode: opcodeWriteAttr, Flags: 0, Address: 0, Length: uint32(buf.Len())}
 	if err := c.sendCommand(ctx, cmd, buf.Bytes()); err != nil {
 		return err
 	}
@@ -1135,6 +1251,27 @@ func (c *Client) readResponse(ctx context.Context) (int32, error) {
 
 	c.metrics.LastCommandTime.Store(time.Now())
 	return status, nil
+}
+
+func (c *Client) readPayload(status int32) ([]byte, error) {
+	if status <= 0 {
+		if status == 0 {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("invalid payload length: %d", status)
+	}
+
+	buf := make([]byte, status)
+	if _, err := io.ReadFull(c.reader, buf); err != nil {
+		c.metrics.CommandsFailed.Add(1)
+		return nil, err
+	}
+
+	c.metrics.BytesReceived.Add(uint64(status))
+	c.metrics.LastCommandTime.Store(time.Now())
+
+	return buf, nil
 }
 
 func (c *Client) sendCommandString(ctx context.Context, cmd string) (string, error) {
