@@ -196,15 +196,19 @@ func DialWithContext(ctx context.Context, addr string, reconnectCfg *ReconnectCo
 	ctxForMetadata := ctx
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
-		ctxForMetadata, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		ctxForMetadata, cancel = context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 	}
 
 	if _, err := client.GetXMLContextWithContext(ctxForMetadata); err != nil {
-		log.Printf("Connected to %s but failed to fetch IIOD XML context: %v", addr, err)
+		_ = client.Close()
+    log.Printf("Connected to %s but failed to fetch IIOD XML context: %v", addr, err)
+		return nil, fmt.Errorf("fetch IIOD XML context: %w", err)
+		
 	} else {
 		client.logProtocolVersion()
 	}
+	client.logProtocolVersion()
 
 	return client, nil
 }
