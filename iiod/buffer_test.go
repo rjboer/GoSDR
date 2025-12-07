@@ -2,6 +2,7 @@ package iiod
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -12,7 +13,7 @@ import (
 
 func TestCreateStreamBuffer(t *testing.T) {
 	addr, serverErr := startBufferMockServer(t, []mockBufferOp{
-		{cmd: "LIST_CHANNELS cf-ad9361-lpc", status: 0, payload: "voltage0 voltage1 voltage2 voltage3"},
+		{cmd: "LIST_CHANNELS cf-ad9361-lpc", status: len("voltage0 voltage1 voltage2 voltage3"), payload: "voltage0 voltage1 voltage2 voltage3"},
 		{cmd: "WRITE_ATTR cf-ad9361-lpc voltage0 en 1", status: 0, payload: ""},
 		{cmd: "WRITE_ATTR cf-ad9361-lpc voltage1 en 1", status: 0, payload: ""},
 		{cmd: "OPEN cf-ad9361-lpc 1024", status: 0, payload: ""},
@@ -55,10 +56,10 @@ func TestBufferReadSamples(t *testing.T) {
 	binary.LittleEndian.PutUint16(testData[6:8], 400) // Q1
 
 	addr, serverErr := startBufferMockServer(t, []mockBufferOp{
-		{cmd: "LIST_CHANNELS test-dev", status: 0, payload: "ch0"},
+		{cmd: "LIST_CHANNELS test-dev", status: len("ch0"), payload: "ch0"},
 		{cmd: "WRITE_ATTR test-dev ch0 en 1", status: 0, payload: ""},
 		{cmd: "OPEN test-dev 4", status: 0, payload: ""},
-		{cmd: "READBUF test-dev 4", status: 0, binaryPayload: testData},
+		{cmd: "READBUF test-dev 4", status: len(testData), binaryPayload: testData},
 	})
 
 	client, err := Dial(addr)
@@ -98,7 +99,7 @@ func TestBufferWriteSamples(t *testing.T) {
 	testData := []byte{1, 2, 3, 4, 5, 6, 7, 8}
 
 	addr, serverErr := startBufferMockServer(t, []mockBufferOp{
-		{cmd: "LIST_CHANNELS test-dev", status: 0, payload: "ch0"},
+		{cmd: "LIST_CHANNELS test-dev", status: len("ch0"), payload: "ch0"},
 		{cmd: "WRITE_ATTR test-dev ch0 en 1", status: 0, payload: ""},
 		{cmd: "OPEN test-dev 4", status: 0, payload: ""},
 		{cmd: "WRITEBUF test-dev 8", status: 0, payload: "", expectBinary: testData},
@@ -257,74 +258,52 @@ func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error
 		reader := bufio.NewReader(conn)
 
 		for _, op := range ops {
-			// Read command
-			line, err := reader.ReadString('\n')
+			cmdStr, data, err := readMockCommand(reader)
 			if err != nil {
 				errCh <- err
 				return
 			}
 
-			receivedCmd := strings.TrimSpace(line)
-			for receivedCmd == "PRINT" {
+			for cmdStr == "PRINT" {
 				xmlPayload := "<context></context>"
-				if _, err := fmt.Fprintf(conn, "0 %d\n%s", len(xmlPayload), xmlPayload); err != nil {
+				if err := sendMockResponse(conn, len(xmlPayload), []byte(xmlPayload)); err != nil {
 					errCh <- err
 					return
 				}
-				line, err = reader.ReadString('\n')
+				cmdStr, data, err = readMockCommand(reader)
 				if err != nil {
 					errCh <- err
 					return
 				}
-				receivedCmd = strings.TrimSpace(line)
 			}
-			if receivedCmd != op.cmd {
-				errCh <- fmt.Errorf("unexpected command: got %q, want %q", receivedCmd, op.cmd)
+
+			if cmdStr != op.cmd {
+				errCh <- fmt.Errorf("unexpected command: got %q, want %q", cmdStr, op.cmd)
 				return
 			}
 
-			// Handle WRITEBUF specially - need to read length-prefixed binary data
-			if strings.HasPrefix(op.cmd, "WRITEBUF") {
-				if op.expectBinary != nil {
-					data := make([]byte, len(op.expectBinary))
-					if _, err := io.ReadFull(reader, data); err != nil {
-						errCh <- fmt.Errorf("failed to read binary data: %v", err)
+			if op.expectBinary != nil {
+				if len(data) != len(op.expectBinary) {
+					errCh <- fmt.Errorf("binary length mismatch: got %d, want %d", len(data), len(op.expectBinary))
+					return
+				}
+				for i, b := range op.expectBinary {
+					if data[i] != b {
+						errCh <- fmt.Errorf("binary data mismatch at byte %d: got %d, want %d", i, data[i], b)
 						return
-					}
-
-					for i, b := range op.expectBinary {
-						if data[i] != b {
-							errCh <- fmt.Errorf("binary data mismatch at byte %d: got %d, want %d", i, data[i], b)
-							return
-						}
 					}
 				}
 			}
 
-			// Send response
 			if op.binaryPayload != nil {
-				// Binary response
-				header := fmt.Sprintf("%d %d\n", op.status, len(op.binaryPayload))
-				if _, err := fmt.Fprint(conn, header); err != nil {
-					errCh <- err
-					return
-				}
-				if _, err := conn.Write(op.binaryPayload); err != nil {
+				if err := sendMockResponse(conn, op.status, op.binaryPayload); err != nil {
 					errCh <- err
 					return
 				}
 			} else {
-				// Text response
-				header := fmt.Sprintf("%d %d\n", op.status, len(op.payload))
-				if _, err := fmt.Fprint(conn, header); err != nil {
+				if err := sendMockResponse(conn, op.status, []byte(op.payload)); err != nil {
 					errCh <- err
 					return
-				}
-				if op.payload != "" {
-					if _, err := fmt.Fprint(conn, op.payload); err != nil {
-						errCh <- err
-						return
-					}
 				}
 			}
 		}
@@ -333,4 +312,139 @@ func startBufferMockServer(t *testing.T, ops []mockBufferOp) (string, chan error
 	}()
 
 	return listener.Addr().String(), errCh
+}
+
+func readMockCommand(reader *bufio.Reader) (string, []byte, error) {
+	peek, err := reader.Peek(1)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if peek[0] >= 'A' && peek[0] <= 'Z' {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return "", nil, err
+		}
+		return strings.TrimSpace(line), nil, nil
+	}
+
+	header := make([]byte, 8)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return "", nil, err
+	}
+
+	cmd := IIODCommand{Opcode: header[0], Flags: header[1], Address: binary.BigEndian.Uint16(header[2:]), Length: binary.BigEndian.Uint32(header[4:])}
+	payload := make([]byte, cmd.Length)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return "", nil, err
+	}
+
+	return decodeBinaryBufferCommand(cmd, payload)
+}
+
+func decodeBinaryBufferCommand(cmd IIODCommand, payload []byte) (string, []byte, error) {
+	switch cmd.Opcode {
+	case opcodeListChannels:
+		return fmt.Sprintf("LIST_CHANNELS %s", strings.TrimSpace(string(payload))), nil, nil
+	case opcodeReadAttr:
+		return fmt.Sprintf("READ_ATTR %s", strings.TrimSpace(string(payload))), nil, nil
+	case opcodePrint:
+		return "PRINT", nil, nil
+	case opcodeListDevices:
+		return "LIST_DEVICES", nil, nil
+	case opcodeVersion:
+		return "VERSION", nil, nil
+	case opcodeWriteAttr:
+		target, value, err := parseWritePayload(payload)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("WRITE_ATTR %s %s", target, value), nil, nil
+	case opcodeOpenBuffer, opcodeReadBuffer:
+		device, count, err := parseDeviceCountPayload(payload)
+		if err != nil {
+			return "", nil, err
+		}
+		if cmd.Opcode == opcodeOpenBuffer {
+			return fmt.Sprintf("OPEN %s %d", device, count), nil, nil
+		}
+		return fmt.Sprintf("READBUF %s %d", device, count), nil, nil
+	case opcodeWriteBuffer:
+		device, data, err := parseWriteBufferPayload(payload)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("WRITEBUF %s %d", device, len(data)), data, nil
+	case opcodeCloseBuffer:
+		return fmt.Sprintf("CLOSE %s", strings.TrimSpace(string(payload))), nil, nil
+	default:
+		return fmt.Sprintf("UNKNOWN_OPCODE_%d", cmd.Opcode), nil, nil
+	}
+}
+
+func parseDeviceCountPayload(payload []byte) (string, uint64, error) {
+	parts := bytes.SplitN(payload, []byte{'\n'}, 2)
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("payload missing device separator")
+	}
+
+	if len(parts[1]) < 8 {
+		return "", 0, fmt.Errorf("payload too short for count")
+	}
+
+	count := binary.BigEndian.Uint64(parts[1][:8])
+	return string(parts[0]), count, nil
+}
+
+func parseWriteBufferPayload(payload []byte) (string, []byte, error) {
+	parts := bytes.SplitN(payload, []byte{'\n'}, 2)
+	if len(parts) != 2 {
+		return "", nil, fmt.Errorf("payload missing device separator")
+	}
+
+	if len(parts[1]) < 8 {
+		return "", nil, fmt.Errorf("payload too short for data length")
+	}
+
+	dataLen := binary.BigEndian.Uint64(parts[1][:8])
+	remaining := parts[1][8:]
+	if uint64(len(remaining)) < dataLen {
+		return "", nil, fmt.Errorf("payload truncated: have %d want %d", len(remaining), dataLen)
+	}
+
+	return string(parts[0]), remaining[:dataLen], nil
+}
+
+func parseWritePayload(payload []byte) (string, string, error) {
+	parts := bytes.SplitN(payload, []byte{'\n'}, 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("payload missing target separator")
+	}
+
+	if len(parts[1]) < 8 {
+		return "", "", fmt.Errorf("payload too short for value length")
+	}
+
+	length := binary.BigEndian.Uint64(parts[1][:8])
+	value := parts[1][8:]
+	if uint64(len(value)) < length {
+		return "", "", fmt.Errorf("payload truncated: have %d want %d", len(value), length)
+	}
+
+	return string(parts[0]), string(value[:length]), nil
+}
+
+func sendMockResponse(conn net.Conn, status int, payload []byte) error {
+	header := make([]byte, 4)
+	binary.BigEndian.PutUint32(header, uint32(status))
+	if _, err := conn.Write(header); err != nil {
+		return err
+	}
+
+	if status < 0 || len(payload) == 0 {
+		return nil
+	}
+
+	_, err := conn.Write(payload)
+	return err
 }
