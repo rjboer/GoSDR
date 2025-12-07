@@ -231,6 +231,11 @@ func DialWithContext(ctx context.Context, addr string, reconnectCfg *ReconnectCo
 	}
 
 	client.logProtocolVersion()
+	if client.ProtocolVersion.Major == 0 && client.ProtocolVersion.Minor == 25 {
+		log.Printf("[IIOD] Forcing TEXT mode (PlutoSDR detected: IIOD v0.25)")
+		client.SetProtocolMode(ProtocolText)
+	}
+
 	return client, nil
 }
 
@@ -726,19 +731,27 @@ func (c *Client) logMetadataLookup(ctx context.Context, device, channel, attr st
 	}
 }
 
-// GetChannels returns the list of channel IDs for a given device.
+// GetChannels retrieves the list of channel IDs for a given device.
 func (c *Client) GetChannels(device string) ([]string, error) {
 	return c.GetChannelsWithContext(context.Background(), device)
 }
 
 // GetChannelsWithContext gets channels with context support.
+// For legacy/text-only servers we always use text; for modern servers we try
+// binary first and fall back to text on error.
 func (c *Client) GetChannelsWithContext(ctx context.Context, device string) ([]string, error) {
-	switch c.mode {
-	case ProtocolBinary:
-		return c.getChannelsWithContextBinary(ctx, device)
-	default: // ProtocolText
+	// Legacy or explicitly text mode: do not attempt binary.
+	if c.mode == ProtocolText || c.IsLegacy() {
 		return c.getChannelsWithContextText(ctx, device)
 	}
+
+	chans, err := c.getChannelsWithContextBinary(ctx, device)
+	if err == nil {
+		return chans, nil
+	}
+
+	log.Printf("[IIOD DEBUG] GetChannelsWithContext: binary failed for %s (%v), falling back to text LIST", device, err)
+	return c.getChannelsWithContextText(ctx, device)
 }
 
 // CreateBuffer is deprecated. Use CreateStreamBuffer instead.
@@ -806,31 +819,63 @@ func (c *Client) CloseBufferWithContext(ctx context.Context, device string) erro
 	}
 }
 
-// ReadAttr reads a device or channel attribute.
+// ReadAttr reads a device or channel attribute value (no-context helper).
 func (c *Client) ReadAttr(device, channel, attr string) (string, error) {
 	return c.ReadAttrWithContext(context.Background(), device, channel, attr)
 }
 
-// ReadAttrWithContext reads attribute with context support.
+// ReadAttrWithContext reads an attribute with context support.
+// For legacy Pluto (v0.25) and text mode we use the READ text command only.
+// For modern servers, we try binary first and fall back to text on error.
 func (c *Client) ReadAttrWithContext(ctx context.Context, device, channel, attr string) (string, error) {
-	// Attributes still use the binary path; text-based attr access can be added separately if needed.
-	return c.ReadAttrBinary(ctx, device, channel, attr)
+	// Legacy Pluto / text-only: never attempt binary.
+	if c.IsLegacy() || c.mode == ProtocolText {
+		return c.readAttrText(ctx, device, channel, attr)
+	}
+
+	// Modern IIOD: try binary first.
+	val, err := c.ReadAttrBinary(ctx, device, channel, attr)
+	if err == nil {
+		return val, nil
+	}
+
+	log.Printf("[IIOD DEBUG] ReadAttrWithContext: binary failed for %s/%s/%s (%v), falling back to text READ",
+		device, channel, attr, err)
+
+	// Fallback: text-based READ command.
+	return c.readAttrText(ctx, device, channel, attr)
 }
 
-// WriteAttr writes a device or channel attribute value.
+// WriteAttr writes a device or channel attribute value (no-context helper).
 func (c *Client) WriteAttr(device, channel, attr, value string) error {
 	return c.WriteAttrWithContext(context.Background(), device, channel, attr, value)
 }
 
-// WriteAttrWithContext writes attribute with context support.
+// WriteAttrWithContext writes an attribute with context support.
+// For legacy Pluto (v0.25) and text mode we use the WRITE text command only.
+// For modern servers, we try binary first and fall back to text on error.
 func (c *Client) WriteAttrWithContext(ctx context.Context, device, channel, attr, value string) error {
-	return c.WriteAttrBinary(ctx, device, channel, attr, value)
+	// Legacy Pluto / text-only: never attempt binary.
+	if c.IsLegacy() || c.mode == ProtocolText {
+		return c.writeAttrText(ctx, device, channel, attr, value)
+	}
+
+	// Modern IIOD: try binary first.
+	if err := c.WriteAttrBinary(ctx, device, channel, attr, value); err == nil {
+		return nil
+	}
+
+	log.Printf("[IIOD DEBUG] WriteAttrWithContext: binary failed for %s/%s/%s (%v), falling back to text WRITE",
+		device, channel, attr, value)
+
+	// Fallback: text-based WRITE command.
+	return c.writeAttrText(ctx, device, channel, attr, value)
 }
 
-// WriteAttrCompat writes an attribute while handling legacy servers that do not support write operations.
-func (c *Client) WriteAttrCompat(device, channel, attr, value string) error {
-	return c.WriteAttrCompatWithContext(context.Background(), device, channel, attr, value)
-}
+// // WriteAttrCompat writes an attribute while handling legacy servers that do not support write operations.
+// func (c *Client) WriteAttrCompat(device, channel, attr, value string) error {
+// 	return c.WriteAttrCompatWithContext(context.Background(), device, channel, attr, value)
+// }
 
 // WriteAttrCompatWithContext writes an attribute and returns a descriptive error when the server reports no write support.
 func (c *Client) WriteAttrCompatWithContext(ctx context.Context, device, channel, attr, value string) error {
@@ -1279,4 +1324,10 @@ func (c *Client) sendBinaryCommand(ctx context.Context, cmd string, payload []by
 	c.metrics.LastCommandTime.Store(time.Now())
 
 	return resp, nil
+}
+
+// isXMLHeaderPrefix checks if the data looks like the start of an XML document.
+func isXMLHeaderPrefix(status uint32) bool {
+	// 0x3c3f786d == "<xml" little-endian prefix from "<?xml"
+	return status == 0x3c3f786d
 }

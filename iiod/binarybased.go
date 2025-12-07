@@ -295,3 +295,119 @@ func (c *Client) closeBufferWithContextBinary(ctx context.Context, device string
 	_, err = c.readPayload(status)
 	return err
 }
+
+// -----------------------------------------------------------------------------
+//  IQ HELPER FUNCTIONS (binary mode compatible)
+// -----------------------------------------------------------------------------
+//  These helpers allow pluto.go to compile and perform IQ channel unpacking
+//  even though Pluto does not use binary buffer mode. They operate directly
+//  on []int16 samples returned by text-mode buffer reads.
+//
+//  DeinterleaveIQ splits interleaved [I,Q, I,Q, ...] sequences into
+//  dedicated I[] and Q[] slices for the selected channel.
+//
+//  InterleaveIQ performs the opposite: it converts multiple channels of
+//  {I[],Q[]} pairs into a single interleaved sample slice.
+// -----------------------------------------------------------------------------
+
+// DeinterleaveIQ extracts I/Q samples for one channel from a multi-channel stream.
+//
+// samples:  []int16   (full interleaved raw sample array)
+// nchannels: int      (total channels, usually 2 for Pluto)
+// chIndex:   int      (channel index to extract: 0 or 1)
+//
+// Returns:
+//
+//	I[]int16, Q[]int16, error
+func DeinterleaveIQ(samples []int16, nchannels int, chIndex int) ([]int16, []int16, error) {
+	if nchannels <= 0 {
+		return nil, nil, fmt.Errorf("invalid channel count: %d", nchannels)
+	}
+	if chIndex < 0 || chIndex >= nchannels {
+		return nil, nil, fmt.Errorf("channel %d out of range", chIndex)
+	}
+	if len(samples)%2 != 0 {
+		return nil, nil, fmt.Errorf("sample count %d is not even (I/Q pairs required)", len(samples))
+	}
+
+	// Per-channel stride:
+	// For 2 channels: I0,Q0, I1,Q1, I0,Q0, I1,Q1, ...
+	stride := 2 * nchannels
+
+	// IQ offset for this channel
+	base := chIndex * 2
+
+	// Number of complex samples in total
+	totalComplex := len(samples) / 2
+
+	// Samples per channel
+	chSamples := totalComplex / nchannels
+
+	I := make([]int16, chSamples)
+	Q := make([]int16, chSamples)
+
+	idx := 0
+	for n := 0; n < chSamples; n++ {
+		pos := n*stride + base
+		if pos+1 >= len(samples) {
+			return nil, nil, fmt.Errorf("out-of-range access during IQ split")
+		}
+		I[idx] = samples[pos]
+		Q[idx] = samples[pos+1]
+		idx++
+	}
+
+	return I, Q, nil
+}
+
+// InterleaveIQ combines multi-channel IQ slices into a single []int16
+// Interleaved as: I0,Q0, I1,Q1, I0,Q0, I1,Q1, ...
+//
+// channels: [channel][pair][sampleIndex]
+//
+//	channels[c][0] = I samples for channel c
+//	channels[c][1] = Q samples for channel c
+//
+// Example for two channels:
+//
+//	channels = {
+//	   { I0[], Q0[] },
+//	   { I1[], Q1[] },
+//	}
+//
+// Output []int16 layout:
+//
+//	I0,Q0, I1,Q1, I0,Q0, I1,Q1, ...
+func InterleaveIQ(channels [][][]int16) ([]int16, error) {
+	if len(channels) == 0 {
+		return nil, fmt.Errorf("no channels provided")
+	}
+
+	nchannels := len(channels)
+	nsamples := len(channels[0][0])
+
+	// Validate sizes
+	for c := range channels {
+		if len(channels[c]) != 2 {
+			return nil, fmt.Errorf("channel %d must have {I[], Q[]}", c)
+		}
+		if len(channels[c][0]) != nsamples || len(channels[c][1]) != nsamples {
+			return nil, fmt.Errorf("channel %d length mismatch", c)
+		}
+	}
+
+	// Produce output buffer
+	out := make([]int16, nsamples*nchannels*2) // I/Q pairs per channel
+
+	idx := 0
+	for n := 0; n < nsamples; n++ {
+		for c := 0; c < nchannels; c++ {
+			out[idx] = channels[c][0][n] // I
+			idx++
+			out[idx] = channels[c][1][n] // Q
+			idx++
+		}
+	}
+
+	return out, nil
+}

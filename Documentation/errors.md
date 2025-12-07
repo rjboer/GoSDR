@@ -53,3 +53,9 @@ The issue is that the IIOD server is returning -22 as the response header. This 
 Different IIOD versions use different command formats. 
 
 
+There are two modes:
+v0 compat (WITH_IIOD_V0_COMPAT=1) → ASCII / text protocol only.
+New binary mode (WITH_IIOD_V0_COMPAT=0) → binary protocol enabled.
+
+I currently use the text protocol only. 
+I can support the binary protocol if needed (but i require a device that supports it, please gift me one and i will support it).
