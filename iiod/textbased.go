@@ -1,280 +1,283 @@
 package iiod
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"net"
 	"strings"
+	"time"
 )
 
-// Text protocol implementations used by connect.go when c.mode == ProtocolText.
+// -----------------------------------------------------------------------------
+// TEXT-BASED TRANSPORT (PlutoSDR Compatible)
+// -----------------------------------------------------------------------------
 
-// VERSION (text)
-func (c *Client) getContextInfoWithContextText(ctx context.Context) (ContextInfo, error) {
-	payload, err := c.sendCommandString(ctx, "VERSION")
-	if err != nil {
-		return ContextInfo{}, err
-	}
-	return parseContextInfo(payload)
+// textClient wraps a line-based ASCII IIOD connection.
+type textClient struct {
+	conn   net.Conn
+	reader *bufio.Reader
+	writer *bufio.Writer
 }
 
-// PRINT → XML (text)
-func (c *Client) getXMLContextWithContextText(ctx context.Context) (string, error) {
-	// Use cached XML if already available
-	if c.xmlContext != "" {
-		if c.deviceIndexMap == nil || c.attributeCodes == nil {
-			if err := c.refreshMetadataMaps(c.xmlContext); err != nil {
-				log.Printf("Failed to parse IIOD metadata maps from cached XML: %v", err)
+func newTextClient(conn net.Conn) *textClient {
+	return &textClient{
+		conn:   conn,
+		reader: bufio.NewReader(conn),
+		writer: bufio.NewWriter(conn),
+	}
+}
+
+func (tc *textClient) Close() error {
+	return tc.conn.Close()
+}
+
+// -----------------------------------------------------------------------------
+
+// Client is the main IIOD client object in your system.
+// Fields added for hybrid-mode + XML knowledge.
+type Client struct {
+	conn net.Conn
+
+	// Text protocol transport (Pluto uses this)
+	text *textClient
+
+	// XML context + fast index (optional, but used by Pluto)
+	xmlCtx *IIODcontext
+	xmlIdx *IIODIndex
+
+	// Hybrid feature flags
+	supportsBinary bool
+	supportsText   bool
+
+	// Debug printing flag
+	Debug bool
+}
+
+// -----------------------------------------------------------------------------
+// TEXT COMMAND SENDER
+// -----------------------------------------------------------------------------
+
+// sendTextCommand writes a raw text command and flushes it.
+func (c *Client) sendTextCommand(cmd string) error {
+	if c.Debug {
+		fmt.Printf("[IIOD TEXT] >> %s\n", strings.TrimSpace(cmd))
+	}
+	_, err := c.text.writer.WriteString(cmd)
+	if err != nil {
+		return err
+	}
+	return c.text.writer.Flush()
+}
+
+// readTextLine reads a single line terminated with \n from IIOD.
+func (c *Client) readTextLine() (string, error) {
+	line, err := c.text.reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	line = strings.TrimRight(line, "\r\n")
+
+	if c.Debug {
+		fmt.Printf("[IIOD TEXT] << %s\n", line)
+	}
+	return line, nil
+}
+
+// readTextUntilEOF reads all remaining data until socket read returns 0/EOF timeout.
+func (c *Client) readTextUntilEOF(timeout time.Duration) ([]byte, error) {
+	var buf bytes.Buffer
+	c.text.conn.SetReadDeadline(time.Now().Add(timeout))
+
+	tmp := make([]byte, 4096)
+	for {
+		n, err := c.text.reader.Read(tmp)
+		if n > 0 {
+			buf.Write(tmp[:n])
+		}
+		if err != nil {
+			if err == io.EOF || isNetTimeout(err) {
+				break
 			}
+			return nil, err
 		}
-		return c.xmlContext, nil
 	}
 
-	log.Printf("[IIOD DEBUG] getXMLContextWithContextText: sending PRINT (text)...")
-	// We still use sendBinaryCommand for the length-prefixed reply, but the command is text.
-	resp, err := c.sendBinaryCommand(ctx, "PRINT", nil)
-	if err != nil {
-		return "", err
+	raw := buf.Bytes()
+	if c.Debug {
+		fmt.Printf("[IIOD TEXT] << RAW(%d bytes)\n", len(raw))
 	}
-
-	// If sendBinaryCommand saw a legacy “raw XML” stream and cached it itself,
-	// it may have set c.xmlContext and returned (nil, nil).
-	if c.xmlContext == "" {
-		if len(resp) == 0 {
-			return "", fmt.Errorf("no XML context received")
-		}
-		c.cacheXMLMetadata(string(resp))
-	}
-
-	return c.xmlContext, nil
+	return raw, nil
 }
 
-// LIST_DEVICES → use XML context for real IDs
-func (c *Client) listDevicesWithContextText(ctx context.Context) ([]string, error) {
-	// Pluto's text LIST_DEVICES returns "iio:device0 ..." which isn't useful for AD9361 discovery.
-	// Instead, always parse device IDs from the XML context.
-	return c.ListDevicesFromXML(ctx)
-}
-
-// LIST_CHANNELS <device> (text)
-func (c *Client) getChannelsWithContextText(ctx context.Context, device string) ([]string, error) {
-	if strings.TrimSpace(device) == "" {
-		return nil, fmt.Errorf("device name is required")
-	}
-
-	payload, err := c.sendCommandString(ctx, fmt.Sprintf("LIST_CHANNELS %s", device))
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(payload) == "" {
-		return nil, nil
-	}
-
-	return strings.Fields(payload), nil
-}
-
-// OPEN <device> <samples> (text)
-func (c *Client) openBufferWithContextText(ctx context.Context, device string, samples int) error {
-	if strings.TrimSpace(device) == "" {
-		return fmt.Errorf("device name is required")
-	}
-	if samples <= 0 {
-		return fmt.Errorf("sample count must be positive")
-	}
-
-	_, err := c.sendCommandString(ctx, fmt.Sprintf("OPEN %s %d", device, samples))
-	return err
-}
-
-// READBUF <device> <samples> (text)
-func (c *Client) readBufferWithContextText(ctx context.Context, device string, samples int) ([]byte, error) {
-	if strings.TrimSpace(device) == "" {
-		return nil, fmt.Errorf("device name is required")
-	}
-	if samples <= 0 {
-		return nil, fmt.Errorf("sample count must be positive")
-	}
-
-	return c.sendBinaryCommand(ctx, fmt.Sprintf("READBUF %s %d", device, samples), nil)
-}
-
-// WRITEBUF <device> <len> (text) + binary payload
-func (c *Client) writeBufferWithContextText(ctx context.Context, device string, data []byte) error {
-	if strings.TrimSpace(device) == "" {
-		return fmt.Errorf("device name is required")
-	}
-	if len(data) == 0 {
-		return fmt.Errorf("no data provided for buffer write")
-	}
-
-	cmd := fmt.Sprintf("WRITEBUF %s %d", device, len(data))
-	_, err := c.sendBinaryCommand(ctx, cmd, data)
-	return err
-}
-
-// CLOSE <device> (text)
-func (c *Client) closeBufferWithContextText(ctx context.Context, device string) error {
-	if strings.TrimSpace(device) == "" {
-		return fmt.Errorf("device name is required")
-	}
-
-	_, err := c.sendCommandString(ctx, fmt.Sprintf("CLOSE %s", device))
-	return err
-}
-
-// readAttrText issues a text-based "READ" command.
-func (c *Client) readAttrText(ctx context.Context, device, channel, attr string) (string, error) {
-	cmd := "READ"
-	target := device
-	if channel != "" {
-		target = fmt.Sprintf("%s %s", target, channel)
-	}
-	target = fmt.Sprintf("%s %s", target, attr)
-
-	val, err := c.sendCommandString(ctx, fmt.Sprintf("%s %s", cmd, target))
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(val), nil
-}
-
-// writeAttrText issues a text-based "WRITE" command.
-func (c *Client) writeAttrText(ctx context.Context, device, channel, attr, value string) error {
-	cmd := "WRITE"
-	target := device
-	if channel != "" {
-		target = fmt.Sprintf("%s %s", target, channel)
-	}
-	target = fmt.Sprintf("%s %s", target, attr)
-
-	_, err := c.sendCommandString(ctx, fmt.Sprintf("%s %s %s", cmd, target, value))
-	return err
-
+func isNetTimeout(err error) bool {
+	nerr, ok := err.(net.Error)
+	return ok && nerr.Timeout()
 }
 
 // -----------------------------------------------------------------------------
-//  ATTRIBUTE COMPAT LAYER (Binary → Text Fallback)
-// -----------------------------------------------------------------------------
-//
-// These functions provide safe compatibility for legacy IIOD servers like
-// Analog Devices PlutoSDR, which return XML on unsupported binary opcodes.
-//
-// The logic is:
-//    1. Try binary ReadAttr/WriteAttr if binary mode is active
-//    2. If binary mode fails or returns malformed header → fallback to text
-//    3. Perform "READ <dev> <chan> <attr>" or "WRITE <dev> <chan> <attr> <value>"
+// PRINT Command — Retrieve IIOD XML Context
 // -----------------------------------------------------------------------------
 
-// ReadAttrCompat tries binary mode first, then falls back to text mode.
-func (c *Client) ReadAttrCompat(ctx context.Context, device, channel, attr string) (string, error) {
-	if c.mode == ProtocolBinary {
-		val, err := c.ReadAttr(device, channel, attr)
-		if err == nil {
-			return val, nil
-		}
-
-		// If we get XML or any unexpected data, binary mode is unsupported.
-		if isLikelyXML(err) {
-			log.Printf("[IIOD DEBUG] binary ReadAttr returned XML-like data, falling back to text")
-		} else {
-			log.Printf("[IIOD DEBUG] binary ReadAttr failed (%v), falling back to text", err)
-		}
+// getXMLContextWithContextText issues a PRINT command and loads XML.
+func (c *Client) getXMLContextWithContextText(ctx context.Context) error {
+	if !c.supportsText {
+		return fmt.Errorf("text mode disabled")
 	}
 
-	// -- TEXT MODE FALLBACK --
-	cmd := ""
-	if channel == "" {
-		cmd = fmt.Sprintf("READ %s %s", device, attr)
-	} else {
-		cmd = fmt.Sprintf("READ %s %s %s", device, channel, attr)
+	// IIOD text protocol → "PRINT\n"
+	if err := c.sendTextCommand("PRINT\n"); err != nil {
+		return fmt.Errorf("failed to send PRINT: %w", err)
 	}
 
-	resp, err := c.sendCommandString(ctx, cmd)
+	// Read all until EOF pause.
+	raw, err := c.readTextUntilEOF(300 * time.Millisecond)
 	if err != nil {
-		return "", fmt.Errorf("text READ failed: %w", err)
-	}
-	return resp, nil
-}
-
-// WriteAttrCompat tries binary mode first, then falls back to text mode.
-func (c *Client) WriteAttrCompat(ctx context.Context, device, channel, attr, value string) error {
-	if c.mode == ProtocolBinary {
-		err := c.WriteAttr(device, channel, attr, value)
-		if err == nil {
-			return nil
-		}
-
-		// If binary produced XML, switch to text immediately.
-		if isLikelyXML(err) {
-			log.Printf("[IIOD DEBUG] binary WriteAttr returned XML-like reply, falling back to text")
-		} else {
-			log.Printf("[IIOD DEBUG] binary WriteAttr failed (%v), falling back to text", err)
-		}
+		return fmt.Errorf("failed to read PRINT response: %w", err)
 	}
 
-	// -- TEXT MODE FALLBACK --
-	var cmd string
-	if channel == "" {
-		cmd = fmt.Sprintf("WRITE %s %s %s", device, attr, value)
-	} else {
-		cmd = fmt.Sprintf("WRITE %s %s %s %s", device, channel, attr, value)
+	if len(raw) == 0 {
+		return fmt.Errorf("empty PRINT response")
 	}
 
-	_, err := c.sendCommandString(ctx, cmd)
+	if c.Debug {
+		fmt.Printf("[IIOD DEBUG] Raw PRINT XML (%d bytes):\n%s\n\n",
+			len(raw), NormalizeXMLForDebug(raw))
+	}
+
+	// Parse and index XML
+	xmlCtx, xmlIdx, err := ParseIIODXML(raw)
 	if err != nil {
-		return fmt.Errorf("text WRITE failed: %w", err)
+		return fmt.Errorf("XML parse failed: %w", err)
 	}
+
+	c.xmlCtx = xmlCtx
+	c.xmlIdx = xmlIdx
+
 	return nil
 }
 
-// Helper that detects XML returned instead of binary header
-func isLikelyXML(err error) bool {
-	if err == nil {
-		return false
+// -----------------------------------------------------------------------------
+// PUBLIC: ReadAttrText / WriteAttrText (sysfs-style), with XML mapping
+// -----------------------------------------------------------------------------
+
+// ReadAttrText implements attribute read using the text IIOD backend.
+// device="ad9361-phy", channel="voltage0", attr="hardwaregain"
+func (c *Client) ReadAttrText(
+	ctx context.Context,
+	device, channel, attr string,
+) (string, error) {
+
+	if c.xmlIdx == nil {
+		return "", fmt.Errorf("XML index not loaded; cannot resolve filenames")
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "<?xml") ||
-		strings.Contains(msg, "<context") ||
-		strings.Contains(msg, "DOCTYPE") ||
-		strings.Contains(msg, "<device")
+
+	filename, err := TryResolveAttribute(c.xmlIdx, device, channel, attr)
+	if err != nil {
+		return "", err
+	}
+
+	// Text protocol → "READ device channel filename\n"
+	cmd := ""
+	if channel == "" {
+		cmd = fmt.Sprintf("READ %s %s\n", device, filename)
+	} else {
+		cmd = fmt.Sprintf("READ %s %s %s\n", device, channel, filename)
+	}
+
+	if err := c.sendTextCommand(cmd); err != nil {
+		return "", fmt.Errorf("send READ failed: %w", err)
+	}
+
+	// Expect a single line response
+	line, err := c.readTextLine()
+	if err != nil {
+		return "", fmt.Errorf("READ response error: %w", err)
+	}
+
+	// IIOD text protocol returns either:
+	//   OK <value>
+	//   ERROR <msg>
+	if strings.HasPrefix(line, "OK ") {
+		return strings.TrimSpace(strings.TrimPrefix(line, "OK ")), nil
+	}
+
+	if strings.HasPrefix(line, "ERROR ") {
+		return "", fmt.Errorf("IIOD TEXT error: %s", strings.TrimPrefix(line, "ERROR "))
+	}
+
+	return "", fmt.Errorf("malformed TEXT READ response: %q", line)
 }
 
-// / DumpRawXML retrieves the full XML context using the IIOD text protocol.
-// This works on PlutoSDR (IIOD v0.25–v0.38).
-func (c *Client) DumpRawXML() (string, error) {
-	if c.conn == nil {
-		return "", fmt.Errorf("text-based IIOD connection is not initialized")
+// WriteAttrText implements attribute write using the text IIOD backend.
+func (c *Client) WriteAttrText(
+	ctx context.Context,
+	device, channel, attr, value string,
+) error {
+
+	if c.xmlIdx == nil {
+		return fmt.Errorf("XML index not loaded; cannot resolve filenames")
 	}
 
-	// Send PRINT\n to request the XML dump
-	if _, err := c.conn.Write([]byte("PRINT\n")); err != nil {
-		return "", fmt.Errorf("failed to send PRINT command: %w", err)
+	filename, err := TryResolveAttribute(c.xmlIdx, device, channel, attr)
+	if err != nil {
+		return err
 	}
 
-	// Read until we have the closing </context>
-	var buf bytes.Buffer
-	tmp := make([]byte, 4096)
-
-	for {
-		n, err := c.conn.Read(tmp)
-		if n > 0 {
-			buf.Write(tmp[:n])
-
-			// Stop once closing tag is seen
-			if bytes.Contains(buf.Bytes(), []byte("</context>")) {
-				break
-			}
-		}
-
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", fmt.Errorf("error reading XML: %w", err)
-		}
+	cmd := ""
+	if channel == "" {
+		cmd = fmt.Sprintf("WRITE %s %s %s\n", device, filename, value)
+	} else {
+		cmd = fmt.Sprintf("WRITE %s %s %s %s\n", device, channel, filename, value)
 	}
 
-	return buf.String(), nil
+	if err := c.sendTextCommand(cmd); err != nil {
+		return fmt.Errorf("send WRITE failed: %w", err)
+	}
+
+	line, err := c.readTextLine()
+	if err != nil {
+		return fmt.Errorf("WRITE response error: %w", err)
+	}
+
+	if strings.HasPrefix(line, "OK") {
+		return nil
+	}
+
+	if strings.HasPrefix(line, "ERROR ") {
+		return fmt.Errorf("IIOD TEXT error: %s", strings.TrimPrefix(line, "ERROR "))
+	}
+
+	return fmt.Errorf("malformed TEXT WRITE response: %q", line)
+}
+
+// -----------------------------------------------------------------------------
+// HYBRID-COMPAT WRAPPERS (used by pluto.go)
+// -----------------------------------------------------------------------------
+
+func (c *Client) ReadAttrTextCompat(
+	ctx context.Context, device, channel, attr string,
+) (string, error) {
+	// for Pluto: always text
+	return c.ReadAttrText(ctx, device, channel, attr)
+}
+
+func (c *Client) WriteAttrTextCompat(
+	ctx context.Context, device, channel, attr, value string,
+) error {
+	// for Pluto: always text
+	return c.WriteAttrText(ctx, device, channel, attr, value)
+}
+
+// -----------------------------------------------------------------------------
+// PUBLIC INITIALIZATION ENTRY POINT (used by Dial/hybrid)
+// -----------------------------------------------------------------------------
+
+// EnableTextMode initializes the text transport after TCP dial.
+func (c *Client) EnableTextMode(conn net.Conn) error {
+	c.text = newTextClient(conn)
+	c.supportsText = true
+	return nil
 }
