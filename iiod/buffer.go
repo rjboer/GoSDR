@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
+	"log"
 )
 
 // Buffer represents an open stream buffer on the device.
@@ -32,52 +32,31 @@ func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) 
 
 	ctx := context.Background()
 
-	// Discover channels.
-	// Discover channels.
-	// Send LIST_CHANNELS command
-	cmd := IIODCommand{Opcode: opcodeListChannels, Device: 0, Code: 0}
-	if err := c.sendCommand(ctx, cmd, []byte(device)); err != nil {
-		return nil, err
-	}
-	status, err := c.readResponse(ctx)
+	channels, err := c.GetChannelsWithContext(ctx, device)
 	if err != nil {
 		return nil, err
 	}
-	payload, err := c.readPayload(status)
-	if err != nil {
-		return nil, err
-	}
-	channels := strings.Fields(string(payload))
+
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: device=%s samples=%d channelMask=0x%x availableChannels=%v", device, size, channelMask, channels)
 
 	for i, ch := range channels {
 		if channelMask&(1<<uint(i)) == 0 {
 			continue
 		}
-		target := fmt.Sprintf("%s %s en", device, ch)
-		value := []byte("1")
-		writePayload := encodeWritePayload(target, value)
-
-		cmd := IIODCommand{Opcode: opcodeWriteAttr, Device: 0, Code: 0}
-		if err := c.sendCommand(ctx, cmd, writePayload); err != nil {
-			return nil, err
-		}
-		if _, err := c.readResponse(ctx); err != nil {
+		log.Printf("[IIOD DEBUG] CreateStreamBuffer: enabling channel %s (index=%d)", ch, i)
+		if err := c.WriteAttrWithContext(ctx, device, ch, "en", "1"); err != nil {
+			log.Printf("[IIOD DEBUG] CreateStreamBuffer: failed to enable %s/%s: %v", device, ch, err)
 			return nil, err
 		}
 	}
 
-	openPayload := encodeDeviceCountPayload(device, uint64(size))
-	cmd = IIODCommand{Opcode: opcodeOpenBuffer, Device: 0, Code: 0}
-	if err := c.sendCommand(ctx, cmd, openPayload); err != nil {
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: issuing BUFFER_OPEN for %s with %d samples (mode=%v)", device, size, c.mode)
+	if err := c.OpenBufferWithContext(ctx, device, size); err != nil {
+		log.Printf("[IIOD DEBUG] CreateStreamBuffer: BUFFER_OPEN failed for %s: %v", device, err)
 		return nil, err
 	}
-	status, err = c.readResponse(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if status != 0 {
-		return nil, fmt.Errorf("open buffer failed with status %d", status)
-	}
+
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: buffer opened for %s (size=%d)", device, size)
 
 	return &Buffer{client: c, device: device, size: size, isOpen: true}, nil
 }
@@ -87,12 +66,8 @@ func (b *Buffer) Close() error {
 	if b == nil || !b.isOpen {
 		return nil
 	}
-	payload := []byte(b.device)
-	cmd := IIODCommand{Opcode: opcodeCloseBuffer, Device: 0, Code: 0}
-	if err := b.client.sendCommand(context.Background(), cmd, payload); err != nil {
-		return err
-	}
-	if _, err := b.client.readResponse(context.Background()); err != nil {
+
+	if err := b.client.CloseBufferWithContext(context.Background(), b.device); err != nil {
 		return err
 	}
 	b.isOpen = false
@@ -104,20 +79,7 @@ func (b *Buffer) ReadSamples() ([]byte, error) {
 	if b == nil || !b.isOpen {
 		return nil, fmt.Errorf("buffer not open")
 	}
-	payload := encodeDeviceCountPayload(b.device, uint64(b.size))
-	cmd := IIODCommand{Opcode: opcodeReadBuffer, Device: 0, Code: 0}
-	if err := b.client.sendCommand(context.Background(), cmd, payload); err != nil {
-		return nil, err
-	}
-	status, err := b.client.readResponse(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	data, err := b.client.readPayload(status)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return b.client.ReadBufferWithContext(context.Background(), b.device, b.size)
 }
 
 // WriteSamples writes raw bytes to the buffer.
@@ -125,13 +87,7 @@ func (b *Buffer) WriteSamples(data []byte) error {
 	if b == nil || !b.isOpen {
 		return fmt.Errorf("buffer not open")
 	}
-	payload := encodeWriteBufferPayload(b.device, data)
-	cmd := IIODCommand{Opcode: opcodeWriteBuffer, Device: 0, Code: 0}
-	if err := b.client.sendCommand(context.Background(), cmd, payload); err != nil {
-		return err
-	}
-	_, err := b.client.readResponse(context.Background())
-	return err
+	return b.client.WriteBufferWithContext(context.Background(), b.device, data)
 }
 
 // Helper payload encoders

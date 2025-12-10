@@ -3,6 +3,7 @@ package iiod
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -137,12 +138,17 @@ func (c *Client) openBufferWithContextBinary(ctx context.Context, device string,
 }
 
 func (c *Client) openBufferWithContextText(ctx context.Context, device string, samples int) error {
-	resp, err := c.sendCommandString(ctx, fmt.Sprintf("BUFFER_OPEN %s %d", device, samples))
+	cmd := fmt.Sprintf("BUFFER_OPEN %s %d", device, samples)
+	log.Printf("[IIOD DEBUG] openBufferWithContextText: sending %q", cmd)
+	resp, err := c.sendCommandString(ctx, cmd)
 	if err != nil {
+		log.Printf("[IIOD DEBUG] openBufferWithContextText: command failed for %s: %v", device, err)
 		return err
 	}
+	log.Printf("[IIOD DEBUG] openBufferWithContextText: response=%q", resp)
 	var id int
 	if _, err := fmt.Sscanf(resp, "%d", &id); err != nil {
+		log.Printf("[IIOD DEBUG] openBufferWithContextText: malformed buffer id for %s: %q", device, resp)
 		return fmt.Errorf("malformed buffer id: %s", resp)
 	}
 

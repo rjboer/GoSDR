@@ -100,10 +100,7 @@ func (w *SSHAttributeWriter) dial(ctx context.Context) (*ssh.Client, error) {
 		auth = append(auth, ssh.PublicKeys(signer))
 	}
 	if len(auth) == 0 {
-		// Allow agent or default key loading when no explicit auth was provided.
-		auth = append(auth, ssh.PasswordCallback(func() (string, error) {
-			return "", fmt.Errorf("no ssh credentials provided")
-		}))
+		return nil, fmt.Errorf("no ssh password or key configured")
 	}
 
 	config := &ssh.ClientConfig{

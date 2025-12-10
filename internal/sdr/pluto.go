@@ -189,6 +189,10 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("connect to IIOD: %w", err)
 	}
 
+	// Hard-lock the client into text mode for legacy Pluto firmware (IIOD v0.25).
+	client.SetProtocolMode(iiod.ProtocolText)
+	p.logEvent("debug", "IIO: Forcing text-only protocol mode for Pluto")
+
 	p.logEvent("info", "IIO: Connected successfully")
 	fmt.Printf("[PLUTO DEBUG] Connected successfully!\n")
 
@@ -228,13 +232,26 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 		SysfsRoot: cfg.SysfsRoot,
 	}
 
+	if sshCfg.Password == "" && sshCfg.KeyPath == "" {
+		p.logEvent("warn", fmt.Sprintf("IIO: SSH fallback configured for %s:%d but no password or key provided", sshCfg.Host, sshCfg.Port))
+	}
+
 	var warnedFallback bool
 	writeAttr := func(action, device, channel, attr, value string) error {
+		target := fmt.Sprintf("%s/%s/%s", device, channel, attr)
+		p.logEvent("debug", fmt.Sprintf("IIO: %s via IIOD text mode -> %s = %s", action, target, value))
+		fmt.Printf("[PLUTO DEBUG] writeAttr %s -> %s (value=%s) using IIOD text\n", action, target, value)
+
 		if err := client.WriteAttrCompatWithContext(ctx, device, channel, attr, value); err != nil {
 			if errors.Is(err, iiod.ErrWriteNotSupported) {
+				credsPresent := sshCfg.Password != "" || sshCfg.KeyPath != ""
+				p.logEvent("debug", fmt.Sprintf("IIO: IIOD write unsupported for %s; SSH fallback host=%s user=%s password_set=%t key_set=%t", target, sshCfg.Host, sshCfg.User, sshCfg.Password != "", sshCfg.KeyPath != ""))
+				fmt.Printf("[PLUTO DEBUG] IIOD write unsupported for %s, creds_present=%t (host=%s user=%s)\n", target, credsPresent, sshCfg.Host, sshCfg.User)
+
 				writer, sshErr := p.ensureSSHFallbackLocked(sshCfg)
 				if sshErr != nil {
 					p.logEvent("error", fmt.Sprintf("IIO: %s unsupported via IIOD and SSH fallback unavailable: %v", action, sshErr))
+					fmt.Printf("[PLUTO DEBUG] SSH fallback creation failed for %s: %v\n", target, sshErr)
 					return fmt.Errorf("%s: %w", action, err)
 				}
 				if !warnedFallback {
@@ -243,15 +260,21 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 				}
 				if sshErr := writer.WriteAttribute(ctx, device, channel, attr, value); sshErr != nil {
 					p.logEvent("error", fmt.Sprintf("IIO: SSH sysfs %s failed: %v", action, sshErr))
+					fmt.Printf("[PLUTO DEBUG] SSH write failed for %s: %v\n", target, sshErr)
 					return fmt.Errorf("%s via ssh: %w", action, sshErr)
 				}
+				p.logEvent("debug", fmt.Sprintf("IIO: SSH sysfs %s succeeded for %s", action, target))
+				fmt.Printf("[PLUTO DEBUG] SSH write succeeded for %s\n", target)
 				return nil
 			}
 
 			p.logEvent("error", fmt.Sprintf("IIO: Failed to %s: %v", action, err))
+			fmt.Printf("[PLUTO DEBUG] writeAttr %s failed via IIOD: %v\n", target, err)
 			return fmt.Errorf("%s: %w", action, err)
 		}
 
+		p.logEvent("debug", fmt.Sprintf("IIO: %s applied via IIOD for %s", action, target))
+		fmt.Printf("[PLUTO DEBUG] writeAttr %s succeeded via IIOD for %s\n", action, target)
 		return nil
 	}
 

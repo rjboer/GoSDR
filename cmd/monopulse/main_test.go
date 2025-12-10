@@ -7,7 +7,7 @@ import (
 
 func TestParseConfigDefaults(t *testing.T) {
 	defaults := defaultPersistentConfig()
-	cfg, err := parseConfig([]string{}, func(string) (string, bool) { return "", false }, defaults)
+	cfg, err := parseConfig([]string{}, defaults)
 	if err != nil {
 		t.Fatalf("parseConfig failed: %v", err)
 	}
@@ -16,26 +16,21 @@ func TestParseConfigDefaults(t *testing.T) {
 	}
 }
 
-func TestParseConfigEnvOverrides(t *testing.T) {
-	env := map[string]string{
-		"MONO_SAMPLE_RATE":      "1000000",
-		"MONO_RX_LO":            "2300000001",
-		"MONO_SDR_BACKEND":      "pluto",
-		"MONO_NUM_SAMPLES":      "2048",
-		"MONO_MOCK_PHASE_DELTA": "15",
-	}
-	lookup := func(key string) (string, bool) {
-		v, ok := env[key]
-		return v, ok
-	}
-
+func TestParseConfigFlagOverrides(t *testing.T) {
 	defaults := defaultPersistentConfig()
-	cfg, err := parseConfig([]string{"--phase-step", "2"}, lookup, defaults)
+	cfg, err := parseConfig([]string{
+		"--sample-rate", "1000000",
+		"--rx-lo", "2300000001",
+		"--sdr-backend", "pluto",
+		"--num-samples", "2048",
+		"--mock-phase-delta", "15",
+		"--phase-step", "2",
+	}, defaults)
 	if err != nil {
 		t.Fatalf("parseConfig failed: %v", err)
 	}
 	if cfg.sampleRate != 1e6 || cfg.rxLO != 2.300000001e9 || cfg.sdrBackend != "pluto" || cfg.numSamples != 2048 || cfg.phaseStep != 2 {
-		t.Fatalf("env overrides not applied: %#v", cfg)
+		t.Fatalf("flag overrides not applied: %#v", cfg)
 	}
 }
 
