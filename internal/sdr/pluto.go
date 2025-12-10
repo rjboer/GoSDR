@@ -189,6 +189,10 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("connect to IIOD: %w", err)
 	}
 
+	// Hard-lock the client into text mode for legacy Pluto firmware (IIOD v0.25).
+	client.SetProtocolMode(iiod.ProtocolText)
+	p.logEvent("debug", "IIO: Forcing text-only protocol mode for Pluto")
+
 	p.logEvent("info", "IIO: Connected successfully")
 	fmt.Printf("[PLUTO DEBUG] Connected successfully!\n")
 
@@ -228,10 +232,15 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 		SysfsRoot: cfg.SysfsRoot,
 	}
 
+	if sshCfg.Password == "" && sshCfg.KeyPath == "" {
+		p.logEvent("warn", fmt.Sprintf("IIO: SSH fallback configured for %s:%d but no password or key provided", sshCfg.Host, sshCfg.Port))
+	}
+
 	var warnedFallback bool
 	writeAttr := func(action, device, channel, attr, value string) error {
 		if err := client.WriteAttrCompatWithContext(ctx, device, channel, attr, value); err != nil {
 			if errors.Is(err, iiod.ErrWriteNotSupported) {
+				p.logEvent("debug", "IIO: IIOD reported writes unsupported; engaging SSH sysfs fallback")
 				writer, sshErr := p.ensureSSHFallbackLocked(sshCfg)
 				if sshErr != nil {
 					p.logEvent("error", fmt.Sprintf("IIO: %s unsupported via IIOD and SSH fallback unavailable: %v", action, sshErr))

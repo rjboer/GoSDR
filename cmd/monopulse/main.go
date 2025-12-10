@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/rjboer/GoSDR/internal/app"
@@ -26,7 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg, err := parseConfig(os.Args[1:], os.LookupEnv, persistentCfg)
+	cfg, err := parseConfig(os.Args[1:], persistentCfg)
 	if err != nil {
 		logger.Error("parse config", logging.Field{Key: "error", Value: err})
 		os.Exit(1)
@@ -232,6 +231,7 @@ func logStartupBanner(logger logging.Logger, cfg cliConfig) {
 		"sdr_uri":          cfg.sdrURI,
 		"ssh_host":         cfg.sshHost,
 		"ssh_user":         cfg.sshUser,
+		"ssh_password":     cfg.sshPassword,
 		"ssh_port":         cfg.sshPort,
 		"sysfs_root":       cfg.sysfsRoot,
 		"log_level":        cfg.logLevel,
@@ -243,41 +243,41 @@ func logStartupBanner(logger logging.Logger, cfg cliConfig) {
 	}})
 }
 
-func parseConfig(args []string, lookup func(string) (string, bool), defaults persistentConfig) (cliConfig, error) {
+func parseConfig(args []string, defaults persistentConfig) (cliConfig, error) {
 	cfg := cliConfig{}
 	fs := flag.NewFlagSet("monopulse", flag.ContinueOnError)
-	fs.Float64Var(&cfg.sampleRate, "sample-rate", envFloat(lookup, "MONO_SAMPLE_RATE", defaults.SampleRate), "Sample rate in Hz")
-	fs.Float64Var(&cfg.rxLO, "rx-lo", envFloat(lookup, "MONO_RX_LO", defaults.RxLO), "RX LO frequency in Hz")
-	fs.IntVar(&cfg.rxGain0, "rx-gain0", envInt(lookup, "MONO_RX_GAIN0", defaults.RxGain0), "RX gain for channel 0 (dB)")
-	fs.IntVar(&cfg.rxGain1, "rx-gain1", envInt(lookup, "MONO_RX_GAIN1", defaults.RxGain1), "RX gain for channel 1 (dB)")
-	fs.IntVar(&cfg.txGain, "tx-gain", envInt(lookup, "MONO_TX_GAIN", defaults.TxGain), "TX gain (dB)")
-	fs.Float64Var(&cfg.toneOffset, "tone-offset", envFloat(lookup, "MONO_TONE_OFFSET", defaults.ToneOffset), "Tone offset in Hz")
-	fs.IntVar(&cfg.numSamples, "num-samples", envInt(lookup, "MONO_NUM_SAMPLES", defaults.NumSamples), "Number of samples per RX call")
-	fs.IntVar(&cfg.trackingLength, "tracking-length", envInt(lookup, "MONO_TRACKING_LENGTH", defaults.TrackingLength), "Number of tracking iterations")
-	fs.Float64Var(&cfg.phaseStep, "phase-step", envFloat(lookup, "MONO_PHASE_STEP", defaults.PhaseStep), "Phase step (degrees) for monopulse updates")
-	fs.Float64Var(&cfg.phaseCal, "phase-cal", envFloat(lookup, "MONO_PHASE_CAL", defaults.PhaseCal), "Additional calibration phase (degrees)")
-	fs.Float64Var(&cfg.scanStep, "scan-step", envFloat(lookup, "MONO_SCAN_STEP", defaults.ScanStep), "Scan step in degrees for coarse search")
-	fs.Float64Var(&cfg.spacing, "spacing-wavelength", envFloat(lookup, "MONO_SPACING_WAVELENGTH", defaults.Spacing), "Antenna spacing as a fraction of wavelength")
-	fs.Float64Var(&cfg.phaseDelta, "mock-phase-delta", envFloat(lookup, "MONO_MOCK_PHASE_DELTA", defaults.PhaseDelta), "Mock SDR phase delta in degrees")
-	fs.StringVar(&cfg.trackingMode, "tracking-mode", envString(lookup, "MONO_TRACKING_MODE", defaults.TrackingMode), "Tracking mode (single|multi)")
-	fs.IntVar(&cfg.maxTracks, "max-tracks", envInt(lookup, "MONO_MAX_TRACKS", defaults.MaxTracks), "Maximum number of simultaneous tracks")
-	fs.DurationVar(&cfg.trackTimeout, "track-timeout", envDuration(lookup, "MONO_TRACK_TIMEOUT", durationFromString(defaults.TrackTimeout, 0)), "Duration after which inactive tracks are marked lost")
-	fs.Float64Var(&cfg.minSNR, "min-snr-threshold", envFloat(lookup, "MONO_MIN_SNR_THRESHOLD", defaults.MinSNR), "Minimum SNR required to create or update a track")
-	fs.StringVar(&cfg.sdrBackend, "sdr-backend", envString(lookup, "MONO_SDR_BACKEND", defaults.SDRBackend), "SDR backend (mock|pluto)")
-	fs.StringVar(&cfg.sdrURI, "sdr-uri", envString(lookup, "MONO_SDR_URI", defaults.SDRURI), "SDR URI")
-	fs.StringVar(&cfg.sshHost, "sdr-ssh-host", envString(lookup, "MONO_SDR_SSH_HOST", defaults.SSHHost), "SSH hostname/IP for sysfs fallback when IIOD writes are disabled")
-	fs.StringVar(&cfg.sshUser, "sdr-ssh-user", envString(lookup, "MONO_SDR_SSH_USER", defaults.SSHUser), "SSH username for sysfs fallback (default root)")
-	fs.StringVar(&cfg.sshPassword, "sdr-ssh-password", envString(lookup, "MONO_SDR_SSH_PASSWORD", defaults.SSHPassword), "SSH password for sysfs fallback")
-	fs.StringVar(&cfg.sshKeyPath, "sdr-ssh-key", envString(lookup, "MONO_SDR_SSH_KEY", defaults.SSHKeyPath), "Path to private key for SSH sysfs fallback")
-	fs.IntVar(&cfg.sshPort, "sdr-ssh-port", envInt(lookup, "MONO_SDR_SSH_PORT", defaults.SSHPort), "SSH port for sysfs fallback (default 22)")
-	fs.StringVar(&cfg.sysfsRoot, "sdr-sysfs-root", envString(lookup, "MONO_SDR_SYSFS_ROOT", defaults.SysfsRoot), "Sysfs root on device (default /sys/bus/iio/devices)")
-	fs.IntVar(&cfg.warmupBuffers, "warmup-buffers", envInt(lookup, "MONO_WARMUP_BUFFERS", defaults.WarmupBuffers), "Number of RX buffers to discard for warm-up")
-	fs.IntVar(&cfg.historyLimit, "history-limit", envInt(lookup, "MONO_HISTORY_LIMIT", defaults.HistoryLimit), "Maximum samples to keep in telemetry history")
-	fs.StringVar(&cfg.webAddr, "web-addr", envString(lookup, "MONO_WEB_ADDR", defaults.WebAddr), "Optional web telemetry listen address (e.g. :8080)")
-	fs.StringVar(&cfg.logLevel, "log-level", envString(lookup, "MONO_LOG_LEVEL", defaults.LogLevel), "Log level (debug|info|warn|error)")
-	fs.StringVar(&cfg.logFormat, "log-format", envString(lookup, "MONO_LOG_FORMAT", defaults.LogFormat), "Log format (text|json)")
-	fs.BoolVar(&cfg.debugMode, "debug-mode", envBool(lookup, "MONO_DEBUG_MODE", defaults.DebugMode), "Include debug telemetry fields")
-	fs.BoolVar(&cfg.verbose, "verbose", envBool(lookup, "MONO_VERBOSE", false), "Enable verbose logging and debug output")
+	fs.Float64Var(&cfg.sampleRate, "sample-rate", defaults.SampleRate, "Sample rate in Hz")
+	fs.Float64Var(&cfg.rxLO, "rx-lo", defaults.RxLO, "RX LO frequency in Hz")
+	fs.IntVar(&cfg.rxGain0, "rx-gain0", defaults.RxGain0, "RX gain for channel 0 (dB)")
+	fs.IntVar(&cfg.rxGain1, "rx-gain1", defaults.RxGain1, "RX gain for channel 1 (dB)")
+	fs.IntVar(&cfg.txGain, "tx-gain", defaults.TxGain, "TX gain (dB)")
+	fs.Float64Var(&cfg.toneOffset, "tone-offset", defaults.ToneOffset, "Tone offset in Hz")
+	fs.IntVar(&cfg.numSamples, "num-samples", defaults.NumSamples, "Number of samples per RX call")
+	fs.IntVar(&cfg.trackingLength, "tracking-length", defaults.TrackingLength, "Number of tracking iterations")
+	fs.Float64Var(&cfg.phaseStep, "phase-step", defaults.PhaseStep, "Phase step (degrees) for monopulse updates")
+	fs.Float64Var(&cfg.phaseCal, "phase-cal", defaults.PhaseCal, "Additional calibration phase (degrees)")
+	fs.Float64Var(&cfg.scanStep, "scan-step", defaults.ScanStep, "Scan step in degrees for coarse search")
+	fs.Float64Var(&cfg.spacing, "spacing-wavelength", defaults.Spacing, "Antenna spacing as a fraction of wavelength")
+	fs.Float64Var(&cfg.phaseDelta, "mock-phase-delta", defaults.PhaseDelta, "Mock SDR phase delta in degrees")
+	fs.StringVar(&cfg.trackingMode, "tracking-mode", defaults.TrackingMode, "Tracking mode (single|multi)")
+	fs.IntVar(&cfg.maxTracks, "max-tracks", defaults.MaxTracks, "Maximum number of simultaneous tracks")
+	fs.DurationVar(&cfg.trackTimeout, "track-timeout", durationFromString(defaults.TrackTimeout, 0), "Duration after which inactive tracks are marked lost")
+	fs.Float64Var(&cfg.minSNR, "min-snr-threshold", defaults.MinSNR, "Minimum SNR required to create or update a track")
+	fs.StringVar(&cfg.sdrBackend, "sdr-backend", defaults.SDRBackend, "SDR backend (mock|pluto)")
+	fs.StringVar(&cfg.sdrURI, "sdr-uri", defaults.SDRURI, "SDR URI")
+	fs.StringVar(&cfg.sshHost, "sdr-ssh-host", defaults.SSHHost, "SSH hostname/IP for sysfs fallback when IIOD writes are disabled")
+	fs.StringVar(&cfg.sshUser, "sdr-ssh-user", defaults.SSHUser, "SSH username for sysfs fallback (default root)")
+	fs.StringVar(&cfg.sshPassword, "sdr-ssh-password", defaults.SSHPassword, "SSH password for sysfs fallback")
+	fs.StringVar(&cfg.sshKeyPath, "sdr-ssh-key", defaults.SSHKeyPath, "Path to private key for SSH sysfs fallback")
+	fs.IntVar(&cfg.sshPort, "sdr-ssh-port", defaults.SSHPort, "SSH port for sysfs fallback (default 22)")
+	fs.StringVar(&cfg.sysfsRoot, "sdr-sysfs-root", defaults.SysfsRoot, "Sysfs root on device (default /sys/bus/iio/devices)")
+	fs.IntVar(&cfg.warmupBuffers, "warmup-buffers", defaults.WarmupBuffers, "Number of RX buffers to discard for warm-up")
+	fs.IntVar(&cfg.historyLimit, "history-limit", defaults.HistoryLimit, "Maximum samples to keep in telemetry history")
+	fs.StringVar(&cfg.webAddr, "web-addr", defaults.WebAddr, "Optional web telemetry listen address (e.g. :8080)")
+	fs.StringVar(&cfg.logLevel, "log-level", defaults.LogLevel, "Log level (debug|info|warn|error)")
+	fs.StringVar(&cfg.logFormat, "log-format", defaults.LogFormat, "Log format (text|json)")
+	fs.BoolVar(&cfg.debugMode, "debug-mode", defaults.DebugMode, "Include debug telemetry fields")
+	fs.BoolVar(&cfg.verbose, "verbose", false, "Enable verbose logging and debug output")
 
 	if err := fs.Parse(args); err != nil {
 		return cliConfig{}, fmt.Errorf("parse flags: %w", err)
@@ -389,49 +389,6 @@ func defaultPersistentConfig() persistentConfig {
 		SSHPort:        22,
 		SysfsRoot:      "/sys/bus/iio/devices",
 	}
-}
-
-func envFloat(lookup func(string) (string, bool), key string, def float64) float64 {
-	if val, ok := lookup(key); ok {
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
-			return parsed
-		}
-	}
-	return def
-}
-
-func envInt(lookup func(string) (string, bool), key string, def int) int {
-	if val, ok := lookup(key); ok {
-		if parsed, err := strconv.Atoi(val); err == nil {
-			return parsed
-		}
-	}
-	return def
-}
-
-func envString(lookup func(string) (string, bool), key, def string) string {
-	if val, ok := lookup(key); ok {
-		return val
-	}
-	return def
-}
-
-func envDuration(lookup func(string) (string, bool), key string, def time.Duration) time.Duration {
-	if val, ok := lookup(key); ok {
-		if parsed, err := time.ParseDuration(val); err == nil {
-			return parsed
-		}
-	}
-	return def
-}
-
-func envBool(lookup func(string) (string, bool), key string, def bool) bool {
-	if val, ok := lookup(key); ok {
-		if parsed, err := strconv.ParseBool(val); err == nil {
-			return parsed
-		}
-	}
-	return def
 }
 
 func durationFromString(value string, fallback time.Duration) time.Duration {
