@@ -89,7 +89,7 @@ func TestClientCommands(t *testing.T) {
 		{
 			name:    "write attr",
 			request: "WRITE_ATTR adc voltage0 sampling_frequency 1000000",
-                        status:  len("2000000"),
+			status:  len("2000000"),
 			payload: "",
 			invoke: func(c *Client) (string, error) {
 				return "", c.WriteAttr("adc", "voltage0", "sampling_frequency", "1000000")
@@ -193,7 +193,7 @@ func TestListDevicesBinary(t *testing.T) {
 
 func TestListDevicesFallbackToXML(t *testing.T) {
 	const opcodeListDevices = 2
-	xmlPayload := "<context><device id=\"adc\"></device><device id=\"dac\"></device></context>"
+	xmlPayload := "<context><device id=\"adc\" name=\"adc-name\"></device><device id=\"dac\" name=\"dac-name\"></device></context>"
 	addr, serverErr := startBinaryListDevicesServer(t, opcodeListDevices, 0, nil, xmlPayload)
 	client, err := Dial(addr)
 	if err != nil {
@@ -206,7 +206,7 @@ func TestListDevicesFallbackToXML(t *testing.T) {
 		t.Fatalf("ListDevices failed: %v", err)
 	}
 
-	if got, want := strings.Join(devices, " "), "adc dac"; got != want {
+	if got, want := strings.Join(devices, " "), "adc-name dac-name"; got != want {
 		t.Fatalf("unexpected devices: got %q want %q", got, want)
 	}
 
