@@ -232,15 +232,17 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 		SysfsRoot: cfg.SysfsRoot,
 	}
 
-	if sshCfg.Password == "" && sshCfg.KeyPath == "" {
-		p.logEvent("warn", fmt.Sprintf("IIO: SSH fallback configured for %s:%d but no password or key provided", sshCfg.Host, sshCfg.Port))
+	sshCredsConfigured := sshCfg.Password != "" || sshCfg.KeyPath != ""
+	if !sshCredsConfigured {
+		p.logEvent("info", fmt.Sprintf("IIO: SSH fallback configured for %s:%d but no password or key provided", sshCfg.Host, sshCfg.Port))
 	}
 
 	var warnedFallback bool
 	writeAttr := func(action, device, channel, attr, value string) error {
+		writeTarget := fmt.Sprintf("device=%s channel=%s attr=%s", device, channel, attr)
 		if err := client.WriteAttrCompatWithContext(ctx, device, channel, attr, value); err != nil {
 			if errors.Is(err, iiod.ErrWriteNotSupported) {
-				p.logEvent("debug", "IIO: IIOD reported writes unsupported; engaging SSH sysfs fallback")
+				p.logEvent("debug", fmt.Sprintf("IIO: Write unsupported via IIOD for %s; fallback host=%s creds=%t", writeTarget, sshHost, sshCredsConfigured))
 				writer, sshErr := p.ensureSSHFallbackLocked(sshCfg)
 				if sshErr != nil {
 					p.logEvent("error", fmt.Sprintf("IIO: %s unsupported via IIOD and SSH fallback unavailable: %v", action, sshErr))
@@ -251,9 +253,10 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 					warnedFallback = true
 				}
 				if sshErr := writer.WriteAttribute(ctx, device, channel, attr, value); sshErr != nil {
-					p.logEvent("error", fmt.Sprintf("IIO: SSH sysfs %s failed: %v", action, sshErr))
+					p.logEvent("error", fmt.Sprintf("IIO: SSH sysfs %s failed for %s: %v", action, writeTarget, sshErr))
 					return fmt.Errorf("%s via ssh: %w", action, sshErr)
 				}
+				p.logEvent("info", fmt.Sprintf("IIO: SSH sysfs %s succeeded for %s via %s", action, writeTarget, sshHost))
 				return nil
 			}
 
