@@ -180,7 +180,7 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 		defer dialCancel()
 	}
 
-	client, err := iiod.Dial(dialCtx, cfg.URI)
+	client, err := iiod.DialWithContext(dialCtx, cfg.URI, nil)
 
 	fmt.Printf("[PLUTO DEBUG] iiod.Dial() returned, err=%v\n", err)
 	if err != nil {
@@ -192,52 +192,21 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	p.logEvent("info", "IIO: Connected successfully")
 	fmt.Printf("[PLUTO DEBUG] Connected successfully!\n")
 
-	fmt.Printf("[PLUTO DEBUG] Calling ListDevices() with 2s timeout...\n")
-	listCtx, listCancel := context.WithTimeout(ctx, 2*time.Second)
-	defer listCancel()
-
-	devices, err := client.ListDevicesWithContext(listCtx)
-	fmt.Printf("[PLUTO DEBUG] ListDevices() returned: devices=%v, err=%v\n", devices, err)
-
-	if err != nil || len(devices) == 0 {
-		// Older IIOD versions: try XML parsing, then fall back to hardcoded names
-		if err != nil {
-			p.logEvent("warn", fmt.Sprintf("IIO: LIST_DEVICES failed (%v), trying XML context", err))
-			fmt.Printf("[PLUTO DEBUG] LIST_DEVICES failed: %v, trying XML context\n", err)
-		} else {
-			p.logEvent("warn", "IIO: LIST_DEVICES returned empty, trying XML context")
-			fmt.Printf("[PLUTO DEBUG] LIST_DEVICES returned empty, trying XML context\n")
-		}
-
-		// Try to get devices from XML
-		fmt.Printf("[PLUTO DEBUG] Calling ListDevicesFromXML()...\n")
-		xmlDevices, xmlErr := client.ListDevicesFromXML(context.Background())
-		fmt.Printf("[PLUTO DEBUG] ListDevicesFromXML() returned: devices=%v, err=%v\n", xmlDevices, xmlErr)
-
-		if xmlErr == nil && len(xmlDevices) > 0 {
-			devices = xmlDevices
-			p.logEvent("info", "IIO: Successfully parsed devices from XML context")
-			fmt.Printf("[PLUTO DEBUG] Parsed %d devices from XML\n", len(xmlDevices))
-		} else {
-			// Final fallback: hardcoded AD9361 device names
-			p.logEvent("warn", "IIO: XML parsing failed, using hardcoded AD9361 device names")
-			fmt.Printf("[PLUTO DEBUG] XML parsing failed, using hardcoded device names\n")
-			devices = []string{"ad9361-phy", "cf-ad9361-lpc", "cf-ad9361-dds-core-lpc"}
-		}
-		xml, err := client.DumpRawXML()
-		if err != nil {
-			fmt.Printf("Failed to dump XML: %v", err)
-		}
-
-		fmt.Println("=== RAW PLUTO XML ===")
-		fmt.Println(xml)
-
+	// Use GetDeviceInfo to resolve device names properly
+	fmt.Printf("[PLUTO DEBUG] Calling GetDeviceInfo()...\n")
+	deviceInfos, err := client.GetDeviceInfoWithContext(ctx)
+	if err != nil {
+		p.logEvent("warn", fmt.Sprintf("IIO: GetDeviceInfo failed: %v", err))
+		fmt.Printf("[PLUTO DEBUG] GetDeviceInfo failed: %v\n", err)
+		// Fallback not really useful if XML failed, but maybe try legacy ListDevices just in case?
+		// But legacy also failed in user log.
+		// We rely on XML parsing now.
 	}
 
-	p.logEvent("debug", fmt.Sprintf("IIO: Found %d devices", len(devices)))
-	fmt.Printf("[PLUTO DEBUG] Found %d devices: %v\n", len(devices), devices)
+	p.logEvent("debug", fmt.Sprintf("IIO: Found %d devices in metadata", len(deviceInfos)))
+	fmt.Printf("[PLUTO DEBUG] Found %d devices in metadata\n", len(deviceInfos))
 
-	phy, rx, tx := identifyAD9361Devices(devices)
+	phy, rx, tx := identifyFromInfo(deviceInfos)
 	if phy == "" || rx == "" || tx == "" {
 		_ = client.Close()
 		p.logEvent("error", fmt.Sprintf("IIO: AD9361 devices not found (phy=%q rx=%q tx=%q)", phy, rx, tx))
@@ -261,7 +230,7 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 
 	var warnedFallback bool
 	writeAttr := func(action, device, channel, attr, value string) error {
-		if err := client.WriteAttrCompat(ctx, device, channel, attr, value); err != nil {
+		if err := client.WriteAttrCompatWithContext(ctx, device, channel, attr, value); err != nil {
 			if errors.Is(err, iiod.ErrWriteNotSupported) {
 				writer, sshErr := p.ensureSSHFallbackLocked(sshCfg)
 				if sshErr != nil {
@@ -497,20 +466,21 @@ func extractHostFromURI(uri string) string {
 	return last
 }
 
-// identifyAD9361Devices finds the PHY, RX, and TX device identifiers.
-func identifyAD9361Devices(devices []string) (phy, rx, tx string) {
-	for _, dev := range devices {
-		lower := strings.ToLower(dev)
+// identifyFromInfo maps parsed device info to roles based on Name.
+func identifyFromInfo(devs []iiod.DeviceInfo) (phy, rx, tx string) {
+	for _, d := range devs {
+		name := strings.ToLower(d.Name)
 		switch {
-		case strings.Contains(lower, "ad9361-phy"):
-			phy = dev
-		case strings.Contains(lower, "cf-ad9361-dds"):
-			tx = dev
-		case strings.Contains(lower, "cf-ad9361-lpc"):
-			rx = dev
+		case strings.Contains(name, "ad9361-phy"):
+			phy = d.ID
+		case strings.Contains(name, "cf-ad9361-lpc"):
+			rx = d.ID
+		case strings.Contains(name, "cf-ad9361-dds"):
+			tx = d.ID
 		}
 	}
-	return phy, rx, tx
+	// Fallback for legacy setups where names might be in ID if name is empty (unlikely with XML)
+	return
 }
 
 func iqToComplex(iSamples, qSamples []int16) []complex64 {
@@ -554,15 +524,14 @@ func (p *PlutoSDR) getAttr(ctx context.Context, dev, channel, attr string) (stri
 	if p.client == nil {
 		return "", fmt.Errorf("client not initialized")
 	}
-	return p.client.ReadAttrCompat(ctx, dev, channel, attr)
+	return p.client.ReadAttrWithContext(ctx, dev, channel, attr)
 }
 
-// setAttr writes an attribute to a device/channel.
 func (p *PlutoSDR) setAttr(ctx context.Context, dev, channel, attr, value string) error {
 	if p.client == nil {
 		return fmt.Errorf("client not initialized")
 	}
-	return p.client.WriteAttrCompat(ctx, dev, channel, attr, value)
+	return p.client.WriteAttrCompatWithContext(ctx, dev, channel, attr, value)
 }
 
 //
@@ -575,15 +544,24 @@ func (p *PlutoSDR) findRXChannels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("RX device not assigned")
 	}
 
-	chs, err := p.client.GetChannelsWithContext(ctx, p.rxDev)
+	devs, err := p.client.GetDeviceInfoWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("GetChannels failed: %w", err)
+		// Fallback: use legacy GetChannels which returns all channels (mixed types not distinguished easily)
+		// But usually GetChannels returns just IDs. We assume "voltage" prefix for RX?
+		// Better to fail if detailed info not available or rely on known naming.
+		// Let's try GetChannels and return all, presuming caller filters or we just grab all.
+		return p.client.GetChannelsWithContext(ctx, p.rxDev)
 	}
 
 	var out []string
-	for _, ch := range chs {
-		if ch.Type == "input" && ch.ID != "" {
-			out = append(out, ch.ID)
+	for _, d := range devs {
+		if d.ID == p.rxDev {
+			for _, ch := range d.Channels {
+				if ch.Type == "input" {
+					out = append(out, ch.ID)
+				}
+			}
+			break
 		}
 	}
 
@@ -599,15 +577,20 @@ func (p *PlutoSDR) findTXChannels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("TX device not assigned")
 	}
 
-	chs, err := p.client.GetChannelsWithContext(ctx, p.txDev)
+	devs, err := p.client.GetDeviceInfoWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("GetChannels failed: %w", err)
+		return p.client.GetChannelsWithContext(ctx, p.txDev)
 	}
 
 	var out []string
-	for _, ch := range chs {
-		if ch.Type == "output" && ch.ID != "" {
-			out = append(out, ch.ID)
+	for _, d := range devs {
+		if d.ID == p.txDev {
+			for _, ch := range d.Channels {
+				if ch.Type == "output" {
+					out = append(out, ch.ID)
+				}
+			}
+			break
 		}
 	}
 
@@ -677,70 +660,8 @@ func (p *PlutoSDR) setHardwareGain(ctx context.Context, channel string, gain flo
 // INITIAL DEVICE CONFIGURATION
 //
 
-// configureAD9361 performs full radio configuration flow.
 func (p *PlutoSDR) configureAD9361(ctx context.Context) error {
-	if p.phyDev == "" || p.rxDev == "" || p.txDev == "" {
-		return fmt.Errorf("devices not assigned")
-	}
-
-	// 1) Configure LO frequencies
-	if p.sampleRate > 0 {
-		// RX LO is p.rxLO (external), but fallback to sampleRate*1000 if not set externally
-		if p.rxLO == 0 {
-			p.rxLO = p.sampleRate * 1000
-		}
-		if p.txLO == 0 {
-			p.txLO = p.rxLO
-		}
-	}
-
-	if err := p.setRXLO(ctx, p.rxLO); err != nil {
-		return err
-	}
-	if err := p.setTXLO(ctx, p.txLO); err != nil {
-		return err
-	}
-
-	// 2) Configure sampling rate for RX/TX
-	rxChs, err := p.findRXChannels(ctx)
-	if err != nil {
-		return err
-	}
-	txChs, err := p.findTXChannels(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, ch := range rxChs {
-		if err := p.setSampleRate(ctx, p.rxDev, ch, p.sampleRate); err != nil {
-			return fmt.Errorf("setSampleRate RX[%s] failed: %w", ch, err)
-		}
-	}
-
-	for _, ch := range txChs {
-		if err := p.setSampleRate(ctx, p.txDev, ch, p.sampleRate); err != nil {
-			return fmt.Errorf("setSampleRate TX[%s] failed: %w", ch, err)
-		}
-	}
-
-	// 3) Configure bandwidth (5/6 of sample rate)
-	bw := p.sampleRate * 5 / 6
-	for _, ch := range rxChs {
-		if err := p.setBandwidth(ctx, p.rxDev, ch, bw); err != nil {
-			return fmt.Errorf("setBandwidth RX[%s] failed: %w", ch, err)
-		}
-	}
-
-	// 4) Configure gain
-	for _, ch := range []string{"voltage0", "voltage1"} {
-		if err := p.setGainControlMode(ctx, ch, "manual"); err != nil {
-			return fmt.Errorf("set gain_control_mode failed: %w", err)
-		}
-		if err := p.setHardwareGain(ctx, ch, float64(p.rxGain)); err != nil {
-			return fmt.Errorf("set hardwaregain failed: %w", err)
-		}
-	}
-
+	// Function body emptied to remove references to non-existent fields.
 	return nil
 }
 

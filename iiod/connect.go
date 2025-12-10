@@ -872,10 +872,10 @@ func (c *Client) WriteAttrWithContext(ctx context.Context, device, channel, attr
 	return c.writeAttrText(ctx, device, channel, attr, value)
 }
 
-// // WriteAttrCompat writes an attribute while handling legacy servers that do not support write operations.
-// func (c *Client) WriteAttrCompat(device, channel, attr, value string) error {
-// 	return c.WriteAttrCompatWithContext(context.Background(), device, channel, attr, value)
-// }
+// WriteAttrCompat writes an attribute while handling legacy servers that do not support write operations.
+func (c *Client) WriteAttrCompat(device, channel, attr, value string) error {
+	return c.WriteAttrCompatWithContext(context.Background(), device, channel, attr, value)
+}
 
 // WriteAttrCompatWithContext writes an attribute and returns a descriptive error when the server reports no write support.
 func (c *Client) WriteAttrCompatWithContext(ctx context.Context, device, channel, attr, value string) error {

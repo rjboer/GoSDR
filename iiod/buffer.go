@@ -33,7 +33,17 @@ func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) 
 	ctx := context.Background()
 
 	// Discover channels.
-	_, payload, err := c.sendBinaryCommand(ctx, IIODCommand{Opcode: opcodeListChannels}, []byte(device))
+	// Discover channels.
+	// Send LIST_CHANNELS command
+	cmd := IIODCommand{Opcode: opcodeListChannels, Device: 0, Code: 0}
+	if err := c.sendCommand(ctx, cmd, []byte(device)); err != nil {
+		return nil, err
+	}
+	status, err := c.readResponse(ctx)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := c.readPayload(status)
 	if err != nil {
 		return nil, err
 	}
@@ -46,13 +56,22 @@ func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) 
 		target := fmt.Sprintf("%s %s en", device, ch)
 		value := []byte("1")
 		writePayload := encodeWritePayload(target, value)
-		if _, _, err := c.sendBinaryCommand(ctx, IIODCommand{Opcode: opcodeWriteAttr}, writePayload); err != nil {
+
+		cmd := IIODCommand{Opcode: opcodeWriteAttr, Device: 0, Code: 0}
+		if err := c.sendCommand(ctx, cmd, writePayload); err != nil {
+			return nil, err
+		}
+		if _, err := c.readResponse(ctx); err != nil {
 			return nil, err
 		}
 	}
 
 	openPayload := encodeDeviceCountPayload(device, uint64(size))
-	status, _, err := c.sendBinaryCommand(ctx, IIODCommand{Opcode: opcodeOpenBuffer}, openPayload)
+	cmd = IIODCommand{Opcode: opcodeOpenBuffer, Device: 0, Code: 0}
+	if err := c.sendCommand(ctx, cmd, openPayload); err != nil {
+		return nil, err
+	}
+	status, err = c.readResponse(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +88,11 @@ func (b *Buffer) Close() error {
 		return nil
 	}
 	payload := []byte(b.device)
-	if _, _, err := b.client.sendBinaryCommand(context.Background(), IIODCommand{Opcode: opcodeCloseBuffer}, payload); err != nil {
+	cmd := IIODCommand{Opcode: opcodeCloseBuffer, Device: 0, Code: 0}
+	if err := b.client.sendCommand(context.Background(), cmd, payload); err != nil {
+		return err
+	}
+	if _, err := b.client.readResponse(context.Background()); err != nil {
 		return err
 	}
 	b.isOpen = false
@@ -82,7 +105,15 @@ func (b *Buffer) ReadSamples() ([]byte, error) {
 		return nil, fmt.Errorf("buffer not open")
 	}
 	payload := encodeDeviceCountPayload(b.device, uint64(b.size))
-	_, data, err := b.client.sendBinaryCommand(context.Background(), IIODCommand{Opcode: opcodeReadBuffer}, payload)
+	cmd := IIODCommand{Opcode: opcodeReadBuffer, Device: 0, Code: 0}
+	if err := b.client.sendCommand(context.Background(), cmd, payload); err != nil {
+		return nil, err
+	}
+	status, err := b.client.readResponse(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	data, err := b.client.readPayload(status)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +126,11 @@ func (b *Buffer) WriteSamples(data []byte) error {
 		return fmt.Errorf("buffer not open")
 	}
 	payload := encodeWriteBufferPayload(b.device, data)
-	_, _, err := b.client.sendBinaryCommand(context.Background(), IIODCommand{Opcode: opcodeWriteBuffer}, payload)
+	cmd := IIODCommand{Opcode: opcodeWriteBuffer, Device: 0, Code: 0}
+	if err := b.client.sendCommand(context.Background(), cmd, payload); err != nil {
+		return err
+	}
+	_, err := b.client.readResponse(context.Background())
 	return err
 }
 
@@ -188,4 +223,13 @@ func InterleaveIQ(channels [][][]int16) ([]int16, error) {
 		}
 	}
 	return out, nil
+}
+
+// FormatInt16Samples converts int16 samples to raw bytes (Little Endian).
+func FormatInt16Samples(samples []int16) []byte {
+	buf := make([]byte, len(samples)*2)
+	for i, s := range samples {
+		binary.LittleEndian.PutUint16(buf[i*2:], uint16(s))
+	}
+	return buf
 }
