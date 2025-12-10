@@ -169,7 +169,18 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	fmt.Printf("[PLUTO DEBUG] Attempting to connect to %s...\n", cfg.URI)
 	fmt.Printf("[PLUTO DEBUG] About to call iiod.Dial()...\n")
 
-	client, err := iiod.Dial(cfg.URI)
+	dialCtx := ctx
+	dialCancel := context.CancelFunc(nil)
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		dialCtx, dialCancel = context.WithTimeout(ctx, 4*time.Second)
+	} else {
+		dialCtx, dialCancel = context.WithCancel(ctx)
+	}
+	if dialCancel != nil {
+		defer dialCancel()
+	}
+
+	client, err := iiod.Dial(dialCtx, cfg.URI)
 
 	fmt.Printf("[PLUTO DEBUG] iiod.Dial() returned, err=%v\n", err)
 	if err != nil {
