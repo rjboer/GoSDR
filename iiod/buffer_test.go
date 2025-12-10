@@ -59,7 +59,7 @@ func TestBufferReadSamples(t *testing.T) {
 		{cmd: "LIST_CHANNELS test-dev", status: len("ch0"), payload: "ch0"},
 		{cmd: "WRITE_ATTR test-dev ch0 en 1", status: 0, payload: ""},
 		{cmd: "OPEN test-dev 4", status: 0, payload: ""},
-		{cmd: "READBUF test-dev 4", status: len(testData), binaryPayload: testData},
+		{cmd: "READBUF test-dev 8", status: len(testData), binaryPayload: testData},
 	})
 
 	client, err := Dial(addr)
