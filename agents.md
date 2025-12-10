@@ -1,351 +1,355 @@
-# Agent: Go Monopulse DOA Tracker Port
+Monopulse SDR System — Architecture & Agent Specification
 
-## Project Overview
+Version 1.0 (Professional Edition)
+0. Purpose and Scope
+This document defines the complete, professional system architecture specification for the Monopulse SDR stack, including:
 
-You are working on a Go port of an existing Python script that implements a real-time **monopulse direction-of-arrival (DOA) tracker** using an **AD9361-based SDR** (e.g. ADALM-Pluto / FMCOMMS).
+High-level system agents
+Responsibilities and interaction contracts
+IIOD client architecture (binary/text protocol router)
+SDR backend (PlutoSDR)
+DSP subsystem
+Tracking and telemetry agents
+Data models
+Error taxonomy
+Concurrency and lifecycle states
+Performance constraints
+Extensibility guidelines
+This document is normative and governs how all subsystems MUST interoperate.
 
-The Python script:
+1. System Overview
 
-- Configures an AD9361 SDR with **two RX channels** at **2.3 GHz**.
-- Transmits a complex tone at an offset frequency `fc0` (≈200 kHz).
-- Receives IQ samples from both antennas.
-- Performs:
-  - Sum (Σ) and difference (Δ) beamforming in complex baseband.
-  - A coarse scan over synthetic phase delays to find the initial DOA.
-  - A **monopulse tracking loop**, adjusting the phase delay based on the monopulse error sign.
-- Visualizes **steering angle vs time** with pyqtgraph.
+The Monopulse SDR stack consists of the following core agents:
 
-The goal is to reproduce this behaviour in **pure Go**, with a clean architecture, testable DSP logic, and a usable runtime interface (CLI + simple visualization).
+Agent	Role
+IIOD Client Agent	Unified transport (binary/text), device metadata, buffers
+SDR Hardware Agent	Hardware operations (PlutoSDR)
+DSP Agent	Pure signal processing (no IO)
+Tracker Agent	Monopulse control loop
+Telemetry Agent	Reporting, visualization, debugging
+Configuration Agent	System configuration and validation
 
----
+The architecture strictly separates IO, control, and DSP mathematics.
 
-## High-Level Goals
+2. Agents: Roles and Responsibilities
+2.1 IIOD Client Agent
 
-1. **Port core DSP logic** from Python to Go:
-   - Angle/phase conversion.
-   - FFT-based power estimation and dBFS scaling.
-   - Coarse scan for initial DOA.
-   - Monopulse tracking loop.
+Source Files:
+client.go, connect.go, binarybased.go, textbased.go, xml.go, buffer.go
 
-2. **Abstract SDR I/O** behind an interface:
-   - Allow plugging in:
-     - Real AD9361/Pluto hardware via libiio/iiod or similar.
-     - A simulation / replay source for development and testing.
+Mission
+Provide a single authoritative API to remote IIO-based SDR devices (PlutoSDR).
+All subsystems use this client; no alternative transport layers are permitted.
 
-3. **Provide a minimal visualization / telemetry path**:
-   - At minimum, print current steering angle and peak level to stdout.
-   - Optionally, stream data to a simple HTTP/WS endpoint for plotting in a browser.
+Responsibilities
+2.1.1 Transport Routing
+Detect protocol capabilities automatically:
+Attempt binary VERSION
+If fails → fallback to legacy text PRINT
 
-4. **Make the system configurable and repeatable**:
-   - CLI flags or config file for LO frequency, tone offset, spacing, gains, sample rate, tracking parameters.
+If text works → system operates in compatibility mode
 
-5. **Keep the code idiomatic and maintainable**:
-   - Clear package boundaries, unit tests for pure DSP, and no unnecessary dependencies.
+Binary/text transports MUST expose identical APIs.
 
----
+2.1.2 Connection Lifecycle
+TCP/Unix socket management
+Heartbeats (optional)
+Reconnect logic
+Shutdown and resource disposal
 
-## Constraints and Preferences
+2.1.3 XML Context Management
+Download full IIOD XML context
+Parse and normalize device/channels/attributes
+Enrich metadata with missing fields
+Maintain an internal metadata cache (lastXML)
 
-- Language: **Go** (latest stable).
-- Style: idiomatic Go, small interfaces, focus on clarity over cleverness.
-- Concurrency: use goroutines/channels where it simplifies SDR read / tracking loop, but avoid over-engineering.
-- External libs: keep dependencies minimal. Use well-maintained DSP libs where necessary (FFT), but keep the abstraction so they can be swapped.
-- Platform targets: at least Linux/amd64; preferable to keep code portable to Windows/macOS where possible.
-- iiod/Client.go defines the **central IIOD client structure**, including:
-- transport routing state (text, binary, legacy)
-- connection sockets
-- XML metadata cache
-- device + attribute maps
-- buffer capabilities
-- debug logging
-- SSH fallback paths (optional)
-- shared helper utilities
+2.1.4 Attribute Access
+ReadAttrCompat, WriteAttrCompat
+Prefer binary access
+Automatic fallback to text mode
+Normalize errors and warnings
+Per-device attribute maps
+High-resolution logging when debug mode is enabled
 
-All IIOD-related data and capabilities must be exposed through this Client.go
-No external package may create alternative IIOD-like state objects.
+2.1.5 Streaming Buffers
+Abstract RX/TX buffer creation for all transports
+Enforce buffer alignment rules
+Provide ReadBuffer() and WriteBuffer()
+Handle overrun/underrun and reallocation
+
+2.1.6 SSH Sysfs Fallback (Pluto only)
+When IIOD lacks access to sysfs nodes
+Optional security: key auth, sandbox paths
+
+2.1.7 Debugging and Telemetry
+Debug levels:
+0 – Disabled  
+1 – Errors only  
+2 – High-level operations  
+3 – Transport wireframes (hex dumps)  
+4 – Full diagnostics (buffers, XML bodies)
+
+2.2 SDR Hardware Agent
+Mission
+Provide hardware-level functionality behind a stable Go interface.
+
+Responsibilities
+2.2.1 Initialization
+Discover physical devices
+Load XML metadata from Client
+Validate AD9361 presence
+Apply radio configuration (LO, sample rate, gains, FIR, bandwidth)
+
+2.2.2 Streaming
+Manage RX/TX buffers
+Call InterleaveIQ / DeinterleaveIQ helpers
+Apply runtime configuration changes
+
+2.2.3 Gain and LO Fallbacks
+AGC fallback if manual gain unavailable
+TX attenuation fallback if hardwaregain missing
+LO lock verification
+
+2.2.4 Device Safety Rules
+Prevent illegal TX power
+Enforce frequency bounds
+Avoid rapid LO retuning sequences
+
+2.3 DSP Agent
+Pure computation. Zero side effects.
+
+Responsibilities
+Windowing, FFT, spectrum analysis
+IQ channel manipulation (sum, delta)
+Angle-of-arrival estimation
+
+Monopulse error calculation
+
+Adaptive filters (future expansion)
+
+MUST remain stateless and deterministic.
+
+2.4 Tracker Agent
+Responsibilities
+Coarse scan and initial acquisition
+Tracking loop (continuous mode)
+
+Phase and amplitude control
+
+Integration with Telemetry Agent
+
+Automatic re-acquisition if signal is lost
+
+Store and expose runtime metrics
+
+2.5 Telemetry Agent
+Responsibilities
+Real-time data export (WebSocket/HTTP)
+Human-readable logs
+
+Spectrum snapshots (optional)
+
+Streaming state, DOA, SNR, gains
+
+Debug-level reporting
+
+Telemetry MUST NOT apply any DSP or SDR operations.
+
+2.6 Configuration Agent
+Responsibilities
+Read, merge, and validate program configuration
+Provide typed structs to all components
+Enforce constraints (sample rate, spacing, gains)
+
+3. Agent Interaction Contracts
+3.1 Global Call Graph
+Tracker
+  ↓
+SDR
+  ↓
+IIOD Client
+  ↓
+Transport (binary/text)
+  ↓
+PlutoSDR or other IIO device
+
+Tracker → DSP (FFT)
+Tracker → Telemetry (updates)
+SDR → DSP (IQ conversions only)
+
+3.2 Timing Contract
+
+The SDR + DSP + Tracker pipeline MUST finish processing each RX buffer before the next arrives.
+
+Define:
+
+t_buffer = samples / sample_rate
+t_compute < t_buffer * 0.8
 
 
+Failure implies the tracker loses lock.
 
----
+3.3 Failure Contracts
+Failure	Agent Reaction
+Binary protocol fails	Client falls back to text
+Text protocol fails	Client attempts SSH sysfs fallback
+Attribute not found	SDR uses fallback mode
+IQ corruption	Tracker discards frame, logs event
+LO not locked	SDR retries; tracker halts
+RX overrun	Buffer recreated
+Sample clock drift	DSP adaptive filter (future)
+4. Client State Machines
+4.1 IIOD Client Mode Detection FSM
+START
+ ↓ try VERSION (binary)
+BINARY_OK? ── yes → BINARY_MODE
+     │
+     no
+     ↓ try PRINT (text)
+TEXT_OK? ────── yes → TEXT_MODE
+     │
+     no
+     ↓
+FAIL
+
+4.2 Tracker FSM
+INIT
+ ↓
+CALIBRATE
+ ↓
+SCAN
+ ↓
+TRACK
+ ↓
+ERROR ←─────────────┐
+ ↑ (retry/acq)       │
+ └───────────────────┘
+
+5. Data Model Specification
+5.1 IQ Data Layout
+Interleaved buffer format (binary protocol)
+I0 Q0 I1 Q1 I2 Q2 ...
+
+Deinterleaved in DSP:
+[]complex64 per channel
+
+Pluto channel mapping
+RX1_I → voltage0
+RX1_Q → voltage1
+RX2_I → voltage2
+RX2_Q → voltage3
+
+5.2 Attribute Model
+GetAttr(device, channel, name) → string
+SetAttr(device, channel, name, value) → error
 
 
+Attributes are backed by:
 
+Binary attribute codes (preferred)
 
+Text-based file names (fallback)
 
+SSH sysfs when necessary
 
-## Proposed Architecture
-
-**Module layout:**
-
-- `cmd/monopulse/`
-  - `main.go` — CLI entry point, wiring, config, logging.
-- `internal/sdr/`
-  - `sdr.go` — `SDR` interface (Init, RX, TX, Close).
-  - `pluto.go` — real hardware implementation (future / optional).
-  - `mock.go` — simulated SDR (for local dev and tests).
-- `internal/dsp/`
-  - `window.go` — Hamming window and helpers.
-  - `fft.go` — FFT wrapper and dBFS conversion.
-  - `angle.go` — phase ↔ angle math (`calcTheta` equivalent).
-  - `monopulse.go` — scan and tracking logic.
-- `internal/app/`
-  - `tracker.go` — orchestration (looping over RX, calling DSP, updating angle).
-- `internal/telemetry/` (optional)
-  - `stdout.go` — print updates to console.
-  - `http.go` — simple HTTP/WebSocket server for live plotting.
-The IIOD subsystem is fully abstracted behind:
-
-- connect.go → selects transport (binary first, then text fallback)
-- textbased.go → legacy PRINT/LIST/READ/WRITE protocol
-- binarybased.go → modern libiio binary command protocol
-- xml.go → unmarshal, normalize, enrich XML metadata
-- buffer.go → unified streaming buffer API with debug logging
-
-Goal:
-The SDR backends (e.g. PlutoSDR) must never know whether the
-underlying transport is text or binary. They call Client methods only.
-
-
-You may adjust package names as needed, but **keep DSP logic separated from SDR and I/O**.
-
-Transport detection:
-    1. Try binary VERSION
-    2. If binary fails → use text PRINT
-    3. If text succeeds → mark as legacy server
-
-
-
----
-
-## Functional Requirements
-
-### 1. Configuration
-
-Expose configuration via CLI flags and/or environment variables such as:
-
-- `--sample-rate` (Hz)
-- `--rx-lo` (Hz)
-- `--tone-offset` (Hz, e.g. `200000`)
-- `--rx-gain0`, `--rx-gain1` (dB)
-- `--tx-gain` (dB)
-- `--spacing-wavelength` (fraction, default `0.5`)
-- `--num-samples` per RX call (power of two)
-- `--tracking-length` (buffer length for history)
-- `--phase-step` (deg for monopulse update)
-- `--sdr-uri` / `--sdr-backend` (e.g. `pluto`, `mock`)
-
-### 2. SDR Interface
-
-Define a small interface, e.g.:
-
-```go
-type SDR interface {
-    Init(cfg Config) error
-    TX(iq0, iq1 []complex64) error
-    RX() (chan0, chan1 []complex64, err error)
-    Close() error
+5.3 Buffer Metadata
+struct Buffer {
+    Device         string
+    Samples        int
+    ByteStride     int
+    Cyclic         bool
+    TransportMode  enum { Binary, Text }
 }
-```
 
-Implement at least:
+5.4 XML Metadata Model
+Normalized and enriched:
+Context:
+  Name
+  Version
+  Devices[]:
+    ID
+    Name
+    Channels[]
+    Attributes[]
+    DebugAttributes[]
+    BufferAttributes[]
 
-- **MockSDR**: returns synthetic IQ data (e.g. a tone at `fc0` with controllable phase offset between channels).
-- **PlutoSDR** (optional/future): wraps `libiio` or calls `iiod` via a Go binding.
 
-### 3. DSP Functions
+Missing fields MUST be auto-generated when necessary.
 
-Implement the following core DSP functions in `internal/dsp/`:
+6. Error Taxonomy
+6.1 Error Classes
+IIOD_ERR_TRANSPORT
+IIOD_ERR_PROTOCOL
+IIOD_ERR_XML
+IIOD_ERR_ATTRIBUTE
+IIOD_ERR_FALLBACK
+SDR_ERR_GAIN
+SDR_ERR_LO_UNLOCKED
+SDR_ERR_BUFFER
+SDR_ERR_OVERRUN
+DSP_ERR_IQ_INVALID
+TRACKER_ERR_NO_SIGNAL
+TRACKER_ERR_TIMEOUT
+CONFIG_ERR_INVALID
 
-#### `window.go`
+7. Concurrency Model
+7.1 General Principles
+DSP operations are stateless, safe to run concurrently
+RX/TX buffer operations MUST be serialized per IIOD connection
+Tracker loop runs in dedicated goroutine
+Telemetry runs in background event loop
+Locks:
+transportLock protects all socket operations
+xmlLock protects metadata updates
+bufferLock protects buffer allocation table
 
-```go
-// Hamming returns a Hamming window of length n
-func Hamming(n int) []float64
-```
+7.2 Thread Safety Contracts
+The SDR Agent MUST NOT directly modify the Client without going through public methods.
 
-#### `fft.go`
+8. Performance Requirements
+8.1 Timing
+End-to-end processing must remain within 80% of buffer duration
+Buffer overrun must trigger controlled reinitialization
 
-```go
-// DBFS converts IQ samples to dBFS spectrum
-// Returns: fftShift (complex spectrum), dbfs (magnitude in dBFS)
-func DBFS(samples []complex64, window []float64) ([]complex128, []float64)
-```
+8.2 Memory
+Buffer reuse: avoid per-frame allocations
+FFT workspace must be pooled
 
-Use a Go FFT library (e.g., `gonum.org/v1/gonum/dsp/fourier` or `github.com/mjibson/go-dsp/fft`).
+8.3 Throughput
+PlutoSDR must sustain:
+≥ 2 MSPS RX without drops
+≥ 2 MSPS TX for tone generation
+Stable LO lock over long periods
 
-- Apply Hamming window
-- Compute FFT
-- Shift zero frequency to center
-- Convert to dBFS: `20*log10(abs(fft_shift) / 2^11)` (Pluto is 12-bit signed ADC)
+9. Security & Operational Safety
+SSH access must be limited to validated sysfs paths
+TX gain/attenuation must respect board limits
+Prevent inadvertent high-power transmissions
+Protect against malformed XML attacks
 
-#### `angle.go`
+10. Extensibility Guidelines
+10.1 Adding a New SDR Backend
+To support LimeSDR, USRP, etc.:
+Implement SDR interface
+Provide device discovery function
+Build attribute and buffer mapping logic
+Register new backend in factory
 
-```go
-// CalcTheta converts phase delay (degrees) to steering angle (degrees)
-// Formula: theta = arcsin(c * deg2rad(phase) / (2*pi*f*d))
-func CalcTheta(phaseDeg float64, freqHz float64, distanceM float64) float64
+10.2 Adding a New IIOD Transport
+Add a transport module
+Implement VERSION/PRINT detection
+Register with dispatcher in connect.go
+Ensure compat methods are wired
 
-// PhaseShift applies a phase delay to IQ samples
-func PhaseShift(samples []complex64, phaseDeg float64) []complex64
-```
+10.3 Adding New DSP Algorithms
+MUST be deterministic
+MUST be thread-safe
+MUST accept and return pure data structures
 
-#### `monopulse.go`
-
-```go
-// MonopulseAngle computes the monopulse error angle from sum and delta FFTs
-// Correlates a slice of the FFT around the signal of interest
-func MonopulseAngle(sumFFT, deltaFFT []complex128, startBin, endBin int) float64
-
-// ScanForDOA performs a coarse phase scan to find initial direction of arrival
-// Returns: peakDelay (deg), peakDBFS, steerAngle (deg)
-func ScanForDOA(rx0, rx1 []complex64, cfg ScanConfig) (peakDelay, peakDBFS, steerAngle float64)
-
-// Tracking performs one monopulse tracking iteration
-// Returns: new phase delay (deg)
-func Tracking(rx0, rx1 []complex64, lastDelay float64, cfg TrackConfig) float64
-```
-
-### 4. Main Application Loop
-
-In `internal/app/tracker.go`:
-
-```go
-type Tracker struct {
-    sdr    sdr.SDR
-    cfg    Config
-    delay  float64  // current phase delay in degrees
-    angles []float64 // tracking history
-}
-
-func (t *Tracker) Initialize() error
-func (t *Tracker) CoarseScan() error
-func (t *Tracker) Track() error  // runs one tracking iteration
-func (t *Tracker) Run(ctx context.Context) error  // main loop
-```
-
-**Flow:**
-
-1. Initialize SDR and transmit tone
-2. Warm up: discard first ~20 RX buffers
-3. Run `CoarseScan()` to get initial DOA
-4. Loop: call `Track()` repeatedly, updating `delay` and appending to `angles`
-5. Optionally send telemetry updates
-
-### 5. Telemetry / Visualization
-
-Provide at least **stdout logging**:
-
-```
-[2025-11-28 19:54:00] Angle: +12.3°  Delay: +45.2°  Peak: -23.4 dBFS
-```
-
-**Optional HTTP/WebSocket server** (`internal/telemetry/http.go`):
-
-- Serve a simple HTML page with a chart (e.g. using Chart.js or similar)
-- WebSocket endpoint streams `{timestamp, angle, delay, peak}` JSON
-- Client plots angle vs time in real-time
-
----
-
-## Implementation Workflow
-
-Follow these steps to build the system incrementally:
-
-### Phase 1: DSP Core (No Hardware)
-
-1. **Create project structure**:
-   ```
-   mkdir -p cmd/monopulse internal/{sdr,dsp,app,telemetry}
-   go mod init github.com/yourusername/gosdr
-   ```
-
-2. **Implement DSP functions** in `internal/dsp/`:
-   - `window.go` → Hamming window
-   - `fft.go` → DBFS conversion
-   - `angle.go` → CalcTheta, PhaseShift
-   - `monopulse.go` → MonopulseAngle, ScanForDOA, Tracking
-
-3. **Write unit tests** for each DSP function:
-   - Test Hamming window shape
-   - Test FFT with known tone frequency
-   - Test CalcTheta with known phase/angle pairs
-   - Test PhaseShift preserves magnitude
-   - Test MonopulseAngle with synthetic sum/delta signals
-
-4. **Create MockSDR** in `internal/sdr/mock.go`:
-   - Generate two channels of IQ data
-   - Channel 0: tone at `fc0`
-   - Channel 1: same tone with configurable phase offset
-   - Add optional noise for realism
-
-### Phase 2: Integration & CLI
-
-5. **Implement SDR interface** in `internal/sdr/sdr.go`
-
-6. **Build Tracker** in `internal/app/tracker.go`:
-   - Wire SDR + DSP functions
-   - Implement Initialize, CoarseScan, Track, Run
-
-7. **Create CLI** in `cmd/monopulse/main.go`:
-   - Parse flags (sample rate, LO freq, gains, etc.)
-   - Initialize Tracker with MockSDR
-   - Run tracking loop
-   - Print angles to stdout
-
-8. **Test end-to-end** with MockSDR:
-   - Set mock to return fixed phase offset
-   - Verify coarse scan finds correct angle
-   - Verify tracking loop converges
-
-### Phase 3: Telemetry & Visualization (Optional)
-
-9. **Add stdout logger** in `internal/telemetry/stdout.go`
-
-10. **Add HTTP/WebSocket server** in `internal/telemetry/http.go`:
-    - Serve static HTML with real-time chart
-    - Stream tracking data via WebSocket
-
-11. **Integrate telemetry** into Tracker.Run()
-
-### Phase 4: Real Hardware (Future)
-
-12. **Implement PlutoSDR** in `internal/sdr/pluto.go`:
-    - Use Go bindings for libiio (e.g., via cgo or external process)
-    - Implement Init, TX, RX, Close
-    - Handle buffer management and calibration
-
-13. **Test with real Pluto**:
-    - Run with `--sdr-backend=pluto --sdr-uri=ip:192.168.2.1`
-    - Verify tracking with real RF signals
-
----
-
-## Testing Requirements
-
-### Unit Tests
-
-- **DSP functions**: Test with known inputs/outputs
-  - Hamming window: verify shape and sum
-  - DBFS: verify FFT of known tone gives expected peak
-  - CalcTheta: verify angle calculation for known phase delays
-  - PhaseShift: verify phase rotation is correct
-  - MonopulseAngle: verify correlation and angle extraction
-
-### Integration Tests
-
-- **MockSDR + Tracker**: 
-  - Test coarse scan finds correct initial angle
-  - Test tracking loop converges to target angle
-  - Test tracking follows changing angle (mock can vary phase over time)
-
-### Manual Testing
-
-- **With real hardware** (when available):
-  - Verify SDR configuration (gains, LO, sample rate)
-  - Verify TX tone is transmitted
-  - Verify RX channels receive data
-  - Verify tracking responds to physical antenna movement
-
----
-
-## Reference Information
+11. Future Work
+Automatic calibration agent
+Predictive tracking using adaptive filters
+GPU/SIMD FFT acceleration
+Virtual IIOD server for offline testing
+Machine-learning–based DOA estimation
