@@ -2,6 +2,7 @@ package iiod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -138,12 +139,20 @@ func (c *Client) openBufferWithContextBinary(ctx context.Context, device string,
 }
 
 func (c *Client) openBufferWithContextText(ctx context.Context, device string, samples int) error {
-	cmd := fmt.Sprintf("BUFFER_OPEN %s %d", device, samples)
+	cmd := fmt.Sprintf("OPEN %s %d", device, samples)
 	log.Printf("[IIOD DEBUG] openBufferWithContextText: sending %q", cmd)
 	resp, err := c.sendCommandString(ctx, cmd)
 	if err != nil {
-		log.Printf("[IIOD DEBUG] openBufferWithContextText: command failed for %s: %v", device, err)
-		return err
+		var iiErr *IIODError
+		if errors.As(err, &iiErr) && iiErr.Status == -22 {
+			legacyCmd := fmt.Sprintf("BUFFER_OPEN %s %d", device, samples)
+			log.Printf("[IIOD DEBUG] openBufferWithContextText: OPEN failed with EINVAL, retrying with %q", legacyCmd)
+			resp, err = c.sendCommandString(ctx, legacyCmd)
+		}
+		if err != nil {
+			log.Printf("[IIOD DEBUG] openBufferWithContextText: command failed for %s: %v", device, err)
+			return err
+		}
 	}
 	log.Printf("[IIOD DEBUG] openBufferWithContextText: response=%q", resp)
 	var id int

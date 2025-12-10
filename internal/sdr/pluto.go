@@ -25,9 +25,12 @@ type EventLogger interface {
 type PlutoSDR struct {
 	mu         sync.Mutex
 	client     *iiod.Client
-	phyDev     string
-	rxDev      string
-	txDev      string
+	phyID      string
+	phyName    string
+	rxID       string
+	rxName     string
+	txID       string
+	txName     string
 	rxBuffer   *iiod.Buffer
 	txBuffer   *iiod.Buffer
 	numSamples int
@@ -81,7 +84,7 @@ type DebugInfo struct {
 func (p *PlutoSDR) GetDebugInfo() (*DebugInfo, error) {
 	p.mu.Lock()
 	client := p.client
-	phyDev := p.phyDev
+	phyName := p.phyName
 	debugMode := p.debugMode
 	p.mu.Unlock()
 
@@ -99,33 +102,33 @@ func (p *PlutoSDR) GetDebugInfo() (*DebugInfo, error) {
 	}
 
 	// Read RSSI (signal strength)
-	if rssi0, err := client.ReadAttr(phyDev, "voltage0", "rssi"); err == nil {
+	if rssi0, err := client.ReadAttr(phyName, "voltage0", "rssi"); err == nil {
 		info.RSSI0 = rssi0
 		p.logEvent("debug", fmt.Sprintf("IIO: RSSI Ch0 = %s dB", rssi0))
 	}
 
-	if rssi1, err := client.ReadAttr(phyDev, "voltage1", "rssi"); err == nil {
+	if rssi1, err := client.ReadAttr(phyName, "voltage1", "rssi"); err == nil {
 		info.RSSI1 = rssi1
 		p.logEvent("debug", fmt.Sprintf("IIO: RSSI Ch1 = %s dB", rssi1))
 	}
 
 	// Read temperature
-	if temp, err := client.ReadAttr(phyDev, "", "in_temp0_input"); err == nil {
+	if temp, err := client.ReadAttr(phyName, "", "in_temp0_input"); err == nil {
 		info.Temperature = temp
 		p.logEvent("debug", fmt.Sprintf("IIO: Temperature = %s mC", temp))
 	}
 
 	// Read current sample rate
-	if sr, err := client.ReadAttr(phyDev, "", "sampling_frequency"); err == nil {
+	if sr, err := client.ReadAttr(phyName, "", "sampling_frequency"); err == nil {
 		info.SampleRate = sr
 	}
 
 	// Read LO frequencies
-	if rxLO, err := client.ReadAttr(phyDev, "altvoltage1", "frequency"); err == nil {
+	if rxLO, err := client.ReadAttr(phyName, "altvoltage1", "frequency"); err == nil {
 		info.RxLO = rxLO
 	}
 
-	if txLO, err := client.ReadAttr(phyDev, "altvoltage0", "frequency"); err == nil {
+	if txLO, err := client.ReadAttr(phyName, "altvoltage0", "frequency"); err == nil {
 		info.TxLO = txLO
 	}
 
@@ -210,12 +213,12 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	p.logEvent("debug", fmt.Sprintf("IIO: Found %d devices in metadata", len(deviceInfos)))
 	fmt.Printf("[PLUTO DEBUG] Found %d devices in metadata\n", len(deviceInfos))
 
-	phy, rx, tx := identifyFromInfo(deviceInfos)
-	if phy == "" || rx == "" || tx == "" {
+	phyID, phyName, rxID, rxName, txID, txName := identifyFromInfo(deviceInfos)
+	if phyID == "" || rxID == "" || txID == "" {
 		_ = client.Close()
-		p.logEvent("error", fmt.Sprintf("IIO: AD9361 devices not found (phy=%q rx=%q tx=%q)", phy, rx, tx))
-		fmt.Printf("[PLUTO DEBUG] AD9361 devices not found (phy=%q rx=%q tx=%q)\n", phy, rx, tx)
-		return fmt.Errorf("unable to locate AD9361 devices (phy=%q rx=%q tx=%q)", phy, rx, tx)
+		p.logEvent("error", fmt.Sprintf("IIO: AD9361 devices not found (phy=%q rx=%q tx=%q)", phyName, rxName, txName))
+		fmt.Printf("[PLUTO DEBUG] AD9361 devices not found (phy=%q rx=%q tx=%q)\n", phyName, rxName, txName)
+		return fmt.Errorf("unable to locate AD9361 devices (phy=%q rx=%q tx=%q)", phyName, rxName, txName)
 	}
 
 	iiodWriteSupported := client.SupportsWrite()
@@ -237,12 +240,12 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	}
 
 	var warnedFallback bool
-	writeAttr := func(action, device, channel, attr, value string) error {
-		target := fmt.Sprintf("%s/%s/%s", device, channel, attr)
+	writeAttr := func(action, deviceName, deviceID, channel, attr, value string) error {
+		target := fmt.Sprintf("%s/%s/%s", deviceName, channel, attr)
 		p.logEvent("debug", fmt.Sprintf("IIO: %s via IIOD text mode -> %s = %s", action, target, value))
 		fmt.Printf("[PLUTO DEBUG] writeAttr %s -> %s (value=%s) using IIOD text\n", action, target, value)
 
-		if err := client.WriteAttrCompatWithContext(ctx, device, channel, attr, value); err != nil {
+		if err := client.WriteAttrCompatWithContext(ctx, deviceName, channel, attr, value); err != nil {
 			if errors.Is(err, iiod.ErrWriteNotSupported) {
 				credsPresent := sshCfg.Password != "" || sshCfg.KeyPath != ""
 				p.logEvent("debug", fmt.Sprintf("IIO: IIOD write unsupported for %s; SSH fallback host=%s user=%s password_set=%t key_set=%t", target, sshCfg.Host, sshCfg.User, sshCfg.Password != "", sshCfg.KeyPath != ""))
@@ -258,7 +261,7 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 					p.logEvent("warn", fmt.Sprintf("IIO: %s unsupported via IIOD; using SSH sysfs fallback to %s", action, sshHost))
 					warnedFallback = true
 				}
-				if sshErr := writer.WriteAttribute(ctx, device, channel, attr, value); sshErr != nil {
+				if sshErr := writer.WriteAttribute(ctx, deviceID, channel, attr, value); sshErr != nil {
 					p.logEvent("error", fmt.Sprintf("IIO: SSH sysfs %s failed: %v", action, sshErr))
 					fmt.Printf("[PLUTO DEBUG] SSH write failed for %s: %v\n", target, sshErr)
 					return fmt.Errorf("%s via ssh: %w", action, sshErr)
@@ -278,25 +281,25 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 		return nil
 	}
 
-	p.logEvent("info", fmt.Sprintf("IIO: Found AD9361 devices - PHY: %s, RX: %s, TX: %s", phy, rx, tx))
-	fmt.Printf("[PLUTO DEBUG] Found AD9361: PHY=%s, RX=%s, TX=%s\n", phy, rx, tx)
+	p.logEvent("info", fmt.Sprintf("IIO: Found AD9361 devices - PHY: %s, RX: %s, TX: %s", phyName, rxName, txName))
+	fmt.Printf("[PLUTO DEBUG] Found AD9361: PHY=%s, RX=%s, TX=%s\n", phyName, rxName, txName)
 
 	// Program sample rate and LOs.
 	p.logEvent("debug", fmt.Sprintf("IIO: Setting sample rate to %.0f Hz", cfg.SampleRate))
-	if err := writeAttr("set sample rate", phy, "", "sampling_frequency", fmt.Sprintf("%.0f", cfg.SampleRate)); err != nil {
+	if err := writeAttr("set sample rate", phyName, phyID, "", "sampling_frequency", fmt.Sprintf("%.0f", cfg.SampleRate)); err != nil {
 		_ = client.Close()
 		return err
 	}
 
 	if cfg.RxLO > 0 {
 		p.logEvent("debug", fmt.Sprintf("IIO: Setting RX LO to %.0f Hz", cfg.RxLO))
-		if err := writeAttr("set RX LO", phy, "altvoltage1", "frequency", fmt.Sprintf("%.0f", cfg.RxLO)); err != nil {
+		if err := writeAttr("set RX LO", phyName, phyID, "altvoltage1", "frequency", fmt.Sprintf("%.0f", cfg.RxLO)); err != nil {
 			_ = client.Close()
 			return err
 		}
 
 		p.logEvent("debug", fmt.Sprintf("IIO: Setting TX LO to %.0f Hz", cfg.RxLO))
-		if err := writeAttr("set TX LO", phy, "altvoltage0", "frequency", fmt.Sprintf("%.0f", cfg.RxLO)); err != nil {
+		if err := writeAttr("set TX LO", phyName, phyID, "altvoltage0", "frequency", fmt.Sprintf("%.0f", cfg.RxLO)); err != nil {
 			_ = client.Close()
 			return err
 		}
@@ -304,29 +307,29 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 
 	// Configure RX gains.
 	p.logEvent("debug", "IIO: Configuring RX gains")
-	if err := writeAttr("set rx0 gain mode", phy, "voltage0", "gain_control_mode", "manual"); err != nil {
+	if err := writeAttr("set rx0 gain mode", phyName, phyID, "voltage0", "gain_control_mode", "manual"); err != nil {
 		_ = client.Close()
 		return err
 	}
-	if err := writeAttr("set rx1 gain mode", phy, "voltage1", "gain_control_mode", "manual"); err != nil {
+	if err := writeAttr("set rx1 gain mode", phyName, phyID, "voltage1", "gain_control_mode", "manual"); err != nil {
 		_ = client.Close()
 		return err
 	}
-	if err := writeAttr("set rx0 gain", phy, "voltage0", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain0)); err != nil {
+	if err := writeAttr("set rx0 gain", phyName, phyID, "voltage0", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain0)); err != nil {
 		_ = client.Close()
 		return err
 	}
-	if err := writeAttr("set rx1 gain", phy, "voltage1", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain1)); err != nil {
+	if err := writeAttr("set rx1 gain", phyName, phyID, "voltage1", "hardwaregain", fmt.Sprintf("%d", cfg.RxGain1)); err != nil {
 		_ = client.Close()
 		return err
 	}
-	if err := writeAttr("set tx gain", phy, "out", "hardwaregain", fmt.Sprintf("%d", cfg.TxGain)); err != nil {
+	if err := writeAttr("set tx gain", phyName, phyID, "out", "hardwaregain", fmt.Sprintf("%d", cfg.TxGain)); err != nil {
 		// Some firmware exposes TX gain per-channel; fall back without failing hard.
 		p.logEvent("warn", fmt.Sprintf("IIO: TX gain not applied: %v", err))
 	}
 
 	p.logEvent("info", fmt.Sprintf("IIO: Creating RX buffer (%d samples)", cfg.NumSamples))
-	rxBuf, err := client.CreateStreamBuffer(rx, cfg.NumSamples, 0x3)
+	rxBuf, err := client.CreateStreamBuffer(rxName, cfg.NumSamples, 0x3)
 	if err != nil {
 		_ = client.Close()
 		p.logEvent("error", fmt.Sprintf("IIO: Failed to create RX buffer: %v", err))
@@ -334,7 +337,7 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	}
 
 	p.logEvent("info", fmt.Sprintf("IIO: Creating TX buffer (%d samples)", cfg.NumSamples))
-	txBuf, err := client.CreateStreamBuffer(tx, cfg.NumSamples, 0x3)
+	txBuf, err := client.CreateStreamBuffer(txName, cfg.NumSamples, 0x3)
 	if err != nil {
 		_ = rxBuf.Close()
 		_ = client.Close()
@@ -343,9 +346,12 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	}
 
 	p.client = client
-	p.phyDev = phy
-	p.rxDev = rx
-	p.txDev = tx
+	p.phyID = phyID
+	p.phyName = phyName
+	p.rxID = rxID
+	p.rxName = rxName
+	p.txID = txID
+	p.txName = txName
 	p.rxBuffer = rxBuf
 	p.txBuffer = txBuf
 	p.numSamples = cfg.NumSamples
@@ -489,20 +495,32 @@ func extractHostFromURI(uri string) string {
 	return last
 }
 
-// identifyFromInfo maps parsed device info to roles based on Name.
-func identifyFromInfo(devs []iiod.DeviceInfo) (phy, rx, tx string) {
-	for _, d := range devs {
-		name := strings.ToLower(d.Name)
-		switch {
-		case strings.Contains(name, "ad9361-phy"):
-			phy = d.ID
-		case strings.Contains(name, "cf-ad9361-lpc"):
-			rx = d.ID
-		case strings.Contains(name, "cf-ad9361-dds"):
-			tx = d.ID
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
 		}
 	}
-	// Fallback for legacy setups where names might be in ID if name is empty (unlikely with XML)
+	return ""
+}
+
+// identifyFromInfo maps parsed device info to roles based on Name.
+func identifyFromInfo(devs []iiod.DeviceInfo) (phyID, phyName, rxID, rxName, txID, txName string) {
+	for _, d := range devs {
+		identifier := strings.ToLower(firstNonEmpty(d.Name, d.ID))
+		name := firstNonEmpty(d.Name, d.ID)
+		switch {
+		case strings.Contains(identifier, "ad9361-phy"):
+			phyID = d.ID
+			phyName = name
+		case strings.Contains(identifier, "cf-ad9361-lpc"):
+			rxID = d.ID
+			rxName = name
+		case strings.Contains(identifier, "cf-ad9361-dds"):
+			txID = d.ID
+			txName = name
+		}
+	}
 	return
 }
 
@@ -563,22 +581,19 @@ func (p *PlutoSDR) setAttr(ctx context.Context, dev, channel, attr, value string
 
 // findRXChannels returns the list of RX channels for the AD9361.
 func (p *PlutoSDR) findRXChannels(ctx context.Context) ([]string, error) {
-	if p.rxDev == "" {
+	if p.rxName == "" {
 		return nil, fmt.Errorf("RX device not assigned")
 	}
 
 	devs, err := p.client.GetDeviceInfoWithContext(ctx)
 	if err != nil {
 		// Fallback: use legacy GetChannels which returns all channels (mixed types not distinguished easily)
-		// But usually GetChannels returns just IDs. We assume "voltage" prefix for RX?
-		// Better to fail if detailed info not available or rely on known naming.
-		// Let's try GetChannels and return all, presuming caller filters or we just grab all.
-		return p.client.GetChannelsWithContext(ctx, p.rxDev)
+		return p.client.GetChannelsWithContext(ctx, p.rxName)
 	}
 
 	var out []string
 	for _, d := range devs {
-		if d.ID == p.rxDev {
+		if d.ID == p.rxID || d.Name == p.rxName {
 			for _, ch := range d.Channels {
 				if ch.Type == "input" {
 					out = append(out, ch.ID)
@@ -596,18 +611,18 @@ func (p *PlutoSDR) findRXChannels(ctx context.Context) ([]string, error) {
 
 // findTXChannels returns the list of TX channels for the AD9361.
 func (p *PlutoSDR) findTXChannels(ctx context.Context) ([]string, error) {
-	if p.txDev == "" {
+	if p.txName == "" {
 		return nil, fmt.Errorf("TX device not assigned")
 	}
 
 	devs, err := p.client.GetDeviceInfoWithContext(ctx)
 	if err != nil {
-		return p.client.GetChannelsWithContext(ctx, p.txDev)
+		return p.client.GetChannelsWithContext(ctx, p.txName)
 	}
 
 	var out []string
 	for _, d := range devs {
-		if d.ID == p.txDev {
+		if d.ID == p.txID || d.Name == p.txName {
 			for _, ch := range d.Channels {
 				if ch.Type == "output" {
 					out = append(out, ch.ID)
@@ -628,15 +643,15 @@ func (p *PlutoSDR) findTXChannels(ctx context.Context) ([]string, error) {
 //
 
 func (p *PlutoSDR) setRXLO(ctx context.Context, freqHz uint64) error {
-	return p.setAttr(ctx, p.phyDev, "altvoltage0", "frequency", fmt.Sprintf("%d", freqHz))
+	return p.setAttr(ctx, p.phyName, "altvoltage0", "frequency", fmt.Sprintf("%d", freqHz))
 }
 
 func (p *PlutoSDR) setTXLO(ctx context.Context, freqHz uint64) error {
-	return p.setAttr(ctx, p.phyDev, "altvoltage1", "frequency", fmt.Sprintf("%d", freqHz))
+	return p.setAttr(ctx, p.phyName, "altvoltage1", "frequency", fmt.Sprintf("%d", freqHz))
 }
 
 func (p *PlutoSDR) getRXLO(ctx context.Context) (uint64, error) {
-	val, err := p.getAttr(ctx, p.phyDev, "altvoltage0", "frequency")
+	val, err := p.getAttr(ctx, p.phyName, "altvoltage0", "frequency")
 	if err != nil {
 		return 0, err
 	}
@@ -646,7 +661,7 @@ func (p *PlutoSDR) getRXLO(ctx context.Context) (uint64, error) {
 }
 
 func (p *PlutoSDR) getTXLO(ctx context.Context) (uint64, error) {
-	val, err := p.getAttr(ctx, p.phyDev, "altvoltage1", "frequency")
+	val, err := p.getAttr(ctx, p.phyName, "altvoltage1", "frequency")
 	if err != nil {
 		return 0, err
 	}
@@ -672,11 +687,11 @@ func (p *PlutoSDR) setBandwidth(ctx context.Context, dev, channel string, bw uin
 //
 
 func (p *PlutoSDR) setGainControlMode(ctx context.Context, channel string, mode string) error {
-	return p.setAttr(ctx, p.phyDev, channel, "gain_control_mode", mode)
+	return p.setAttr(ctx, p.phyName, channel, "gain_control_mode", mode)
 }
 
 func (p *PlutoSDR) setHardwareGain(ctx context.Context, channel string, gain float64) error {
-	return p.setAttr(ctx, p.phyDev, channel, "hardwaregain", fmt.Sprintf("%.3f", gain))
+	return p.setAttr(ctx, p.phyName, channel, "hardwaregain", fmt.Sprintf("%.3f", gain))
 }
 
 //

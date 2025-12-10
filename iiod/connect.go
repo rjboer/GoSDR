@@ -47,6 +47,20 @@ type Client struct {
 	healthWindow    time.Duration
 }
 
+// IIODError captures an error status code returned by the IIOD server.
+type IIODError struct {
+	Status  int
+	Message string
+}
+
+// Error implements the error interface.
+func (e *IIODError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("iiod error %d: %s", e.Status, e.Message)
+	}
+	return fmt.Sprintf("iiod error %d", e.Status)
+}
+
 // ErrWriteNotSupported indicates that the connected IIOD server does not allow attribute writes (e.g., protocol v0.25).
 var ErrWriteNotSupported = errors.New("iiod protocol does not support attribute writes")
 
@@ -369,7 +383,7 @@ func (c *Client) GetDeviceInfoWithContext(ctx context.Context) ([]DeviceInfo, er
 	return parseDeviceInfoFromXML(xmlContext)
 }
 
-// ListDevices returns the set of device identifiers known by the server.
+// ListDevices returns the set of device names known by the server.
 func (c *Client) ListDevices() ([]string, error) {
 	return c.ListDevicesWithContext(context.Background())
 }
@@ -449,11 +463,9 @@ func (c *Client) ListDevicesFromXML(ctx context.Context) ([]string, error) {
 				continue
 			}
 
-			for _, attr := range element.Attr {
-				if attr.Name.Local == "id" {
-					devices = append(devices, attr.Value)
-					break
-				}
+			identifier := deviceIdentifier(element.Attr)
+			if identifier != "" {
+				devices = append(devices, identifier)
 			}
 		}
 	}
@@ -553,7 +565,7 @@ func parseDeviceIndexAndAttrCodes(xmlContent string) (map[string]uint16, map[att
 			switch element.Name.Local {
 			case "device":
 				currentChannel = ""
-				currentDevice = attrValue(element.Attr, "id")
+				currentDevice = deviceIdentifier(element.Attr)
 				if currentDevice == "" {
 					continue
 				}
@@ -697,6 +709,13 @@ func attrValue(attrs []xml.Attr, local string) string {
 	}
 
 	return ""
+}
+
+func deviceIdentifier(attrs []xml.Attr) string {
+	if name := attrValue(attrs, "name"); name != "" {
+		return name
+	}
+	return attrValue(attrs, "id")
 }
 
 func (c *Client) ensureMetadataMaps(ctx context.Context) error {
@@ -1272,7 +1291,7 @@ func (c *Client) sendBinaryCommand(ctx context.Context, cmd string, payload []by
 		}
 		if status < 0 {
 			c.metrics.CommandsFailed.Add(1)
-			return nil, fmt.Errorf("iiod error %d (EINVAL)", status)
+			return nil, &IIODError{Status: status}
 		}
 		// Positive single number - legacy format, treat as successful response
 		c.metrics.LastCommandTime.Store(time.Now())
@@ -1315,9 +1334,9 @@ func (c *Client) sendBinaryCommand(ctx context.Context, cmd string, payload []by
 		c.metrics.CommandsFailed.Add(1)
 		msg := strings.TrimSpace(string(resp))
 		if msg != "" {
-			return nil, fmt.Errorf("iiod error %d: %s", status, msg)
+			return nil, &IIODError{Status: status, Message: msg}
 		}
-		return nil, fmt.Errorf("iiod error %d", status)
+		return nil, &IIODError{Status: status}
 	}
 
 	// Update metrics
