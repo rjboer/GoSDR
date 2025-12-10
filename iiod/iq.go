@@ -6,9 +6,9 @@ import (
 	"math"
 )
 
-// DeinterleaveIQ converts a raw interleaved signed 16-bit IQ buffer into
+// DeinterleaveIQBytes converts a raw interleaved signed 16-bit IQ buffer into
 // two float32 slices (I and Q). This matches the AD9361 16-bit LE IQ format.
-func DeinterleaveIQ(buf []byte) ([]float32, []float32, error) {
+func DeinterleaveIQBytes(buf []byte) ([]float32, []float32, error) {
 	if len(buf)%4 != 0 {
 		return nil, nil, errors.New("DeinterleaveIQ: buffer length not multiple of 4")
 	}
@@ -30,9 +30,9 @@ func DeinterleaveIQ(buf []byte) ([]float32, []float32, error) {
 	return I, Q, nil
 }
 
-// InterleaveIQ converts I/Q float32 sequences into interleaved I16 LE format,
+// InterleaveIQFloats converts I/Q float32 sequences into interleaved I16 LE format,
 // suitable for TX buffer writes for AD9361 / Pluto.
-func InterleaveIQ(I []float32, Q []float32) ([]byte, error) {
+func InterleaveIQFloats(I []float32, Q []float32) ([]byte, error) {
 	if len(I) != len(Q) {
 		return nil, errors.New("InterleaveIQ: I/Q length mismatch")
 	}

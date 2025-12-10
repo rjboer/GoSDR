@@ -2,6 +2,7 @@ package sdr
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -150,7 +151,12 @@ func (p *PlutoSDR) ReadIQ(ctx context.Context, buf *PlutoBuffer) ([]complex64, e
 		return nil, err
 	}
 
-	i16, q16, err := iiod.DeinterleaveIQ(raw)
+	samples, err := iiod.ParseInt16Samples(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse RX samples: %w", err)
+	}
+
+	i16, q16, err := iiod.DeinterleaveIQ(samples, 1, 0)
 	if err != nil {
 		return nil, fmt.Errorf("DeinterleaveIQ failed: %w", err)
 	}
@@ -185,9 +191,14 @@ func (p *PlutoSDR) WriteIQ(ctx context.Context, buf *PlutoBuffer, samples []comp
 		q16[n] = q
 	}
 
-	raw, err := iiod.InterleaveIQ(i16, q16)
+	interleaved, err := iiod.InterleaveIQ([][][]int16{{i16, q16}})
 	if err != nil {
 		return fmt.Errorf("InterleaveIQ failed: %w", err)
+	}
+
+	raw := make([]byte, len(interleaved)*2)
+	for idx, v := range interleaved {
+		binary.LittleEndian.PutUint16(raw[idx*2:idx*2+2], uint16(v))
 	}
 
 	return p.writeTX(ctx, buf, raw)
