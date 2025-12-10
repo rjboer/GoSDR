@@ -1,42 +1,37 @@
 package iiod
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"time"
 )
 
-// ----------------------------------------------------------------------
-// IIOD Binary Protocol Constants
-// ----------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////
+// Constants from iiod-responder.h
+////////////////////////////////////////////////////////////////////////////////////////
 
 const (
-	opVersion     = 0 // VERSION
-	opPrint       = 1 // PRINT (XML)
-	opListDevices = 2 // LIST_DEVICES
-	opOpenBuffer  = 3
-	opCloseBuffer = 4
-	opReadBuf     = 5
-	opWriteBuf    = 6
-	opAttr        = 7 // READ/WRITE ATTR
-	opDevAttr     = 8
+	OpVersion   = 0
+	OpContext   = 1
+	OpReadAttr  = 7
+	OpWriteAttr = 8
+
+	OpListDevices  = 11
+	OpListChannels = 12
+
+	OpBufferOpen  = 20
+	OpBufferRead  = 21
+	OpBufferWrite = 22
+	OpBufferClose = 23
 )
 
-// Response structure:
-//   uint32 status
-//   uint32 length
-//   <payload bytes>
-
-// Status 0 = OK
-// All others = error codes
-
-// ----------------------------------------------------------------------
-// BinaryBackend
-// ----------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////
+// Binary backend
+////////////////////////////////////////////////////////////////////////////////////////
 
 type BinaryBackend struct {
 	conn net.Conn
@@ -46,365 +41,261 @@ func NewBinaryBackend(conn net.Conn) *BinaryBackend {
 	return &BinaryBackend{conn: conn}
 }
 
-// ----------------------------------------------------------------------
-// Helper send/recv framing
-// ----------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////
+// Low-level helpers
+////////////////////////////////////////////////////////////////////////////////////////
 
-func (bb *BinaryBackend) send(cmd []byte) error {
-	_, err := bb.conn.Write(cmd)
+func (bb *BinaryBackend) writeCommand(op uint16, device uint16, code uint16, payload []byte) error {
+	var hdr [8]byte
+	binary.LittleEndian.PutUint16(hdr[0:2], op)
+	binary.LittleEndian.PutUint16(hdr[2:4], device)
+	binary.LittleEndian.PutUint16(hdr[4:6], code)
+	binary.LittleEndian.PutUint16(hdr[6:8], uint16(len(payload)))
+
+	_, err := bb.conn.Write(hdr[:])
+	if err != nil {
+		return fmt.Errorf("write command header: %w", err)
+	}
+
+	if len(payload) > 0 {
+		_, err = bb.conn.Write(payload)
+		if err != nil {
+			return fmt.Errorf("write command payload: %w", err)
+		}
+	}
+	return nil
+}
+
+func (bb *BinaryBackend) readReply(maxBytes int) ([]byte, error) {
+	var statusBuf [4]byte
+	_, err := io.ReadFull(bb.conn, statusBuf[:])
+	if err != nil {
+		return nil, fmt.Errorf("binary reply status read: %w", err)
+	}
+
+	status := binary.LittleEndian.Uint32(statusBuf[:])
+	if status != 0 {
+		return nil, fmt.Errorf("binary reply error status: %d", status)
+	}
+
+	if maxBytes == 0 {
+		return nil, nil
+	}
+
+	buf := make([]byte, maxBytes)
+	n, err := bb.conn.Read(buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("binary reply payload read: %w", err)
+	}
+
+	return buf[:n], nil
+}
+
+////////////////////////////////////////////////////////////////////////////////////////
+// Backend interface implementation
+////////////////////////////////////////////////////////////////////////////////////////
+
+// GetXMLContext is unsupported in binary mode (server must support PRINT fallback).
+func (bb *BinaryBackend) GetXMLContext(ctx context.Context) (string, error) {
+	return "", errors.New("binary backend cannot fetch XML context; router must fallback to text mode")
+}
+
+func (bb *BinaryBackend) ReadAttr(ctx context.Context, device string, channel string, attr string) (string, error) {
+
+	key := attr
+	if channel != "" {
+		key = channel + "/" + attr
+	}
+
+	// device index resolution is handled by connect.go before this backend is used
+	devID := uint16(0)
+
+	payload := []byte(key)
+
+	err := bb.writeCommand(OpReadAttr, devID, 0, payload)
+	if err != nil {
+		return "", err
+	}
+
+	bb.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	data, err := bb.readReply(4096)
+	if err != nil {
+		return "", err
+	}
+
+	return string(data), nil
+}
+
+func (bb *BinaryBackend) WriteAttr(ctx context.Context, device string, channel string, attr string, value string) error {
+
+	key := attr
+	if channel != "" {
+		key = channel + "/" + attr
+	}
+
+	payload := append([]byte(key+"="), []byte(value)...)
+
+	devID := uint16(0)
+
+	err := bb.writeCommand(OpWriteAttr, devID, 0, payload)
+	if err != nil {
+		return err
+	}
+
+	bb.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, err = bb.readReply(0)
 	return err
 }
 
-func (bb *BinaryBackend) recvResponse() (status uint32, payload []byte, err error) {
-	header := make([]byte, 8)
-	bb.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	if _, err = io.ReadFull(bb.conn, header); err != nil {
-		return 0, nil, fmt.Errorf("read header: %w", err)
-	}
-
-	status = binary.LittleEndian.Uint32(header[0:4])
-	length := binary.LittleEndian.Uint32(header[4:8])
-
-	if length > 32*1024*1024 {
-		return 0, nil, fmt.Errorf("payload too large: %d", length)
-	}
-
-	payload = make([]byte, length)
-	if _, err = io.ReadFull(bb.conn, payload); err != nil {
-		return 0, nil, fmt.Errorf("read payload: %w", err)
-	}
-
-	return status, payload, nil
-}
-
-// ----------------------------------------------------------------------
-// Probe – binary-first detection
-// ----------------------------------------------------------------------
-
-func (bb *BinaryBackend) Probe(ctx context.Context, conn net.Conn) error {
-	// Build “PRINT” command
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opPrint)) // op
-	binary.Write(&buf, binary.LittleEndian, uint32(0))       // reserved
-	binary.Write(&buf, binary.LittleEndian, uint32(0))       // dev
-	binary.Write(&buf, binary.LittleEndian, uint32(0))       // code
-	binary.Write(&buf, binary.LittleEndian, uint32(0))       // payload length
-
-	if err := bb.send(buf.Bytes()); err != nil {
-		return fmt.Errorf("binary probe send: %w", err)
-	}
-
-	status, payload, err := bb.recvResponse()
-	if err != nil {
-		return fmt.Errorf("binary probe recv: %w", err)
-	}
-
-	if status != 0 {
-		return fmt.Errorf("binary probe status=%d", status)
-	}
-
-	if !bytes.Contains(payload, []byte("<context")) {
-		return fmt.Errorf("binary PRINT did not return XML header")
-	}
-
-	return nil
-}
-
-// ----------------------------------------------------------------------
-// Get XML Context
-// ----------------------------------------------------------------------
-
-func (bb *BinaryBackend) GetXMLContext(ctx context.Context) ([]byte, error) {
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opPrint))
-	binary.Write(&buf, binary.LittleEndian, uint32(0)) // reserved
-	binary.Write(&buf, binary.LittleEndian, uint32(0)) // dev
-	binary.Write(&buf, binary.LittleEndian, uint32(0)) // code
-	binary.Write(&buf, binary.LittleEndian, uint32(0)) // no payload
-
-	if err := bb.send(buf.Bytes()); err != nil {
-		return nil, fmt.Errorf("send PRINT: %w", err)
-	}
-
-	status, payload, err := bb.recvResponse()
-	if err != nil {
-		return nil, err
-	}
-	if status != 0 {
-		return nil, fmt.Errorf("PRINT error: %d", status)
-	}
-
-	return payload, nil
-}
-
-// ----------------------------------------------------------------------
-// List Devices
-// ----------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////
+// Device & Channel listing
+////////////////////////////////////////////////////////////////////////////////////////
 
 func (bb *BinaryBackend) ListDevices(ctx context.Context) ([]string, error) {
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opListDevices))
-	binary.Write(&buf, binary.LittleEndian, uint32(0)) // reserved
-	binary.Write(&buf, binary.LittleEndian, uint32(0)) // dev
-	binary.Write(&buf, binary.LittleEndian, uint32(0)) // code
-	binary.Write(&buf, binary.LittleEndian, uint32(0)) // no payload
-
-	if err := bb.send(buf.Bytes()); err != nil {
-		return nil, err
-	}
-
-	status, payload, err := bb.recvResponse()
-	if err != nil {
-		return nil, err
-	}
-	if status != 0 {
-		return nil, fmt.Errorf("LIST_DEVICES failed: %d", status)
-	}
-
-	// Null-terminated names
-	parts := bytes.Split(payload, []byte{0})
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		s := string(bytes.TrimSpace(p))
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-
-	return out, nil
-}
-
-// ----------------------------------------------------------------------
-// GetChannels – binary LIST_DEVICES does NOT include channels.
-// Must parse XML.
-//
-// Binary protocol *never* exposes channel lists.
-// ----------------------------------------------------------------------
-
-func (bb *BinaryBackend) GetChannels(ctx context.Context, dev string) ([]string, error) {
-	xmlBytes, err := bb.GetXMLContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	parsed, err := ParseIIODXML(xmlBytes)
+	err := bb.writeCommand(OpListDevices, 0, 0, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, d := range parsed.Device {
-		if d.ID == dev {
-			channels := make([]string, 0, len(d.Channel))
-			for _, ch := range d.Channel {
-				channels = append(channels, ch.ID)
-			}
-			return channels, nil
-		}
-	}
-	return nil, fmt.Errorf("device %q not found in XML", dev)
-}
-
-// ----------------------------------------------------------------------
-// Attribute Read/Write
-//
-// op=7 (ATTR)
-// payload format:
-//   <attr string>  (null terminated)
-// ----------------------------------------------------------------------
-
-func (bb *BinaryBackend) ReadAttr(ctx context.Context, dev, ch, attr string) (string, error) {
-	payload := bb.buildAttrPayload(dev, ch, attr, "")
-
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opAttr))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(len(payload)))
-	buf.Write(payload)
-
-	if err := bb.send(buf.Bytes()); err != nil {
-		return "", err
-	}
-	status, out, err := bb.recvResponse()
+	bb.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	data, err := bb.readReply(4096)
 	if err != nil {
-		return "", err
-	}
-	if status != 0 {
-		return "", fmt.Errorf("ATTR read status=%d", status)
+		return nil, err
 	}
 
-	return string(out), nil
+	if len(data) == 0 {
+		return []string{}, nil
+	}
+
+	return splitNullTerminated(data), nil
 }
 
-func (bb *BinaryBackend) WriteAttr(ctx context.Context, dev, ch, attr, value string) error {
-	payload := bb.buildAttrPayload(dev, ch, attr, value)
-
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opAttr))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(len(payload)))
-	buf.Write(payload)
-
-	if err := bb.send(buf.Bytes()); err != nil {
-		return err
-	}
-
-	status, _, err := bb.recvResponse()
+func (bb *BinaryBackend) GetChannels(ctx context.Context, device string) ([]string, error) {
+	err := bb.writeCommand(OpListChannels, 0, 0, []byte(device))
 	if err != nil {
-		return err
-	}
-	if status != 0 {
-		return fmt.Errorf("ATTR write status=%d", status)
+		return nil, err
 	}
 
-	return nil
-}
-
-// ----------------------------------------------------------------------
-// Attribute Payload Builder
-// (device \0 channel \0 attr \0 [value\0])
-// ----------------------------------------------------------------------
-
-func (bb *BinaryBackend) buildAttrPayload(dev, ch, attr, value string) []byte {
-	buf := bytes.NewBuffer(nil)
-	buf.WriteString(dev)
-	buf.WriteByte(0)
-	if ch != "" {
-		buf.WriteString(ch)
-	} else {
-		buf.WriteString("-")
-	}
-	buf.WriteByte(0)
-	buf.WriteString(attr)
-	buf.WriteByte(0)
-	if value != "" {
-		buf.WriteString(value)
-		buf.WriteByte(0)
-	}
-	return buf.Bytes()
-}
-
-// ----------------------------------------------------------------------
-// Buffer Handling
-// ----------------------------------------------------------------------
-
-func (bb *BinaryBackend) OpenBuffer(ctx context.Context, dev string, samples int, cyclic bool) (int, error) {
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opOpenBuffer))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-
-	// payload = sample count + cyclic flag + dev string
-	payload := bytes.NewBuffer(nil)
-	binary.Write(payload, binary.LittleEndian, uint32(samples))
-	binary.Write(payload, binary.LittleEndian, uint32(boolToUint(cyclic)))
-	payload.WriteString(dev)
-	payload.WriteByte(0)
-
-	binary.Write(&buf, binary.LittleEndian, uint32(payload.Len()))
-	buf.Write(payload.Bytes())
-
-	if err := bb.send(buf.Bytes()); err != nil {
-		return 0, err
-	}
-	status, out, err := bb.recvResponse()
+	bb.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	data, err := bb.readReply(4096)
 	if err != nil {
-		return 0, err
-	}
-	if status != 0 {
-		return 0, fmt.Errorf("OPEN_BUFFER status=%d", status)
+		return nil, err
 	}
 
-	if len(out) < 4 {
-		return 0, fmt.Errorf("invalid buffer id response")
+	if len(data) == 0 {
+		return []string{}, nil
 	}
 
-	bufID := binary.LittleEndian.Uint32(out[0:4])
-	return int(bufID), nil
+	return splitNullTerminated(data), nil
 }
 
-func (bb *BinaryBackend) ReadBuffer(ctx context.Context, bufID int, p []byte) (int, error) {
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opReadBuf))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(bufID))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
+////////////////////////////////////////////////////////////////////////////////////////
+// Buffer operations
+////////////////////////////////////////////////////////////////////////////////////////
 
-	if err := bb.send(buf.Bytes()); err != nil {
-		return 0, err
-	}
-	status, payload, err := bb.recvResponse()
+func (bb *BinaryBackend) OpenBuffer(ctx context.Context, device string, samples int) (int, error) {
+	payload := []byte(fmt.Sprintf("%s:%d", device, samples))
+
+	err := bb.writeCommand(OpBufferOpen, 0, 0, payload)
 	if err != nil {
-		return 0, err
-	}
-	if status != 0 {
-		return 0, fmt.Errorf("READBUF status=%d", status)
+		return -1, err
 	}
 
-	n := copy(p, payload)
-	return n, nil
+	bb.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	data, err := bb.readReply(64)
+	if err != nil {
+		return -1, err
+	}
+
+	var id int
+	if _, err := fmt.Sscanf(string(data), "%d", &id); err != nil {
+		return -1, fmt.Errorf("buffer open: malformed reply: %q", string(data))
+	}
+
+	return id, nil
+}
+
+func (bb *BinaryBackend) ReadBuffer(ctx context.Context, bufID int, nBytes int) ([]byte, error) {
+
+	payload := []byte(fmt.Sprintf("%d:%d", bufID, nBytes))
+
+	err := bb.writeCommand(OpBufferRead, 0, 0, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	bb.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	data, err := bb.readReply(nBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return data, nil
 }
 
 func (bb *BinaryBackend) WriteBuffer(ctx context.Context, bufID int, data []byte) (int, error) {
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opWriteBuf))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(bufID))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(len(data)))
-	buf.Write(data)
 
-	if err := bb.send(buf.Bytes()); err != nil {
-		return 0, err
-	}
-	status, _, err := bb.recvResponse()
+	header := fmt.Sprintf("%d:%d:", bufID, len(data))
+	payload := append([]byte(header), data...)
+
+	err := bb.writeCommand(OpBufferWrite, 0, 0, payload)
 	if err != nil {
 		return 0, err
 	}
-	if status != 0 {
-		return 0, fmt.Errorf("WRITEBUF status=%d", status)
+
+	bb.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	reply, err := bb.readReply(64)
+	if err != nil {
+		return 0, err
 	}
 
-	return len(data), nil
+	var written int
+	fmt.Sscanf(string(reply), "%d", &written)
+	return written, nil
 }
 
 func (bb *BinaryBackend) CloseBuffer(ctx context.Context, bufID int) error {
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint32(opCloseBuffer))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(bufID))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
-	binary.Write(&buf, binary.LittleEndian, uint32(0))
 
-	if err := bb.send(buf.Bytes()); err != nil {
-		return err
-	}
-	status, _, err := bb.recvResponse()
+	payload := []byte(fmt.Sprintf("%d", bufID))
+
+	err := bb.writeCommand(OpBufferClose, 0, 0, payload)
 	if err != nil {
 		return err
 	}
-	if status != 0 {
-		return fmt.Errorf("CLOSE_BUFFER status=%d", status)
-	}
 
-	return nil
+	bb.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, err = bb.readReply(0)
+	return err
 }
 
-// ----------------------------------------------------------------------
-// Close
-// ----------------------------------------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////
+// Shutdown
+////////////////////////////////////////////////////////////////////////////////////////
 
 func (bb *BinaryBackend) Close() error {
-	return nil
+	return bb.conn.Close()
 }
 
-func boolToUint(b bool) uint32 {
-	if b {
-		return 1
+////////////////////////////////////////////////////////////////////////////////////////
+// Utility helpers
+////////////////////////////////////////////////////////////////////////////////////////
+
+func splitNullTerminated(data []byte) []string {
+	var out []string
+	start := 0
+
+	for i, b := range data {
+		if b == 0 {
+			if i > start {
+				out = append(out, string(data[start:i]))
+			}
+			start = i + 1
+		}
 	}
-	return 0
+
+	if start < len(data) {
+		out = append(out, string(data[start:]))
+	}
+
+	return out
 }

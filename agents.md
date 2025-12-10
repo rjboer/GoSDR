@@ -51,8 +51,27 @@ The goal is to reproduce this behaviour in **pure Go**, with a clean architectur
 - Concurrency: use goroutines/channels where it simplifies SDR read / tracking loop, but avoid over-engineering.
 - External libs: keep dependencies minimal. Use well-maintained DSP libs where necessary (FFT), but keep the abstraction so they can be swapped.
 - Platform targets: at least Linux/amd64; preferable to keep code portable to Windows/macOS where possible.
+- iiod/Client.go defines the **central IIOD client structure**, including:
+- transport routing state (text, binary, legacy)
+- connection sockets
+- XML metadata cache
+- device + attribute maps
+- buffer capabilities
+- debug logging
+- SSH fallback paths (optional)
+- shared helper utilities
+
+All IIOD-related data and capabilities must be exposed through this Client.go
+No external package may create alternative IIOD-like state objects.
+
+
 
 ---
+
+
+
+
+
 
 ## Proposed Architecture
 
@@ -74,8 +93,27 @@ The goal is to reproduce this behaviour in **pure Go**, with a clean architectur
 - `internal/telemetry/` (optional)
   - `stdout.go` — print updates to console.
   - `http.go` — simple HTTP/WebSocket server for live plotting.
+The IIOD subsystem is fully abstracted behind:
+
+- connect.go → selects transport (binary first, then text fallback)
+- textbased.go → legacy PRINT/LIST/READ/WRITE protocol
+- binarybased.go → modern libiio binary command protocol
+- xml.go → unmarshal, normalize, enrich XML metadata
+- buffer.go → unified streaming buffer API with debug logging
+
+Goal:
+The SDR backends (e.g. PlutoSDR) must never know whether the
+underlying transport is text or binary. They call Client methods only.
+
 
 You may adjust package names as needed, but **keep DSP logic separated from SDR and I/O**.
+
+Transport detection:
+    1. Try binary VERSION
+    2. If binary fails → use text PRINT
+    3. If text succeeds → mark as legacy server
+
+
 
 ---
 
@@ -311,128 +349,3 @@ Follow these steps to build the system incrementally:
 ---
 
 ## Reference Information
-
-### Key Formulas
-
-**Steering angle from phase delay:**
-
-```
-theta = arcsin(c * phase_rad / (2 * pi * f * d))
-```
-
-Where:
-- `c` = speed of light (3e8 m/s)
-- `phase_rad` = phase delay in radians
-- `f` = RF carrier frequency (Hz)
-- `d` = antenna spacing (meters)
-
-**Antenna spacing:**
-
-```
-d = d_wavelength * (c / f)
-```
-
-Typically `d_wavelength = 0.5` (half wavelength spacing)
-
-**dBFS conversion:**
-
-```
-dBFS = 20 * log10(abs(fft_value) / 2^11)
-```
-
-For a 12-bit signed ADC (Pluto AD9361)
-
-**Monopulse error:**
-
-```
-error = angle(correlate(sum_fft[bins], delta_fft[bins]))
-```
-
-The sign of this error drives the tracking loop update.
-
-### Python → Go Translation Notes
-
-| Python | Go Equivalent |
-|--------|---------------|
-| `np.exp(1j * phase)` | `cmplx.Exp(complex(0, phase))` |
-| `np.deg2rad(x)` | `x * math.Pi / 180` |
-| `np.rad2deg(x)` | `x * 180 / math.Pi` |
-| `np.fft.fft(y)` | Use `gonum` or `go-dsp/fft` |
-| `np.fft.fftshift(s)` | Manual shift: `append(s[n/2:], s[:n/2]...)` |
-| `np.hamming(n)` | Implement or use DSP library |
-| `np.correlate(a, b, 'valid')` | Manual correlation or use DSP library |
-| `np.angle(z)` | `cmplx.Phase(z)` |
-| `np.sign(x)` | `math.Copysign(1, x)` |
-
-### Configuration Example
-
-```go
-type Config struct {
-    SampleRate       float64
-    RxLO             float64
-    TxLO             float64
-    ToneOffset       float64  // fc0
-    RxGain0          int
-    RxGain1          int
-    TxGain           int
-    NumSamples       int
-    SpacingWavelength float64
-    TrackingLength   int
-    PhaseStep        float64  // degrees per tracking update
-    SDRBackend       string   // "mock" or "pluto"
-    SDRURI           string   // e.g. "ip:192.168.2.1"
-}
-```
-
----
-
-## Development Tips
-
-1. **Start simple**: Get DSP working with unit tests before integrating SDR
-2. **Use MockSDR extensively**: Much faster iteration than real hardware
-3. **Log liberally**: Print intermediate values during development
-4. **Visualize**: Even simple stdout plots help debug tracking behavior
-5. **Keep interfaces small**: Easy to test, easy to swap implementations
-6. **Avoid premature optimization**: Clarity first, performance later
-7. **Document assumptions**: Note any differences from Python implementation
-
----
-
-## Success Criteria
-
-The port is successful when:
-
-- [ ] All DSP functions have unit tests and pass
-- [ ] MockSDR generates realistic two-channel IQ data
-- [ ] Coarse scan finds correct DOA from mock data
-- [ ] Tracking loop converges and follows angle changes
-- [ ] CLI runs end-to-end with configurable parameters
-- [ ] Telemetry shows angle vs time (stdout or web)
-- [ ] Code is idiomatic Go with clear package boundaries
-- [ ] (Optional) Real Pluto hardware integration works
-
----
-
-## Next Steps
-
-Once you have this working:
-
-1. **Optimize performance**: Profile and optimize hot paths (FFT, correlation)
-2. **Add more SDR backends**: Support other AD9361 platforms (FMCOMMS, etc.)
-3. **Enhance visualization**: Add spectrum plots, sum/delta patterns
-4. **Add calibration**: Phase calibration, gain mismatch correction
-5. **Multi-target tracking**: Extend to track multiple signals
-6. **Record/replay**: Save IQ data for offline analysis
-
----
-
-## Questions?
-
-If you encounter issues or need clarification:
-
-- Check the Python reference implementation in `python.py`
-- Review DSP theory: monopulse tracking, beamforming, FFT
-- Consult AD9361 documentation for hardware details
-- Test with MockSDR first to isolate DSP vs hardware issues
-
-Good luck with the port! 🚀

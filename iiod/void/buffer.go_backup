@@ -1,0 +1,266 @@
+package iiod
+
+import (
+	"context"
+	"encoding/hex"
+	"fmt"
+)
+
+// ============================================================================
+//  Low-Level IIOD Buffer Wrapper (Debug-Enhanced)
+// ============================================================================
+
+type Buffer struct {
+	client *Client
+	handle *BufferHandle
+	device string
+	size   int
+	cyclic bool
+}
+
+// logDebug logs only if client debug mode is enabled.
+func (b *Buffer) logDebug(format string, args ...interface{}) {
+	if b != nil && b.client != nil && b.client.debug {
+		prefix := fmt.Sprintf("[IIOD BUFFER DEBUG] dev=%s cyc=%v size=%d: ",
+			b.device, b.cyclic, b.size)
+		fmt.Printf(prefix+format+"\n", args...)
+	}
+}
+
+func (c *Client) logDebug(format string, args ...interface{}) {
+	if c != nil && c.debug {
+		prefix := "[IIOD CLIENT DEBUG] "
+		fmt.Printf(prefix+format+"\n", args...)
+	}
+}
+
+// *Open* a device buffer ------------------------------------------------------
+func (c *Client) OpenDeviceBuffer(ctx context.Context, device string, size int, cyclic bool) (*Buffer, error) {
+	if device == "" {
+		return nil, fmt.Errorf("device name is required")
+	}
+	if size <= 0 {
+		return nil, fmt.Errorf("buffer size must be positive")
+	}
+
+	flags := 0
+	if cyclic {
+		flags |= BufferFlagCyclic
+	}
+
+	c.logDebug("OpenDeviceBuffer(%s, size=%d, cyclic=%v) BEGIN", device, size, cyclic)
+
+	h, err := c.OpenBufferWithContext(ctx, device, size, flags)
+	if err != nil {
+		c.logDebug("OpenDeviceBuffer FAILED: %v", err)
+		return nil, fmt.Errorf("OpenBuffer failed for %s: %w", device, err)
+	}
+
+	buf := &Buffer{
+		client: c,
+		handle: h,
+		device: device,
+		size:   size,
+		cyclic: cyclic,
+	}
+
+	c.logDebug("OpenDeviceBuffer OK: handle=%v", h)
+	return buf, nil
+}
+
+// *Read* from RX buffer -------------------------------------------------------
+func (b *Buffer) Read(ctx context.Context) ([]byte, error) {
+	b.logDebug("Read() BEGIN")
+
+	if b.handle == nil {
+		return nil, fmt.Errorf("buffer not open")
+	}
+
+	data, err := b.client.ReadBufferWithContext(ctx, b.handle)
+	if err != nil {
+		b.logDebug("ReadBufferWithContext FAILED: %v", err)
+		return nil, fmt.Errorf("ReadBuffer failed: %w", err)
+	}
+	if len(data) == 0 {
+		b.logDebug("Read returned EMPTY buffer")
+		return nil, fmt.Errorf("empty buffer returned")
+	}
+
+	// Log hex preview (first 32 bytes)
+	preview := data
+	if len(preview) > 32 {
+		preview = preview[:32]
+	}
+	b.logDebug("Read OK: %d bytes (preview: %s)", len(data), hex.EncodeToString(preview))
+
+	return data, nil
+}
+
+// *Write* to TX buffer --------------------------------------------------------
+func (b *Buffer) Write(ctx context.Context, data []byte) error {
+	b.logDebug("Write(%d bytes) BEGIN", len(data))
+
+	if b.handle == nil {
+		return fmt.Errorf("buffer not open")
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("no data to write")
+	}
+
+	preview := data
+	if len(preview) > 32 {
+		preview = preview[:32]
+	}
+	b.logDebug("TX preview: %s", hex.EncodeToString(preview))
+
+	err := b.client.WriteBufferWithContext(ctx, b.handle, data)
+	if err != nil {
+		b.logDebug("WriteBufferWithContext FAILED: %v", err)
+		return fmt.Errorf("WriteBuffer failed: %w", err)
+	}
+
+	b.logDebug("Write OK")
+	return nil
+}
+
+// *Close* buffer --------------------------------------------------------------
+func (b *Buffer) Close(ctx context.Context) error {
+	b.logDebug("Close() BEGIN")
+
+	if b.handle == nil {
+		return nil
+	}
+	err := b.client.CloseBufferWithContext(ctx, b.handle)
+	if err != nil {
+		b.logDebug("Close FAILED: %v", err)
+		return err
+	}
+	b.logDebug("Close OK")
+
+	b.handle = nil
+	return nil
+}
+
+// ============================================================================
+//  High-Level Streaming API: RX Stream
+// ============================================================================
+
+type RXStream struct {
+	buf         *Buffer
+	frameBytes  int
+	sampleBytes int
+}
+
+// OpenRXStream:  samples = number of IQ samples per read
+//
+//	bytesPerSample = size of one sample per I or Q (usually 2 bytes)
+func (c *Client) OpenRXStream(
+	ctx context.Context,
+	device string,
+	samples int,
+	bytesPerSample int,
+) (*RXStream, error) {
+
+	if samples <= 0 {
+		return nil, fmt.Errorf("samples must be > 0")
+	}
+	if bytesPerSample <= 0 {
+		return nil, fmt.Errorf("bytesPerSample must be > 0")
+	}
+
+	frameBytes := samples * bytesPerSample * 2 // I and Q
+
+	c.logDebug("OpenRXStream(%s, %d samples, %d bytes/sample) frameBytes=%d",
+		device, samples, bytesPerSample, frameBytes)
+
+	// Open RX buffer
+	buf, err := c.OpenDeviceBuffer(ctx, device, frameBytes, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RXStream{
+		buf:         buf,
+		frameBytes:  frameBytes,
+		sampleBytes: bytesPerSample,
+	}, nil
+}
+
+// NextIQ returns a frame of IQ as []complex64
+func (s *RXStream) NextIQ(ctx context.Context) ([]complex64, error) {
+	if s == nil || s.buf == nil {
+		return nil, fmt.Errorf("RXStream not initialized")
+	}
+
+	raw, err := s.buf.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	iq, err := DeinterleaveIQ(raw, s.sampleBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return iq, nil
+}
+
+func (s *RXStream) Close(ctx context.Context) error {
+	if s == nil || s.buf == nil {
+		return nil
+	}
+	return s.buf.Close(ctx)
+}
+
+// ============================================================================
+//  High-Level Streaming API: TX Stream
+// ============================================================================
+
+type TXStream struct {
+	buf         *Buffer
+	sampleBytes int
+}
+
+func (c *Client) OpenTXStream(
+	ctx context.Context,
+	device string,
+	bytesPerSample int,
+	cyclic bool,
+) (*TXStream, error) {
+
+	if bytesPerSample <= 0 {
+		return nil, fmt.Errorf("bytesPerSample must be > 0")
+	}
+
+	// TX buffers don't require predefined size; use 4096 or larger
+	buf, err := c.OpenDeviceBuffer(ctx, device, 4096, cyclic)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TXStream{
+		buf:         buf,
+		sampleBytes: bytesPerSample,
+	}, nil
+}
+
+// SendIQ writes IQ samples to the TX buffer
+func (s *TXStream) SendIQ(ctx context.Context, iq []complex64) error {
+	if s == nil || s.buf == nil {
+		return fmt.Errorf("TXStream not initialized")
+	}
+
+	raw, err := InterleaveIQ(iq, s.sampleBytes)
+	if err != nil {
+		return err
+	}
+
+	return s.buf.Write(ctx, raw)
+}
+
+func (s *TXStream) Close(ctx context.Context) error {
+	if s == nil || s.buf == nil {
+		return nil
+	}
+	return s.buf.Close(ctx)
+}

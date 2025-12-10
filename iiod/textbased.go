@@ -2,7 +2,6 @@ package iiod
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,240 +11,270 @@ import (
 	"time"
 )
 
-// ----------------------------------------------------------------------
-// TextBackend implements Backend for legacy Pluto-style IIOD
-// ----------------------------------------------------------------------
-
+// TextBackend implements the IIOD text protocol.
+// This backend is used when binary probing fails or when explicitly forced.
 type TextBackend struct {
 	conn   net.Conn
 	reader *bufio.Reader
+	writer *bufio.Writer
 }
 
+// NewTextBackend attaches a TCP connection to a new TextBackend.
 func NewTextBackend(conn net.Conn) *TextBackend {
 	return &TextBackend{
 		conn:   conn,
 		reader: bufio.NewReader(conn),
+		writer: bufio.NewWriter(conn),
 	}
 }
 
-// ----------------------------------------------------------------------
-// Probe for Pluto IIOD text mode
-// ----------------------------------------------------------------------
-
-func (tb *TextBackend) Probe(ctx context.Context, conn net.Conn) error {
-	// Pluto accepts "PRINT\n" and replies with XML
-	if err := tb.sendLine("PRINT"); err != nil {
-		return fmt.Errorf("text probe PRINT failed: %w", err)
+// ensureNewline ensures commands sent to IIOD always end with \n.
+func ensureNewline(s string) string {
+	if !strings.HasSuffix(s, "\n") {
+		return s + "\n"
 	}
-
-	// Pluto responds with XML header "<context"
-	line, err := tb.readUntilStartXML()
-	if err != nil {
-		return fmt.Errorf("text probe read failed: %w", err)
-	}
-
-	if !bytes.Contains(line, []byte("<context")) {
-		return fmt.Errorf("text probe invalid response (expected <context>)")
-	}
-
-	return nil
+	return s
 }
 
-// ----------------------------------------------------------------------
-// Helper: send a single line
-// ----------------------------------------------------------------------
+// readLineStrict reads a full line and trims \r\n.
+func (tb *TextBackend) readLineStrict(ctx context.Context) (string, error) {
+	tb.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
-func (tb *TextBackend) sendLine(s string) error {
-	_, err := io.WriteString(tb.conn, s+"\n")
-	return err
-}
-
-// ----------------------------------------------------------------------
-// Helper: read until the start of XML
-// ----------------------------------------------------------------------
-
-func (tb *TextBackend) readUntilStartXML() ([]byte, error) {
-	tb.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-
-	var buf bytes.Buffer
-	for {
-		line, err := tb.reader.ReadBytes('\n')
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(line)
-
-		if bytes.Contains(line, []byte("<context")) {
-			return buf.Bytes(), nil
-		}
-	}
-}
-
-// ----------------------------------------------------------------------
-// Get XML Context
-// ----------------------------------------------------------------------
-
-func (tb *TextBackend) GetXMLContext(ctx context.Context) ([]byte, error) {
-	if err := tb.sendLine("PRINT"); err != nil {
-		return nil, fmt.Errorf("text PRINT failed: %w", err)
-	}
-
-	// Capture until "</context>"
-	var out bytes.Buffer
-
-	for {
-		tb.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		line, err := tb.reader.ReadBytes('\n')
-		if err != nil {
-			return nil, fmt.Errorf("reading XML: %w", err)
-		}
-
-		out.Write(line)
-
-		if bytes.Contains(line, []byte("</context>")) {
-			break
-		}
-	}
-
-	return out.Bytes(), nil
-}
-
-// ----------------------------------------------------------------------
-// List Devices (text mode does not provide this directly)
-// Use XML context as the only valid source
-// ----------------------------------------------------------------------
-
-func (tb *TextBackend) ListDevices(ctx context.Context) ([]string, error) {
-	xmlBytes, err := tb.GetXMLContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	ctxParsed, err := ParseIIODXML(xmlBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse XML: %w", err)
-	}
-
-	var devs []string
-	for _, d := range ctxParsed.Device {
-		devs = append(devs, d.ID)
-	}
-	return devs, nil
-}
-
-// ----------------------------------------------------------------------
-// Get Channels (text mode => parse from XML)
-// ----------------------------------------------------------------------
-
-func (tb *TextBackend) GetChannels(ctx context.Context, dev string) ([]string, error) {
-	xmlBytes, err := tb.GetXMLContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	ctxParsed, err := ParseIIODXML(xmlBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse XML: %w", err)
-	}
-
-	for _, d := range ctxParsed.Device {
-		if d.ID == dev {
-			channels := make([]string, 0, len(d.Channel))
-			for _, ch := range d.Channel {
-				channels = append(channels, ch.ID)
-			}
-			return channels, nil
-		}
-	}
-
-	return nil, fmt.Errorf("device %q not found", dev)
-}
-
-// ----------------------------------------------------------------------
-// Attribute Access: READ
-// Syntax per Pluto:
-//   GET <device> <channel|-> <attr>
-// Response = single line containing value
-// ----------------------------------------------------------------------
-
-func (tb *TextBackend) ReadAttr(ctx context.Context, dev, ch, attr string) (string, error) {
-	target := ch
-	if target == "" {
-		target = "-"
-	}
-
-	cmd := fmt.Sprintf("GET %s %s %s", dev, target, attr)
-	if err := tb.sendLine(cmd); err != nil {
-		return "", err
-	}
-
-	tb.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	line, err := tb.reader.ReadString('\n')
 	if err != nil {
-		return "", fmt.Errorf("read GET: %w", err)
+		return "", err
 	}
-
 	return strings.TrimSpace(line), nil
 }
 
-// ----------------------------------------------------------------------
-// Attribute Access: WRITE
-// Syntax per Pluto:
-//   SET <device> <channel|-> <attr> <value>
-// Response: "OK"
-// ----------------------------------------------------------------------
+// readUntilEOF reads all available data until the server closes the stream.
+// Used mainly for PRINT output, which ends with EOF.
+func (tb *TextBackend) readUntilEOF(ctx context.Context) (string, error) {
+	var sb strings.Builder
+	buf := make([]byte, 4096)
 
-func (tb *TextBackend) WriteAttr(ctx context.Context, dev, ch, attr, value string) error {
-	target := ch
-	if target == "" {
-		target = "-"
+	for {
+		n, err := tb.reader.Read(buf)
+		if n > 0 {
+			sb.Write(buf[:n])
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return sb.String(), nil
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Backend interface implementation
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+func (tb *TextBackend) GetXMLContext(ctx context.Context) (string, error) {
+	// PlutoSDR uses PRINT <device> <attribute> — but "PRINT" alone dumps full XML
+	cmd := "PRINT"
+	_, err := tb.writer.WriteString(ensureNewline(cmd))
+	if err != nil {
+		return "", err
+	}
+	tb.writer.Flush()
+
+	// PRINT ends with the server closing the stream for this response
+	xmlStr, err := tb.readUntilEOF(ctx)
+	if err != nil {
+		return "", fmt.Errorf("PRINT read failed: %w", err)
 	}
 
-	cmd := fmt.Sprintf("SET %s %s %s %s", dev, target, attr, value)
-	if err := tb.sendLine(cmd); err != nil {
+	// Some servers include leading garbage or BOM; trim until we hit '<'
+	idx := strings.Index(xmlStr, "<")
+	if idx > 0 {
+		xmlStr = xmlStr[idx:]
+	}
+	return xmlStr, nil
+}
+
+func (tb *TextBackend) ReadAttr(ctx context.Context, device string, channel string, attr string) (string, error) {
+	var cmd string
+
+	if channel == "" {
+		cmd = fmt.Sprintf("READ %s %s", device, attr)
+	} else {
+		cmd = fmt.Sprintf("READ %s %s %s", device, channel, attr)
+	}
+
+	_, err := tb.writer.WriteString(ensureNewline(cmd))
+	if err != nil {
+		return "", err
+	}
+	tb.writer.Flush()
+
+	// Reply is exactly 1 line containing the attribute value.
+	line, err := tb.readLineStrict(ctx)
+	if err != nil {
+		return "", err
+	}
+	return line, nil
+}
+
+func (tb *TextBackend) WriteAttr(ctx context.Context, device string, channel string, attr string, value string) error {
+	var cmd string
+
+	if channel == "" {
+		cmd = fmt.Sprintf("WRITE %s %s %s", device, attr, value)
+	} else {
+		cmd = fmt.Sprintf("WRITE %s %s %s %s", device, channel, attr, value)
+	}
+
+	_, err := tb.writer.WriteString(ensureNewline(cmd))
+	if err != nil {
+		return err
+	}
+	tb.writer.Flush()
+
+	// Expect "OK"
+	reply, err := tb.readLineStrict(ctx)
+	if err != nil {
 		return err
 	}
 
-	tb.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp, err := tb.reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("write SET: %w", err)
+	if reply != "OK" {
+		return fmt.Errorf("text WRITE failed: %s", reply)
 	}
-
-	if !strings.HasPrefix(resp, "OK") {
-		return fmt.Errorf("SET returned error: %s", strings.TrimSpace(resp))
-	}
-
 	return nil
 }
 
-// ----------------------------------------------------------------------
-// Buffers (Pluto text protocol uses sysfs buffer commands)
-// Minimal implementation using XML names
-// ----------------------------------------------------------------------
+func (tb *TextBackend) ListDevices(ctx context.Context) ([]string, error) {
+	_, err := tb.writer.WriteString("LISTDEVICES\n")
+	if err != nil {
+		return nil, err
+	}
+	tb.writer.Flush()
 
-func (tb *TextBackend) OpenBuffer(ctx context.Context, dev string, samples int, cyclic bool) (int, error) {
-	// Pluto has no real “buffer IDs” in text API.
-	// We treat text buffers as ID = 0 always.
-	return 0, nil
+	line, err := tb.readLineStrict(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if line == "" {
+		return []string{}, nil
+	}
+
+	return strings.Fields(line), nil
 }
 
-func (tb *TextBackend) ReadBuffer(ctx context.Context, bufID int, p []byte) (int, error) {
-	return 0, errors.New("Pluto text mode does not support remote buffer read")
+func (tb *TextBackend) GetChannels(ctx context.Context, device string) ([]string, error) {
+	_, err := tb.writer.WriteString(fmt.Sprintf("LISTCHANNELS %s\n", device))
+	if err != nil {
+		return nil, err
+	}
+	tb.writer.Flush()
+
+	line, err := tb.readLineStrict(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if line == "" {
+		return []string{}, nil
+	}
+	return strings.Fields(line), nil
 }
 
-func (tb *TextBackend) WriteBuffer(ctx context.Context, bufID int, p []byte) (int, error) {
-	return 0, errors.New("Pluto text mode does not support remote buffer write")
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Buffer operations (Pluto only supports limited text buffer features)
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+func (tb *TextBackend) OpenBuffer(ctx context.Context, device string, samples int) (int, error) {
+	cmd := fmt.Sprintf("BUFFER_OPEN %s %d", device, samples)
+	_, err := tb.writer.WriteString(ensureNewline(cmd))
+	if err != nil {
+		return -1, err
+	}
+	tb.writer.Flush()
+
+	reply, err := tb.readLineStrict(ctx)
+	if err != nil {
+		return -1, err
+	}
+
+	var id int
+	_, err = fmt.Sscanf(reply, "%d", &id)
+	if err != nil {
+		return -1, fmt.Errorf("invalid buffer id: %s", reply)
+	}
+
+	return id, nil
+}
+
+func (tb *TextBackend) ReadBuffer(ctx context.Context, bufID int, nBytes int) ([]byte, error) {
+	cmd := fmt.Sprintf("BUFFER_READ %d %d", bufID, nBytes)
+	_, err := tb.writer.WriteString(ensureNewline(cmd))
+	if err != nil {
+		return nil, err
+	}
+	tb.writer.Flush()
+
+	// IIOD text streaming format = binary payload followed by newline
+	tb.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	raw := make([]byte, nBytes)
+	_, err = io.ReadFull(tb.reader, raw)
+	if err != nil {
+		return nil, err
+	}
+
+	// Consume trailing newline
+	tb.reader.ReadString('\n')
+	return raw, nil
+}
+
+func (tb *TextBackend) WriteBuffer(ctx context.Context, bufID int, data []byte) (int, error) {
+	cmd := fmt.Sprintf("BUFFER_WRITE %d %d", bufID, len(data))
+	_, err := tb.writer.WriteString(ensureNewline(cmd))
+	if err != nil {
+		return 0, err
+	}
+	tb.writer.Flush()
+
+	_, err = tb.writer.Write(data)
+	if err != nil {
+		return 0, err
+	}
+	tb.writer.WriteByte('\n')
+	tb.writer.Flush()
+
+	reply, err := tb.readLineStrict(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var written int
+	fmt.Sscanf(reply, "%d", &written)
+	return written, nil
 }
 
 func (tb *TextBackend) CloseBuffer(ctx context.Context, bufID int) error {
+	cmd := fmt.Sprintf("BUFFER_CLOSE %d", bufID)
+	_, err := tb.writer.WriteString(ensureNewline(cmd))
+	if err != nil {
+		return err
+	}
+	tb.writer.Flush()
+
+	reply, err := tb.readLineStrict(ctx)
+	if err != nil {
+		return err
+	}
+	if reply != "OK" {
+		return fmt.Errorf("close buffer: %s", reply)
+	}
 	return nil
 }
 
-// ----------------------------------------------------------------------
-// Close backend
-// ----------------------------------------------------------------------
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Shutdown
+///////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (tb *TextBackend) Close() error {
-	return nil // no special cleanup needed
+	return tb.conn.Close()
 }
