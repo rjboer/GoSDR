@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 )
 
 // Buffer represents an open stream buffer on the device.
@@ -36,18 +37,26 @@ func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) 
 		return nil, err
 	}
 
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: device=%s samples=%d channelMask=0x%x availableChannels=%v", device, size, channelMask, channels)
+
 	for i, ch := range channels {
 		if channelMask&(1<<uint(i)) == 0 {
 			continue
 		}
+		log.Printf("[IIOD DEBUG] CreateStreamBuffer: enabling channel %s (index=%d)", ch, i)
 		if err := c.WriteAttrWithContext(ctx, device, ch, "en", "1"); err != nil {
+			log.Printf("[IIOD DEBUG] CreateStreamBuffer: failed to enable %s/%s: %v", device, ch, err)
 			return nil, err
 		}
 	}
 
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: issuing BUFFER_OPEN for %s with %d samples (mode=%v)", device, size, c.mode)
 	if err := c.OpenBufferWithContext(ctx, device, size); err != nil {
+		log.Printf("[IIOD DEBUG] CreateStreamBuffer: BUFFER_OPEN failed for %s: %v", device, err)
 		return nil, err
 	}
+
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: buffer opened for %s (size=%d)", device, size)
 
 	return &Buffer{client: c, device: device, size: size, isOpen: true}, nil
 }
