@@ -49,14 +49,18 @@ func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) 
 	}
 	bytesPerSample := enabled * 2 // int16 samples
 
-	for i, ch := range channels {
-		if channelMask&(1<<uint(i)) == 0 {
-			continue
-		}
-		log.Printf("[IIOD DEBUG] CreateStreamBuffer: enabling channel %s (index=%d)", ch, i)
-		if err := c.WriteAttrWithContext(ctx, device, ch, "en", "1"); err != nil {
-			log.Printf("[IIOD DEBUG] CreateStreamBuffer: failed to enable %s/%s: %v", device, ch, err)
-			return nil, err
+	if c.IsLegacy() {
+		log.Printf("[IIOD DEBUG] CreateStreamBuffer: legacy server detected; skipping channel enable writes")
+	} else {
+		for i, ch := range channels {
+			if channelMask&(1<<uint(i)) == 0 {
+				continue
+			}
+			log.Printf("[IIOD DEBUG] CreateStreamBuffer: enabling channel %s (index=%d)", ch, i)
+			if err := c.WriteAttrWithContext(ctx, device, ch, "en", "1"); err != nil {
+				log.Printf("[IIOD DEBUG] CreateStreamBuffer: failed to enable %s/%s: %v", device, ch, err)
+				return nil, err
+			}
 		}
 	}
 
