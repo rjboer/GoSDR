@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/bits"
 )
 
 // Buffer represents an open stream buffer on the device.
@@ -14,6 +15,9 @@ type Buffer struct {
 	device string
 	size   int
 	isOpen bool
+
+	enabledChannels int
+	bytesPerSample  int
 }
 
 type BufferHandle struct {
@@ -39,6 +43,12 @@ func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) 
 
 	log.Printf("[IIOD DEBUG] CreateStreamBuffer: device=%s samples=%d channelMask=0x%x availableChannels=%v", device, size, channelMask, channels)
 
+	enabled := bits.OnesCount8(channelMask & ((1 << uint(len(channels))) - 1))
+	if enabled == 0 {
+		return nil, fmt.Errorf("no channels enabled (mask=0x%x)", channelMask)
+	}
+	bytesPerSample := enabled * 2 // int16 samples
+
 	for i, ch := range channels {
 		if channelMask&(1<<uint(i)) == 0 {
 			continue
@@ -58,7 +68,7 @@ func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) 
 
 	log.Printf("[IIOD DEBUG] CreateStreamBuffer: buffer opened for %s (size=%d)", device, size)
 
-	return &Buffer{client: c, device: device, size: size, isOpen: true}, nil
+	return &Buffer{client: c, device: device, size: size, isOpen: true, enabledChannels: enabled, bytesPerSample: bytesPerSample}, nil
 }
 
 // Close closes the buffer on the device.
@@ -79,7 +89,13 @@ func (b *Buffer) ReadSamples() ([]byte, error) {
 	if b == nil || !b.isOpen {
 		return nil, fmt.Errorf("buffer not open")
 	}
-	return b.client.ReadBufferWithContext(context.Background(), b.device, b.size)
+
+	nBytes := b.size
+	if b.bytesPerSample > 0 {
+		nBytes = b.size * b.bytesPerSample
+	}
+
+	return b.client.ReadBufferWithContext(context.Background(), b.device, nBytes)
 }
 
 // WriteSamples writes raw bytes to the buffer.
