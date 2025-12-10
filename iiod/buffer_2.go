@@ -140,7 +140,8 @@ func (s *RXStream) worker(ctx context.Context) {
 		}
 
 		// Convert bytes → complex IQ
-		iq, err := c.iqHelper.DeinterleaveIQ(raw, s.sampleBytes)
+		// Call iq.go's static function (same package)
+		iq, err := DeinterleaveIQComplex(raw, s.sampleBytes)
 		if err != nil {
 			c.debug(1, "RX worker IQ parse error: %v", err)
 			continue
@@ -186,7 +187,7 @@ func (tx *TXWriter) WriteIQ(ctx context.Context, iq []complex64) error {
 	c.debug(1, "WriteIQ(dev=%s, samples=%d)", tx.dev, len(iq))
 
 	// Convert to interleaved raw bytes
-	raw, err := c.iqHelper.InterleaveIQ(iq, tx.sampleBytes)
+	raw, err := InterleaveIQComplex(iq, tx.sampleBytes)
 	if err != nil {
 		return fmt.Errorf("WriteIQ: interleave: %w", err)
 	}

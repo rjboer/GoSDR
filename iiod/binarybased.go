@@ -41,6 +41,22 @@ func NewBinaryBackend(conn net.Conn) *BinaryBackend {
 	return &BinaryBackend{conn: conn}
 }
 
+// Probe checks if the server supports binary mode by sending a VERSION op.
+func (bb *BinaryBackend) Probe(ctx context.Context, conn net.Conn) error {
+	// Temporarily set a short deadline
+	defer conn.SetReadDeadline(time.Time{})
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	// Send VERSION command (Op=0, Dev=0, Code=0, Payload=0)
+	if err := bb.writeCommand(OpVersion, 0, 0, nil); err != nil {
+		return err
+	}
+
+	// Read status
+	_, err := bb.readReply(0)
+	return err // If we get a valid status (0 or even non-0 binary packet), it's binary.
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////
 // Low-level helpers
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -96,8 +112,8 @@ func (bb *BinaryBackend) readReply(maxBytes int) ([]byte, error) {
 ////////////////////////////////////////////////////////////////////////////////////////
 
 // GetXMLContext is unsupported in binary mode (server must support PRINT fallback).
-func (bb *BinaryBackend) GetXMLContext(ctx context.Context) (string, error) {
-	return "", errors.New("binary backend cannot fetch XML context; router must fallback to text mode")
+func (bb *BinaryBackend) GetXMLContext(ctx context.Context) ([]byte, error) {
+	return nil, errors.New("binary backend cannot fetch XML context; router must fallback to text mode")
 }
 
 func (bb *BinaryBackend) ReadAttr(ctx context.Context, device string, channel string, attr string) (string, error) {

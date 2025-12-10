@@ -28,6 +28,28 @@ func NewTextBackend(conn net.Conn) *TextBackend {
 	}
 }
 
+// Probe checks if the server supports text mode by sending a VERSION command.
+func (tb *TextBackend) Probe(ctx context.Context, conn net.Conn) error {
+	defer conn.SetReadDeadline(time.Time{})
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	if _, err := tb.writer.WriteString("VERSION\n"); err != nil {
+		return err
+	}
+	tb.writer.Flush()
+
+	// We expect *some* string in response, ending in newline
+	line, err := tb.readLineStrict(ctx)
+	if err != nil {
+		return err
+	}
+	if line == "" {
+		return fmt.Errorf("empty VERSION response")
+	}
+	// Optionally check if line looks like a version string, but for now just existence is enough fallback
+	return nil
+}
+
 // ensureNewline ensures commands sent to IIOD always end with \n.
 func ensureNewline(s string) string {
 	if !strings.HasSuffix(s, "\n") {
@@ -72,19 +94,19 @@ func (tb *TextBackend) readUntilEOF(ctx context.Context) (string, error) {
 // Backend interface implementation
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-func (tb *TextBackend) GetXMLContext(ctx context.Context) (string, error) {
+func (tb *TextBackend) GetXMLContext(ctx context.Context) ([]byte, error) {
 	// PlutoSDR uses PRINT <device> <attribute> — but "PRINT" alone dumps full XML
 	cmd := "PRINT"
 	_, err := tb.writer.WriteString(ensureNewline(cmd))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	tb.writer.Flush()
 
 	// PRINT ends with the server closing the stream for this response
 	xmlStr, err := tb.readUntilEOF(ctx)
 	if err != nil {
-		return "", fmt.Errorf("PRINT read failed: %w", err)
+		return nil, fmt.Errorf("PRINT read failed: %w", err)
 	}
 
 	// Some servers include leading garbage or BOM; trim until we hit '<'
@@ -92,7 +114,7 @@ func (tb *TextBackend) GetXMLContext(ctx context.Context) (string, error) {
 	if idx > 0 {
 		xmlStr = xmlStr[idx:]
 	}
-	return xmlStr, nil
+	return []byte(xmlStr), nil
 }
 
 func (tb *TextBackend) ReadAttr(ctx context.Context, device string, channel string, attr string) (string, error) {
