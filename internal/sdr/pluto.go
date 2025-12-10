@@ -533,17 +533,6 @@ func floatToInt16(v float32) int16 {
 	return int16(scaled)
 }
 
-
-package sdr
-
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"github.com/rjboer/GoSDR/iiod"
-)
-
 //
 // PART 2: ATTRIBUTE HELPERS + CHANNEL DISCOVERY + RADIO CONFIG
 //
@@ -687,7 +676,7 @@ func (p *PlutoSDR) configureAD9361(ctx context.Context) error {
 	if p.sampleRate > 0 {
 		// RX LO is p.rxLO (external), but fallback to sampleRate*1000 if not set externally
 		if p.rxLO == 0 {
-			p.rxLO =  p.sampleRate * 1000
+			p.rxLO = p.sampleRate * 1000
 		}
 		if p.txLO == 0 {
 			p.txLO = p.rxLO
