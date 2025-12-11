@@ -1,4 +1,4 @@
-package iiod
+package sdrxml
 
 import "encoding/xml"
 

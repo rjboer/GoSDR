@@ -46,7 +46,7 @@ func ParseIIODXML(raw []byte) (*SDRContext, *IIODIndex, error) {
 // BuildIndex - construct lookup tables from IIODcontext
 // -----------------------------------------------------------------------------
 
-func BuildIndex(ctx *IIODcontext) (*IIODIndex, error) {
+func BuildIndex(ctx *SDRContext) (*IIODIndex, error) {
 	idx := &IIODIndex{
 		DevicesByID:   make(map[string]*DeviceEntry),
 		DevicesByName: make(map[string]*DeviceEntry),
