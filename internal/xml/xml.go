@@ -2,10 +2,10 @@ package iiod
 
 import "encoding/xml"
 
-// IIODcontext represents the full IIOD XML schema.
+// SDRContext represents the full IIOD XML schema.
 // This struct is derived from actual PlutoSDR firmware XML output (v0.25/v0.38)
 // and is compatible with older & newer IIOD releases.
-type IIODcontext struct {
+type SDRContext struct {
 	XMLName          xml.Name           `xml:"context" json:"context"`
 	Text             string             `xml:",chardata" json:"text,omitempty"`
 	Name             string             `xml:"name,attr" json:"name"`

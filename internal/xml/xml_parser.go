@@ -1,4 +1,4 @@
-package iiod
+package sdrxml
 
 import (
 	"bytes"
@@ -20,14 +20,15 @@ type IIODIndex struct {
 
 // -----------------------------------------------------------------------------
 // PUBLIC: ParseIIODXML
+// The most important thing of a parser is that it can parse the XML file.
 // -----------------------------------------------------------------------------
 
-func ParseIIODXML(raw []byte) (*IIODcontext, *IIODIndex, error) {
+func ParseIIODXML(raw []byte) (*SDRContext, *IIODIndex, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil, nil, errors.New("empty XML data")
 	}
 
-	var ctx IIODcontext
+	var ctx SDRContext
 	if err := xml.Unmarshal(raw, &ctx); err != nil {
 		return nil, nil, fmt.Errorf("IIOD XML parse error: %w", err)
 	}
