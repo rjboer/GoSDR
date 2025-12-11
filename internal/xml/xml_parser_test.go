@@ -11,13 +11,14 @@ func TestParseIIODXMLBuildsIndex(t *testing.T) {
 		t.Fatalf("failed to read example XML: %v", err)
 	}
 
-	ctx, index, err := ParseIIODXML(raw)
+	var ctx SDRContext
+	index, err := ctx.Parse(raw)
 	if err != nil {
 		t.Fatalf("expected XML to parse, got error: %v", err)
 	}
 
-	if ctx == nil || index == nil {
-		t.Fatalf("expected context and index to be non-nil")
+	if index == nil {
+		t.Fatalf("expected index to be non-nil")
 	}
 
 	if ctx.Name != "local" || ctx.VersionMajor != "0" || ctx.VersionMinor != "25" {

@@ -23,22 +23,33 @@ type IIODIndex struct {
 // The most important thing of a parser is that it can parse the XML file.
 // -----------------------------------------------------------------------------
 
-func ParseIIODXML(raw []byte) (*SDRContext, *IIODIndex, error) {
+// Parse decodes the raw IIOD XML stream into the SDRContext receiver and builds
+// a lookup index for fast access.
+func (ctx *SDRContext) Parse(raw []byte) (*IIODIndex, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, nil, errors.New("empty XML data")
+		return nil, errors.New("empty XML data")
 	}
 
-	var ctx SDRContext
-	if err := xml.Unmarshal(raw, &ctx); err != nil {
-		return nil, nil, fmt.Errorf("IIOD XML parse error: %w", err)
+	if err := xml.Unmarshal(raw, ctx); err != nil {
+		return nil, fmt.Errorf("IIOD XML parse error: %w", err)
 	}
 
 	// Build fast lookup index
-	index, err := BuildIndex(&ctx)
+	index, err := BuildIndex(ctx)
 	if err != nil {
-		return &ctx, nil, fmt.Errorf("IIOD XML index build error: %w", err)
+		return nil, fmt.Errorf("IIOD XML index build error: %w", err)
 	}
 
+	return index, nil
+}
+
+// ParseIIODXML is kept for compatibility and delegates to SDRContext.Parse.
+func ParseIIODXML(raw []byte) (*SDRContext, *IIODIndex, error) {
+	var ctx SDRContext
+	index, err := ctx.Parse(raw)
+	if err != nil {
+		return nil, nil, err
+	}
 	return &ctx, index, nil
 }
 
