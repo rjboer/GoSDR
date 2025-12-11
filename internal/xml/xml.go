@@ -15,6 +15,35 @@ type SDRContext struct {
 	Description      string             `xml:"description,attr" json:"description"`
 	ContextAttribute []ContextAttribute `xml:"context-attribute" json:"context-attribute"`
 	Device           []DeviceEntry      `xml:"device" json:"device"`
+	Index            *IIODIndex         `json:"index,omitempty"`
+	ScanFormat       []ScanFormat       `json:"scan-format,omitempty"`
+}
+
+// IIODIndex provides fast lookup structures for devices,
+// channels, attributes, and filenames.
+// This is built from the parsed XML.
+type IIODIndex struct {
+	DevicesByID   map[string]*DeviceEntry
+	DevicesByName map[string]*DeviceEntry
+	Channels      map[string]map[string]*ChannelEntry     // devName → chName → entry
+	AttrFiles     map[string]map[string]map[string]string // dev → ch → attr → filename
+	NoDevices     int
+	NoChannels    int
+}
+
+// ScanFormat represents the parsed IIOD scan-element format.
+// This mirrors libiio's internal struct iio_data_format.
+type ScanFormat struct {
+	Index        uint32  // index of the scan element
+	IsBE         bool    // big-endian (true) or little-endian (false)
+	IsSigned     bool    // signed (true) or unsigned (false)
+	Bits         uint32  // number of meaningful bits
+	Length       uint32  // total bits allocated for storage
+	Repeat       uint32  // number of repeated values (X2 etc.)
+	Shift        uint32  // right-shift applied to the raw storage
+	FullyDefined bool    // S/U variants use "fully defined" ABI semantics
+	WithScale    bool    // true if scale attribute was present
+	Scale        float64 // optional scaling factor
 }
 
 // -----------------------------------------------------------------------------
@@ -53,8 +82,9 @@ type ChannelEntry struct {
 	Name string `xml:"name,attr" json:"name,omitempty"`
 	Type string `xml:"type,attr" json:"type"` // input | output
 
-	Attribute   []ChannelAttr `xml:"attribute" json:"attribute"`
-	ScanElement *ScanElement  `xml:"scan-element" json:"scan-element,omitempty"`
+	Attribute      []ChannelAttr `xml:"attribute" json:"attribute"`
+	ScanElementRaw *ScanElement  `xml:"scan-element" json:"scan-element,omitempty"`
+	ParsedFormat   *ScanFormat   `json:"parsed-format,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -94,4 +124,5 @@ type ScanElement struct {
 	Text   string `xml:",chardata" json:"text,omitempty"`
 	Index  string `xml:"index,attr" json:"index"`
 	Format string `xml:"format,attr" json:"format"`
+	Scale  string `xml:"scale,attr" json:"scale"`
 }

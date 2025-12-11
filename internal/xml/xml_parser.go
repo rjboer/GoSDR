@@ -5,59 +5,40 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log"
+	"regexp"
+	"strconv"
 	"strings"
 )
-
-// IIODIndex provides fast lookup structures for devices,
-// channels, attributes, and filenames.
-// This is built from the parsed XML.
-type IIODIndex struct {
-	DevicesByID   map[string]*DeviceEntry
-	DevicesByName map[string]*DeviceEntry
-	Channels      map[string]map[string]*ChannelEntry     // devName → chName → entry
-	AttrFiles     map[string]map[string]map[string]string // dev → ch → attr → filename
-}
 
 // -----------------------------------------------------------------------------
 // PUBLIC: ParseIIODXML
 // The most important thing of a parser is that it can parse the XML file.
 // -----------------------------------------------------------------------------
+var scanFmtRe = regexp.MustCompile(`^(le|be):([sSuU])(\d+)/(\d+)(?:X(\d+))?>>(\d+)$`)
 
 // Parse decodes the raw IIOD XML stream into the SDRContext receiver and builds
 // a lookup index for fast access.
-func (ctx *SDRContext) Parse(raw []byte) (*IIODIndex, error) {
+func (ctx *SDRContext) Parse(raw []byte) error {
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, errors.New("empty XML data")
+		return errors.New("empty XML data")
 	}
 
 	if err := xml.Unmarshal(raw, ctx); err != nil {
-		return nil, fmt.Errorf("IIOD XML parse error: %w", err)
+		return fmt.Errorf("IIOD XML parse error: %w", err)
 	}
 
 	// Build fast lookup index
-	index, err := BuildIndex(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("IIOD XML index build error: %w", err)
-	}
+	ctx.BuildIndex()
 
-	return index, nil
-}
-
-// ParseIIODXML is kept for compatibility and delegates to SDRContext.Parse.
-func ParseIIODXML(raw []byte) (*SDRContext, *IIODIndex, error) {
-	var ctx SDRContext
-	index, err := ctx.Parse(raw)
-	if err != nil {
-		return nil, nil, err
-	}
-	return &ctx, index, nil
+	return nil
 }
 
 // -----------------------------------------------------------------------------
 // BuildIndex - construct lookup tables from IIODcontext
 // -----------------------------------------------------------------------------
 
-func BuildIndex(ctx *SDRContext) (*IIODIndex, error) {
+func (ctx *SDRContext) BuildIndex() {
 	idx := &IIODIndex{
 		DevicesByID:   make(map[string]*DeviceEntry),
 		DevicesByName: make(map[string]*DeviceEntry),
@@ -89,6 +70,11 @@ func BuildIndex(ctx *SDRContext) (*IIODIndex, error) {
 		for ci := range dev.Channel {
 			ch := &dev.Channel[ci]
 
+			if ch.ScanElementRaw != nil {
+				if err := ch.ParseScanFormat(); err != nil {
+					log.Printf("ParseScanFormat failed for device %q channel %q: %v", dev.Name, ch.ID, err)
+				}
+			}
 			// Register channel by ID or name (ID always exists)
 			chName := ch.ID
 			if ch.Name != "" {
@@ -109,7 +95,15 @@ func BuildIndex(ctx *SDRContext) (*IIODIndex, error) {
 		}
 	}
 
-	return idx, nil
+	idx.NoDevices = len(idx.DevicesByID)
+	//count the channels
+
+	count := 0
+	for _, devMap := range idx.Channels {
+		count += len(devMap)
+	}
+	idx.NoChannels = count
+	ctx.Index = idx
 }
 
 // -----------------------------------------------------------------------------
@@ -179,4 +173,118 @@ func NormalizeXMLForDebug(raw []byte) string {
 		s = strings.ReplaceAll(s, "  ", " ")
 	}
 	return s
+}
+
+// -----------------------------------------------------------------------------
+// ParseScanFormat
+// -----------------------------------------------------------------------------
+// ParseScanFormat parses an IIOD scan-element format string into a ScanFormat struct.
+// scaleStr may be nil or a pointer to a string containing the "scale=" attribute.
+func (ce *ChannelEntry) ParseScanFormat() error {
+
+	format := strings.TrimSpace(ce.ScanElementRaw.Format)
+	m := scanFmtRe.FindStringSubmatch(format)
+	if m == nil {
+		return fmt.Errorf("invalid scan format: %q", format)
+	}
+
+	index, err := strconv.ParseUint(ce.ScanElementRaw.Index, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid index value %q: %w", ce.ScanElementRaw.Index, err)
+	}
+
+	endianPart := m[1]
+	signPart := m[2]
+	bitsStr := m[3]
+	lengthStr := m[4]
+	repeatNum := m[5] // n
+	shiftStr := m[6]
+
+	// --- Endianness ---
+	isBE := (endianPart == "be")
+
+	// --- Signedness ---
+	// lowercase s/u → normal signed/unsigned
+	// uppercase S/U → "fully-defined" ABI
+	isSigned := false
+	fully := false
+
+	switch signPart {
+	case "s":
+		isSigned = true
+	case "u":
+		isSigned = false
+	case "S":
+		isSigned = true
+		fully = true
+	case "U":
+		isSigned = false
+		fully = true
+	default:
+		return errors.New("invalid sign specifier")
+	}
+
+	// --- Numeric fields ---
+	bits, err := strconv.ParseUint(bitsStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid bits value %q: %w", bitsStr, err)
+	}
+
+	length, err := strconv.ParseUint(lengthStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid length value %q: %w", lengthStr, err)
+	}
+
+	if bits == 0 || length == 0 {
+		return errors.New("bits and length must be > 0")
+	}
+	if bits > length {
+		return fmt.Errorf("bits (%d) cannot exceed length (%d)", bits, length)
+	}
+
+	// --- Repeat (optional) ---
+	repeat := uint64(1)
+	if repeatNum != "" {
+		repeat, err = strconv.ParseUint(repeatNum, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid repeat value %q: %w", repeatNum, err)
+		}
+		if repeat == 0 {
+			return errors.New("repeat must be >= 1")
+		}
+	}
+
+	// --- Shift ---
+	shift, err := strconv.ParseUint(shiftStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid shift value %q: %w", shiftStr, err)
+	}
+
+	// --- Optional scale attribute ---
+	var scale float64
+	withScale := false
+	if ce.ScanElementRaw != nil && ce.ScanElementRaw.Scale != "" {
+		s := strings.TrimSpace(ce.ScanElementRaw.Scale)
+		if s != "" {
+			scale, err = strconv.ParseFloat(s, 64)
+			if err != nil {
+				return fmt.Errorf("invalid scale attribute %q: %w", s, err)
+			}
+			withScale = true
+		}
+	}
+
+	ce.ParsedFormat = &ScanFormat{
+		Index:        uint32(index),
+		IsBE:         isBE,
+		IsSigned:     isSigned,
+		Bits:         uint32(bits),
+		Length:       uint32(length),
+		Repeat:       uint32(repeat),
+		Shift:        uint32(shift),
+		FullyDefined: fully,
+		WithScale:    withScale,
+		Scale:        scale,
+	}
+	return nil
 }
