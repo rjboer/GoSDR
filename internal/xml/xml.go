@@ -70,7 +70,6 @@ type DeviceEntry struct {
 	Attribute       []DevAttribute    `xml:"attribute" json:"attribute"`
 	DebugAttribute  []DebugAttribute  `xml:"debug-attribute" json:"debug-attribute"`
 	BufferAttribute []BufferAttribute `xml:"buffer-attribute" json:"buffer-attribute"`
-	SampleSize      uint32            `json:"sample-size,omitempty"` // this is the amount of bytes per device (sum of channels)
 }
 
 // -----------------------------------------------------------------------------
