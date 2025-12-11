@@ -329,7 +329,7 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	}
 
 	p.logEvent("info", fmt.Sprintf("IIO: Creating RX buffer (%d samples)", cfg.NumSamples))
-	rxBuf, err := client.CreateStreamBuffer(rxName, cfg.NumSamples, 0x3)
+	rxBuf, err := client.CreateStreamBuffer(ctx, rxName, cfg.NumSamples, 0x3)
 	if err != nil {
 		_ = client.Close()
 		p.logEvent("error", fmt.Sprintf("IIO: Failed to create RX buffer: %v", err))
@@ -337,7 +337,7 @@ func (p *PlutoSDR) Init(ctx context.Context, cfg Config) error {
 	}
 
 	p.logEvent("info", fmt.Sprintf("IIO: Creating TX buffer (%d samples)", cfg.NumSamples))
-	txBuf, err := client.CreateStreamBuffer(txName, cfg.NumSamples, 0x3)
+	txBuf, err := client.CreateStreamBuffer(ctx, txName, cfg.NumSamples, 0x3)
 	if err != nil {
 		_ = rxBuf.Close()
 		_ = client.Close()

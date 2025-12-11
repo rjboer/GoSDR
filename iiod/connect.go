@@ -783,12 +783,41 @@ func (c *Client) OpenBuffer(device string, samples int) error {
 	return c.OpenBufferWithContext(context.Background(), device, samples)
 }
 
-// OpenBufferWithContext opens a buffer with context support.
 func (c *Client) OpenBufferWithContext(ctx context.Context, device string, samples int) error {
+	if c.IsLegacy() {
+		deviceIDMap := make(map[string]string)
+		deviceIDMap["iio:device1"] = "1"
+		deviceIDMap["iio:device2"] = "2"
+		deviceIDMap["iio:device3"] = "3"
+		deviceIDMap["iio:device4"] = "4"
+		deviceIDMap["iio:device5"] = "5"
+		deviceIDMap["iio:device6"] = "6"
+		deviceIDMap["iio:device7"] = "7"
+		deviceIDMap["iio:device8"] = "8"
+		deviceIDMap["iio:device9"] = "9"
+		deviceIDMap["iio:device10"] = "10"
+
+		// Try direct match (name)
+		if idx, ok := c.deviceIndexMap[device]; ok {
+			device = fmt.Sprintf("%d", idx)
+		} else {
+			// Try reverse lookup for iio:deviceX
+			for name, idx := range c.deviceIndexMap {
+				// match ID → name mapping from c.deviceIDMap
+				if idForName, ok2 := deviceIDMap[name]; ok2 && idForName == device {
+					device = fmt.Sprintf("%d", idx)
+					break
+				}
+			}
+		}
+	}
+
+	log.Printf("[IIOD DEBUG] OpenBufferWithContext: device=%s samples=%d", device, samples)
+
 	switch c.mode {
 	case ProtocolBinary:
 		return c.openBufferWithContextBinary(ctx, device, samples)
-	default: // ProtocolText
+	default:
 		return c.openBufferWithContextText(ctx, device, samples)
 	}
 }

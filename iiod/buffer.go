@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/bits"
 )
 
 // Buffer represents an open stream buffer on the device.
@@ -25,54 +24,232 @@ type BufferHandle struct {
 	id     int
 }
 
+// // CreateStreamBuffer opens a streaming buffer after enabling selected channels.
+// func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) (*Buffer, error) {
+// 	if device == "" {
+// 		return nil, fmt.Errorf("device is required")
+// 	}
+// 	if size <= 0 {
+// 		return nil, fmt.Errorf("size must be positive")
+// 	}
+
+// 	ctx := context.Background()
+
+// 	channels, err := c.GetChannelsWithContext(ctx, device)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	log.Printf("[IIOD DEBUG] CreateStreamBuffer: device=%s samples=%d channelMask=0x%x availableChannels=%v", device, size, channelMask, channels)
+
+// 	enabled := bits.OnesCount8(channelMask & ((1 << uint(len(channels))) - 1))
+// 	if enabled == 0 {
+// 		return nil, fmt.Errorf("no channels enabled (mask=0x%x)", channelMask)
+// 	}
+// 	bytesPerSample := enabled * 2 // int16 samples
+
+// 	if c.IsLegacy() {
+// 		log.Printf("[IIOD DEBUG] CreateStreamBuffer: legacy server detected; skipping channel enable writes")
+// 	} else {
+// 		for i, ch := range channels {
+// 			if channelMask&(1<<uint(i)) == 0 {
+// 				continue
+// 			}
+// 			log.Printf("[IIOD DEBUG] CreateStreamBuffer: enabling channel %s (index=%d)", ch, i)
+// 			if err := c.WriteAttrWithContext(ctx, device, ch, "en", "1"); err != nil {
+// 				log.Printf("[IIOD DEBUG] CreateStreamBuffer: failed to enable %s/%s: %v", device, ch, err)
+// 				return nil, err
+// 			}
+// 		}
+// 	}
+
+// 	log.Printf("[IIOD DEBUG] CreateStreamBuffer: issuing BUFFER_OPEN for %s with %d samples (mode=%v)", device, size, c.mode)
+// 	if err := c.OpenBufferWithContext(ctx, device, size); err != nil {
+// 		log.Printf("[IIOD DEBUG] CreateStreamBuffer: BUFFER_OPEN failed for %s: %v", device, err)
+// 		return nil, err
+// 	}
+
+// 	log.Printf("[IIOD DEBUG] CreateStreamBuffer: buffer opened for %s (size=%d)", device, size)
+
+// 	return &Buffer{client: c, device: device, size: size, isOpen: true, enabledChannels: enabled, bytesPerSample: bytesPerSample}, nil
+// }
+
 // CreateStreamBuffer opens a streaming buffer after enabling selected channels.
-func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) (*Buffer, error) {
-	if device == "" {
-		return nil, fmt.Errorf("device is required")
-	}
+// This version includes correct device-index handling for PlutoSDR (IIOD v0.25).
+// func (c *Client) CreateStreamBuffer(device string, size int, channelMask uint8) (*Buffer, error) {
+// 	if device == "" {
+// 		return nil, fmt.Errorf("device is required")
+// 	}
+// 	if size <= 0 {
+// 		return nil, fmt.Errorf("size must be positive")
+// 	}
+
+// 	ctx := context.Background()
+
+// 	// List channels (Pluto returns: voltage0 voltage1)
+// 	channels, err := c.GetChannelsWithContext(ctx, device)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	log.Printf("[IIOD DEBUG] CreateStreamBuffer: device=%s samples=%d channelMask=0x%x availableChannels=%v",
+// 		device, size, channelMask, channels)
+
+// 	enabled := bits.OnesCount8(channelMask & ((1 << uint(len(channels))) - 1))
+// 	if enabled == 0 {
+// 		return nil, fmt.Errorf("no channels enabled: mask=0x%x", channelMask)
+// 	}
+// 	bytesPerSample := enabled * 2 // int16 per I/Q element
+
+// 	//
+// 	// IMPORTANT PART: Pluto (legacy IIOD) does NOT accept channel enabling via 'WRITE <dev> <ch> en 1'
+// 	// and its IIOD server only accepts BUFFER_OPEN using the DEVICE INDEX, not the DEVICE NAME.
+// 	//
+// 	if c.IsLegacy() {
+// 		log.Printf("[IIOD DEBUG] Legacy IIOD detected (PlutoSDR). Skipping channel enable writes.")
+
+// 		// Resolve device index for BUFFER_OPEN (Pluto only supports numeric index)
+// 		idx, ok := c.deviceIndexMap[device]
+// 		if !ok {
+// 			// Fallback: search by name in device info
+// 			for name, v := range c.deviceIndexMap {
+// 				if name == device {
+// 					idx = v
+// 					ok = true
+// 					break
+// 				}
+// 			}
+// 		}
+// 		if !ok {
+// 			return nil, fmt.Errorf("cannot locate device index for %s", device)
+// 		}
+
+// 		log.Printf("[IIOD DEBUG] BUFFER_OPEN using device index %d (name=%s)", idx, device)
+
+// 		if err := c.OpenBufferWithContext(ctx, fmt.Sprintf("%d", idx), size); err != nil {
+// 			log.Printf("[IIOD DEBUG] CreateStreamBuffer: BUFFER_OPEN failed idx=%d: %v", idx, err)
+// 			return nil, err
+// 		}
+
+// 		log.Printf("[IIOD DEBUG] Legacy buffer opened successfully: index=%d size=%d", idx, size)
+
+// 		return &Buffer{
+// 			client:          c,
+// 			device:          fmt.Sprintf("%d", idx), // IMPORTANT: use index for future READ/WRITE
+// 			size:            size,
+// 			isOpen:          true,
+// 			enabledChannels: enabled,
+// 			bytesPerSample:  bytesPerSample,
+// 		}, nil
+// 	}
+
+// 	// ---------- Modern IIOD path (not used for Pluto v0.25) ----------
+// 	for i, ch := range channels {
+// 		if channelMask&(1<<uint(i)) == 0 {
+// 			continue
+// 		}
+// 		log.Printf("[IIOD DEBUG] enabling channel %s", ch)
+// 		if err := c.WriteAttrWithContext(ctx, device, ch, "en", "1"); err != nil {
+// 			log.Printf("[IIOD DEBUG] failed enabling %s/%s: %v", device, ch, err)
+// 			return nil, err
+// 		}
+// 	}
+
+// 	if err := c.OpenBufferWithContext(ctx, device, size); err != nil {
+// 		log.Printf("[IIOD DEBUG] BUFFER_OPEN failed for %s: %v", device, err)
+// 		return nil, err
+// 	}
+
+// 	return &Buffer{client: c, device: device, size: size, isOpen: true, enabledChannels: enabled, bytesPerSample: bytesPerSample}, nil
+// }
+
+// CreateStreamBuffer creates a streaming buffer on the given device.
+// enabledMask is a bitmask selecting which channels to enable.
+func (c *Client) CreateStreamBuffer(ctx context.Context, device string, size int, enabledMask uint8) (*Buffer, error) {
 	if size <= 0 {
-		return nil, fmt.Errorf("size must be positive")
+		return nil, fmt.Errorf("buffer size must be > 0")
 	}
+	deviceIDMap := make(map[string]string)
+	deviceIDMap["iio:device1"] = "1"
+	deviceIDMap["iio:device2"] = "2"
+	deviceIDMap["iio:device3"] = "3"
+	deviceIDMap["iio:device4"] = "4"
+	deviceIDMap["iio:device5"] = "5"
+	deviceIDMap["iio:device6"] = "6"
+	deviceIDMap["iio:device7"] = "7"
+	deviceIDMap["iio:device8"] = "8"
+	deviceIDMap["iio:device9"] = "9"
+	deviceIDMap["iio:device10"] = "10"
 
-	ctx := context.Background()
+	// ---------- Legacy IIOD path (not used for Pluto v0.25) ----------
+	origDevice := device
 
-	channels, err := c.GetChannelsWithContext(ctx, device)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("[IIOD DEBUG] CreateStreamBuffer: device=%s samples=%d channelMask=0x%x availableChannels=%v", device, size, channelMask, channels)
-
-	enabled := bits.OnesCount8(channelMask & ((1 << uint(len(channels))) - 1))
-	if enabled == 0 {
-		return nil, fmt.Errorf("no channels enabled (mask=0x%x)", channelMask)
-	}
-	bytesPerSample := enabled * 2 // int16 samples
-
+	// Pluto legacy IIOD: device must be numeric index, not name
 	if c.IsLegacy() {
-		log.Printf("[IIOD DEBUG] CreateStreamBuffer: legacy server detected; skipping channel enable writes")
-	} else {
-		for i, ch := range channels {
-			if channelMask&(1<<uint(i)) == 0 {
-				continue
-			}
-			log.Printf("[IIOD DEBUG] CreateStreamBuffer: enabling channel %s (index=%d)", ch, i)
-			if err := c.WriteAttrWithContext(ctx, device, ch, "en", "1"); err != nil {
-				log.Printf("[IIOD DEBUG] CreateStreamBuffer: failed to enable %s/%s: %v", device, ch, err)
-				return nil, err
+		if idx, ok := c.deviceIndexMap[device]; ok {
+			log.Printf("[IIOD DEBUG] Legacy IIOD: mapping device %q -> index %d", device, idx)
+			device = fmt.Sprintf("%d", idx)
+		} else {
+			// fallback: reverse map using deviceIDMap if present
+			for name, id := range deviceIDMap {
+				if id == device {
+					if idx2, ok2 := c.deviceIndexMap[name]; ok2 {
+						log.Printf("[IIOD DEBUG] Legacy IIOD: mapping ID %q to index %d (name=%s)", device, idx2, name)
+						device = fmt.Sprintf("%d", idx2)
+						break
+					}
+				}
 			}
 		}
 	}
 
-	log.Printf("[IIOD DEBUG] CreateStreamBuffer: issuing BUFFER_OPEN for %s with %d samples (mode=%v)", device, size, c.mode)
-	if err := c.OpenBufferWithContext(ctx, device, size); err != nil {
-		log.Printf("[IIOD DEBUG] CreateStreamBuffer: BUFFER_OPEN failed for %s: %v", device, err)
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: requesting channel list for device=%s (orig=%s)", device, origDevice)
+
+	channels, err := c.GetChannelsWithContext(ctx, device)
+	if err != nil {
+		log.Printf("[IIOD DEBUG] CreateStreamBuffer: GetChannels failed for device=%s (orig=%s): %v",
+			device, origDevice, err)
 		return nil, err
 	}
 
-	log.Printf("[IIOD DEBUG] CreateStreamBuffer: buffer opened for %s (size=%d)", device, size)
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: channels=%v", channels)
 
-	return &Buffer{client: c, device: device, size: size, isOpen: true, enabledChannels: enabled, bytesPerSample: bytesPerSample}, nil
+	enabled := make(map[string]bool)
+	enabledCount := 0
+
+	for i, ch := range channels {
+		if enabledMask&(1<<uint(i)) != 0 {
+			enabled[ch] = true
+			enabledCount++
+			log.Printf("[IIOD DEBUG] CreateStreamBuffer: enabling channel %s", ch)
+		}
+	}
+
+	if enabledCount == 0 {
+		return nil, fmt.Errorf("no enabled RX channels (mask=0x%x)", enabledMask)
+	}
+
+	// Each channel = complex16 = 4 bytes per sample
+	bytesPerSample := enabledCount * 4
+
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: calling BUFFER_OPEN on device=%s size=%d enabledChannels=%d",
+		device, size, enabledCount)
+
+	if err := c.OpenBufferWithContext(ctx, device, size); err != nil {
+		log.Printf("[IIOD DEBUG] CreateStreamBuffer: BUFFER_OPEN failed: %v", err)
+		return nil, err
+	}
+
+	log.Printf("[IIOD DEBUG] CreateStreamBuffer: buffer opened successfully on device=%s", device)
+
+	return &Buffer{
+		client:          c,
+		device:          device,
+		size:            size,
+		isOpen:          true,
+		enabledChannels: enabledCount,
+		bytesPerSample:  bytesPerSample,
+	}, nil
 }
 
 // Close closes the buffer on the device.
