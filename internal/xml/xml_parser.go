@@ -75,6 +75,10 @@ func (ctx *SDRContext) BuildIndex() {
 					log.Printf("ParseScanFormat failed for device %q channel %q: %v", dev.Name, ch.ID, err)
 				}
 			}
+			if ch.ParsedFormat != nil {
+				bits := ch.ParsedFormat.Length * ch.ParsedFormat.Repeat
+				ch.SampleSize = uint32((bits + 7) / 8)
+			}
 			// Register channel by ID or name (ID always exists)
 			chName := ch.ID
 			if ch.Name != "" {
@@ -287,4 +291,27 @@ func (ce *ChannelEntry) ParseScanFormat() error {
 		Scale:        scale,
 	}
 	return nil
+}
+
+func ComputeSampleSize(channels []*ChannelEntry) int {
+	size := 0
+	for _, ch := range channels {
+		if ch.ParsedFormat == nil {
+			continue
+		}
+		bits := ch.ParsedFormat.Length * ch.ParsedFormat.Repeat
+		size += int((bits + 7) / 8) // round up to full bytes
+	}
+	return size
+}
+
+// ComputeDeviceSampleSize computes the total sample size for a device.
+// This is the sum of the sample sizes of all enabled channels.
+func (dev *DeviceEntry) ComputeDeviceSampleSize(enabled []*ChannelEntry) uint32 {
+	total := uint32(0)
+	for _, ch := range enabled {
+		total += ch.SampleSize
+	}
+	dev.SampleSize = total
+	return total
 }
