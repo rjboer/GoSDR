@@ -304,14 +304,3 @@ func ComputeSampleSize(channels []*ChannelEntry) int {
 	}
 	return size
 }
-
-// ComputeDeviceSampleSize computes the total sample size for a device.
-// This is the sum of the sample sizes of all enabled channels.
-func (dev *DeviceEntry) ComputeDeviceSampleSize(enabled []*ChannelEntry) uint32 {
-	total := uint32(0)
-	for _, ch := range enabled {
-		total += ch.SampleSize
-	}
-	dev.SampleSize = total
-	return total
-}

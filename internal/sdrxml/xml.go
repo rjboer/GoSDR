@@ -70,6 +70,7 @@ type DeviceEntry struct {
 	Attribute       []DevAttribute    `xml:"attribute" json:"attribute"`
 	DebugAttribute  []DebugAttribute  `xml:"debug-attribute" json:"debug-attribute"`
 	BufferAttribute []BufferAttribute `xml:"buffer-attribute" json:"buffer-attribute"`
+	DecodeMap       DecodeMap         `json:"decode-map"`
 }
 
 // -----------------------------------------------------------------------------
@@ -83,9 +84,10 @@ type ChannelEntry struct {
 	Type string `xml:"type,attr" json:"type"` // input | output
 
 	Attribute      []ChannelAttr `xml:"attribute" json:"attribute"`
-	ScanElementRaw *ScanElement  `xml:"scan-element" json:"scan-element,omitempty"`
-	ParsedFormat   *ScanFormat   `json:"parsed-format,omitempty"`
-	SampleSize     uint32        `json:"sample-size,omitempty"` // this is the amount of bytes per sample
+	ScanElementRaw *ScanElement  `xml:"scan-element" json:"scan-element,omitempty"` // this is the raw scan element of the channel
+	ParsedFormat   *ScanFormat   `json:"parsed-format,omitempty"`                   // this is the parsed format of the raw scan element of the channel
+	SampleSize     uint32        `json:"sample-size,omitempty"`                     // this is the amount of bytes per sample
+	Enabled        bool          `json:"enabled"`                                   // this flag is set when the channel is enabled(getting data)
 }
 
 // -----------------------------------------------------------------------------
@@ -126,4 +128,15 @@ type ScanElement struct {
 	Index  string `xml:"index,attr" json:"index"`
 	Format string `xml:"format,attr" json:"format"`
 	Scale  string `xml:"scale,attr" json:"scale"`
+}
+
+type DecodeMap struct {
+	IQData     []IqData
+	SampleSize uint32
+}
+
+type IqData struct {
+	ChannelIndex int    //the slice index of the channel
+	Length       uint32 //the amount of bytes per sample
+	Offset       uint32 //the offset of the sample in the raw buffer from 0
 }
