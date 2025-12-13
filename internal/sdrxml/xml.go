@@ -131,12 +131,13 @@ type ScanElement struct {
 }
 
 type DecodeMap struct {
-	IQData     []IqData
-	SampleSize uint32
+	Entries    []DecodeEntry // one per enabled channel, in scan-index order
+	SampleSize uint32        // total bytes per sample frame
 }
 
-type IqData struct {
-	ChannelIndex int    //the slice index of the channel
-	Length       uint32 //the amount of bytes per sample
-	Offset       uint32 //the offset of the sample in the raw buffer from 0
+type DecodeEntry struct {
+	Channel   *ChannelEntry // direct link to channel
+	Offset    uint32        // byte offset inside sample frame
+	Length    uint32        // bytes per repeated block = ceil(LengthBits / 8)
+	TotalSize uint32        // Length * Repeat (the channel’s full contribution)
 }

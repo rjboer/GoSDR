@@ -28,8 +28,8 @@ func (dev *DeviceEntry) BuildDecodeMap() {
 			DecodeMap.Entries = append(DecodeMap.Entries, DecodeEntry{
 				Channel:   enabled[i],
 				Offset:    size,
-				Length:    ch.ParsedFormat.Length,
-				TotalSize: elementBytes * ch.ParsedFormat.Repeat,
+				Length:    elementBytes,
+				TotalSize: size, //NOT elementbytes
 			})
 			size += ch.SampleSize
 		}
