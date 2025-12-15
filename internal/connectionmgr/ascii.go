@@ -134,3 +134,41 @@ func hasLineEnding(s string) bool {
 	}
 	return false
 }
+
+// writeLine writes a command line terminated with CRLF.
+func (m *Manager) writeLine(cmd string) error {
+	if !hasLineEnding(cmd) {
+		cmd += "\r\n"
+	}
+	return m.writeAll([]byte(cmd))
+}
+
+// readLine reads a single LF-terminated line (ASCII), returning it as a string.
+// It reads from the raw socket byte-by-byte to avoid buffering issues.
+func (m *Manager) readLine() (string, error) {
+	if m.conn == nil {
+		return "", fmt.Errorf("readLine: not connected")
+	}
+
+	var buf []byte
+	var one [1]byte
+
+	for {
+		m.applyReadDeadline()
+		_, err := m.conn.Read(one[:])
+		if err != nil {
+			return "", err
+		}
+		b := one[0]
+		buf = append(buf, b)
+		if b == '\n' {
+			break
+		}
+	}
+	return string(buf), nil
+}
+
+// ExecASCII is an alias for ExecCommand (legacy naming used by other helpers).
+func (m *Manager) ExecASCII(cmd string) (int, error) {
+	return m.ExecCommand(cmd)
+}
