@@ -48,7 +48,7 @@ RJBOER\\GoSDR> .\\monopulse.exe
 
 ```
 
-this means the return was not valid
+this means the return was not valid or... the protocol was not supported (so no binary protocol).
 The issue is that the IIOD server is returning -22 as the response header. This happens when the protocol parsing fails. 
 Different IIOD versions use different command formats. 
 

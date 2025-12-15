@@ -3,6 +3,7 @@ package connectionmgr
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"net"
 	"time"
 )
@@ -19,10 +20,10 @@ type Manager struct {
 	Mode    Mode
 
 	Timeout time.Duration
-
-	conn   net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
+	Logger  *log.Logger
+	conn    net.Conn
+	reader  *bufio.Reader
+	writer  *bufio.Writer
 }
 
 func New(addr string) *Manager {
@@ -63,23 +64,23 @@ func (m *Manager) SetTimeout(d time.Duration) {
 //
 // This mirrors iiod_client_exec_command() semantics: write full command,
 // then read a single integer line via readInteger() in iiod-client.c. :contentReference[oaicite:5]{index=5}
-func (m *Manager) ExecCommand(cmd string) (int, error) {
-	if m.Mode != ModeASCII {
-		return 0, fmt.Errorf("ExecCommand: not in ASCII mode")
-	}
-	if m.conn == nil {
-		return 0, fmt.Errorf("ExecCommand: not connected")
-	}
+// func (m *Manager) ExecCommand(cmd string) (int, error) {
+// 	if m.Mode != ModeASCII {
+// 		return 0, fmt.Errorf("ExecCommand: not in ASCII mode")
+// 	}
+// 	if m.conn == nil {
+// 		return 0, fmt.Errorf("ExecCommand: not connected")
+// 	}
 
-	if !hasLineEnding(cmd) {
-		cmd += "\r\n"
-	}
+// 	if !hasLineEnding(cmd) {
+// 		cmd += "\r\n"
+// 	}
 
-	if err := m.writeAll([]byte(cmd)); err != nil {
-		return 0, err
-	}
-	return m.readInteger()
-}
+// 	if err := m.writeAll([]byte(cmd)); err != nil {
+// 		return 0, err
+// 	}
+// 	return m.readInteger()
+// }
 
 // FetchXML sends PRINT (or ZPRINT if you want later) and returns the XML blob.
 func (m *Manager) FetchXML() ([]byte, error) {
@@ -110,15 +111,33 @@ func (m *Manager) FetchXML() ([]byte, error) {
 //	err != nil  => I/O / parse error
 //
 // This mirrors iiod_client_enable_binary() behaviour. :contentReference[oaicite:6]{index=6}
-func (m *Manager) TryUpgradeToBinary() (ok bool, err error) {
+func (m *Manager) TryUpgradeToBinary() (bool, error) {
 	ret, err := m.ExecCommand("BINARY")
 	if err != nil {
 		return false, fmt.Errorf("BINARY command failed: %w", err)
 	}
+	m.logf("[conman] BINARY returned code=%d", ret)
+
 	if ret != 0 {
-		// Not supported or refused; stay ASCII and don’t treat as fatal.
-		return false, nil
+		return false, nil // not supported
 	}
 	m.Mode = ModeBinary
 	return true, nil
+}
+
+func (m *Manager) logf(format string, args ...any) {
+	if m == nil {
+		return
+	}
+	l := m.Logger
+	if l == nil {
+		l = log.Default()
+	}
+	l.Printf(format, args...)
+}
+
+// Optional convenience if you want to inject a custom log.Logger
+func (m *Manager) SetLogger(l *log.Logger) {
+	m.Logger = l
+
 }
