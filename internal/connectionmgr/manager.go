@@ -1,10 +1,13 @@
 package connectionmgr
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,10 +24,11 @@ type Manager struct {
 
 	Timeout time.Duration
 	Logger  *log.Logger
-	conn    net.Conn
-	reader  *bufio.Reader
-	writer  *bufio.Writer
+
+	conn net.Conn
 }
+
+// ---------- Construction / lifecycle ----------
 
 func New(addr string) *Manager {
 	return &Manager{
@@ -40,10 +44,13 @@ func (m *Manager) Connect() error {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	m.conn = c
-	m.reader = bufio.NewReader(c)
-	m.writer = bufio.NewWriter(c)
 	m.Mode = ModeASCII
 	return nil
+}
+
+// Safe reinjection (tests, SSH tunnels, etc.)
+func (m *Manager) SetConn(conn net.Conn) {
+	m.conn = conn
 }
 
 func (m *Manager) Close() error {
@@ -60,31 +67,106 @@ func (m *Manager) SetTimeout(d time.Duration) {
 	}
 }
 
-// ExecCommand sends an ASCII command and returns the integer response.
+// ---------- Logging ----------
+
+func (m *Manager) logf(format string, args ...any) {
+	if m == nil {
+		return
+	}
+	l := m.Logger
+	if l == nil {
+		l = log.Default()
+	}
+	l.Printf(format, args...)
+}
+
+func (m *Manager) SetLogger(l *log.Logger) {
+	m.Logger = l
+}
+
+// ---------- Raw I/O (NO BUFFERING) ----------
+
+func (m *Manager) readAll(p []byte) error {
+	_, err := io.ReadFull(m.conn, p)
+	return err
+}
+
+func (m *Manager) writeAll(p []byte) error {
+	_, err := m.conn.Write(p)
+	return err
+}
+
+// Read ASCII line, byte-by-byte, with hard limit
+func (m *Manager) readLine(limit int) ([]byte, error) {
+	if limit <= 0 {
+		limit = 64 * 1024
+	}
+
+	var buf bytes.Buffer
+	var b [1]byte
+
+	for buf.Len() < limit {
+		if err := m.readAll(b[:]); err != nil {
+			return nil, err
+		}
+		buf.WriteByte(b[0])
+		if b[0] == '\n' {
+			return buf.Bytes(), nil
+		}
+	}
+
+	return nil, fmt.Errorf("line exceeds limit=%d", limit)
+}
+
+// ---------- ASCII protocol helpers ----------
+
+func hasLineEnding(s string) bool {
+	return strings.HasSuffix(s, "\n") || strings.HasSuffix(s, "\r\n")
+}
+
+func (m *Manager) readInteger() (int, error) {
+	line, err := m.readLine(1024)
+	if err != nil {
+		return 0, err
+	}
+
+	s := strings.TrimSpace(string(line))
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid integer response %q", s)
+	}
+	return n, nil
+}
+
+// ExecCommand sends an ASCII command and reads a single integer response.
 //
-// This mirrors iiod_client_exec_command() semantics: write full command,
-// then read a single integer line via readInteger() in iiod-client.c. :contentReference[oaicite:5]{index=5}
-// func (m *Manager) ExecCommand(cmd string) (int, error) {
-// 	if m.Mode != ModeASCII {
-// 		return 0, fmt.Errorf("ExecCommand: not in ASCII mode")
-// 	}
-// 	if m.conn == nil {
-// 		return 0, fmt.Errorf("ExecCommand: not connected")
-// 	}
+// Mirrors iiod_client_exec_command():
+//
+//	write command
+//	read integer line
+func (m *Manager) ExecCommand(cmd string) (int, error) {
+	if m.Mode != ModeASCII {
+		return 0, fmt.Errorf("ExecCommand: not in ASCII mode")
+	}
+	if m.conn == nil {
+		return 0, fmt.Errorf("ExecCommand: not connected")
+	}
 
-// 	if !hasLineEnding(cmd) {
-// 		cmd += "\r\n"
-// 	}
+	if !hasLineEnding(cmd) {
+		cmd += "\r\n"
+	}
 
-// 	if err := m.writeAll([]byte(cmd)); err != nil {
-// 		return 0, err
-// 	}
-// 	return m.readInteger()
-// }
+	if err := m.writeAll([]byte(cmd)); err != nil {
+		return 0, err
+	}
 
-// FetchXML sends PRINT (or ZPRINT if you want later) and returns the XML blob.
+	return m.readInteger()
+}
+
+// ---------- Higher-level operations ----------
+
+// FetchXML sends PRINT and returns the XML payload.
 func (m *Manager) FetchXML() ([]byte, error) {
-	// PRINT -> integer = xml_len, then xml_len bytes (+ trailing \n)
 	n, err := m.ExecCommand("PRINT")
 	if err != nil {
 		return nil, fmt.Errorf("PRINT failed: %w", err)
@@ -98,46 +180,22 @@ func (m *Manager) FetchXML() ([]byte, error) {
 		return nil, fmt.Errorf("read xml: %w", err)
 	}
 
-	// Drop the last newline; payload itself does not include it.
 	return buf[:n], nil
 }
 
-// TryUpgradeToBinary tries the BINARY command.
-//
-// Returns:
-//
-//	ok == true  => server accepted binary (return code 0) and we're in Binary mode
-//	ok == false => server rejected binary (non-zero code); stay ASCII; no error
-//	err != nil  => I/O / parse error
-//
-// This mirrors iiod_client_enable_binary() behaviour. :contentReference[oaicite:6]{index=6}
+// TryUpgradeToBinary sends BINARY and switches mode on success.
 func (m *Manager) TryUpgradeToBinary() (bool, error) {
 	ret, err := m.ExecCommand("BINARY")
 	if err != nil {
 		return false, fmt.Errorf("BINARY command failed: %w", err)
 	}
+
 	m.logf("[conman] BINARY returned code=%d", ret)
 
 	if ret != 0 {
-		return false, nil // not supported
+		return false, nil
 	}
+
 	m.Mode = ModeBinary
 	return true, nil
-}
-
-func (m *Manager) logf(format string, args ...any) {
-	if m == nil {
-		return
-	}
-	l := m.Logger
-	if l == nil {
-		l = log.Default()
-	}
-	l.Printf(format, args...)
-}
-
-// Optional convenience if you want to inject a custom log.Logger
-func (m *Manager) SetLogger(l *log.Logger) {
-	m.Logger = l
-
 }
