@@ -21,12 +21,7 @@ func (m *Manager) OpenBufferASCII(
 		return fmt.Errorf("OpenBufferASCII: not in ASCII mode")
 	}
 
-	cmd := fmt.Sprintf(
-		"OPEN %s %d %s",
-		deviceID,
-		samples,
-		maskHex,
-	)
+	cmd := fmt.Sprintf("OPEN %s %d %s", deviceID, samples, maskHex)
 	if cyclic {
 		cmd += " CYCLIC"
 	}
@@ -43,24 +38,22 @@ func (m *Manager) OpenBufferASCII(
 
 // ReadBufferASCII reads raw bytes from an open buffer.
 //
-// This implements the exact READBUF loop used by libiio:
+// Protocol (legacy ASCII):
 //
-//	READBUF <dev> <len>
-//	-> integer N
-//	   if N > 0: read N bytes
-//	   if N == 0: done
-//	   if N < 0: error
+//	READBUF <dev> <len>\r\n
+//	-> integer N (chunk bytes)
+//	   if N > 0: then N bytes of binary payload follow immediately
+//	   if N == 0: end
+//	   if N < 0: error (negative errno)
 //
-// The function returns the total number of bytes written into dst.
-func (m *Manager) ReadBufferASCII(
-	deviceID string,
-	dst []byte,
-) (int, error) {
+// IMPORTANT:
+// If the server announces N bytes but the caller's dst does not have enough remaining
+// capacity, we MUST still read and discard the remainder to keep the TCP stream aligned.
+// Otherwise the next readInteger() will start in the middle of binary payload and parse
+// garbage (your “announced bytes=-4096” symptom).
+func (m *Manager) ReadBufferASCII(deviceID string, dst []byte) (int, error) {
 	if m.Mode != ModeASCII {
 		return 0, fmt.Errorf("ReadBufferASCII: not in ASCII mode")
-	}
-	if len(dst) == 0 {
-		return 0, nil
 	}
 
 	cmd := fmt.Sprintf("READBUF %s %d", deviceID, len(dst))
@@ -70,43 +63,62 @@ func (m *Manager) ReadBufferASCII(
 		return 0, err
 	}
 
-	total := 0
-	iteration := 0
-
-	for total < len(dst) {
-		iteration++
-		log.Printf("[READBUF] iteration=%d waiting for size integer", iteration)
-
-		n, err := m.readInteger()
-		if err != nil {
-			return total, err
-		}
-
-		log.Printf("[READBUF] iteration=%d announced bytes=%d", iteration, n)
-
-		if n < 0 {
-			return total, fmt.Errorf("READBUF error: %d", n)
-		}
-
-		if n == 0 {
-			log.Printf("[READBUF] iteration=%d server signaled end", iteration)
-			break
-		}
-
-		if total+n > len(dst) {
-			n = len(dst) - total // clamp to requested size
-		}
-
-		if err := m.readAll(dst[total : total+n]); err != nil {
-			return total, err
-		}
-
-		log.Printf("[READBUF] iteration=%d read %d bytes", iteration, n)
-		total += n
+	log.Printf("[READBUF] waiting for size integer")
+	n, err := m.readInteger()
+	if err != nil {
+		return 0, err
 	}
 
-	log.Printf("[READBUF] completed: total=%d bytes", total)
-	return total, nil
+	log.Printf("[READBUF] announced bytes=%d", n)
+
+	if n < 0 {
+		return 0, fmt.Errorf("READBUF error: %d", n)
+	}
+	if n == 0 {
+		return 0, nil
+	}
+
+	toCopy := n
+	if toCopy > len(dst) {
+		toCopy = len(dst)
+	}
+
+	// Read payload
+	if err := m.readAll(dst[:toCopy]); err != nil {
+		return toCopy, err
+	}
+
+	// Discard overflow payload
+	remaining := n - toCopy
+	if remaining > 0 {
+		if err := m.drainBytes(remaining); err != nil {
+			return toCopy, err
+		}
+		log.Printf("[READBUF] truncated payload: copied=%d drained=%d", toCopy, remaining)
+	}
+
+	log.Printf("[READBUF] completed: total=%d bytes", toCopy)
+	return toCopy, nil
+}
+
+// drainBytes reads and discards exactly n bytes from the socket.
+// Keeps the protocol stream aligned when the server sends more than we can store.
+func (m *Manager) drainBytes(n int) error {
+	const chunk = 16 * 1024
+	var scratch [chunk]byte
+
+	left := n
+	for left > 0 {
+		want := left
+		if want > chunk {
+			want = chunk
+		}
+		if err := m.readAll(scratch[:want]); err != nil {
+			return err
+		}
+		left -= want
+	}
+	return nil
 }
 
 // CloseBufferASCII closes an open ASCII buffer.
