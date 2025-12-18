@@ -22,7 +22,7 @@ type Manager struct {
 	Timeout time.Duration
 	Logger  *log.Logger
 
-	clientID uint16
+	clientID uint16 // libiio client identifier (0 unless multiplexing is added)
 
 	conn net.Conn
 }
@@ -43,6 +43,7 @@ func (m *Manager) Connect() error {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	m.conn = c
+	m.clientID = 0
 	m.Mode = ModeASCII
 	return nil
 }
@@ -81,6 +82,15 @@ func (m *Manager) logf(format string, args ...any) {
 
 func (m *Manager) SetLogger(l *log.Logger) {
 	m.Logger = l
+}
+
+// SetClientID overrides the libiio client identifier used in binary headers.
+func (m *Manager) SetClientID(id uint16) {
+	if m == nil {
+		return
+	}
+	m.clientID = id
+	m.Mode = ModeBinary
 }
 
 // ---------- Raw I/O (NO BUFFERING) ----------
