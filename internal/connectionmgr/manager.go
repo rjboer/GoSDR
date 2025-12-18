@@ -1,13 +1,10 @@
 package connectionmgr
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -24,6 +21,8 @@ type Manager struct {
 
 	Timeout time.Duration
 	Logger  *log.Logger
+
+	clientID uint16
 
 	conn net.Conn
 }
@@ -86,81 +85,73 @@ func (m *Manager) SetLogger(l *log.Logger) {
 
 // ---------- Raw I/O (NO BUFFERING) ----------
 
-func (m *Manager) readAll(p []byte) error {
-	_, err := io.ReadFull(m.conn, p)
-	return err
+// applyReadDeadline applies the configured read timeout to the socket.
+func (m *Manager) applyReadDeadline() {
+	if m.conn != nil && m.Timeout > 0 {
+		_ = m.conn.SetReadDeadline(time.Now().Add(m.Timeout))
+	}
 }
 
-func (m *Manager) writeAll(p []byte) error {
-	_, err := m.conn.Write(p)
-	return err
+// applyWriteDeadline applies the configured write timeout to the socket.
+func (m *Manager) applyWriteDeadline() {
+	if m.conn != nil && m.Timeout > 0 {
+		_ = m.conn.SetWriteDeadline(time.Now().Add(m.Timeout))
+	}
 }
 
-// Read ASCII line, byte-by-byte, with hard limit
-func (m *Manager) readLine(limit int) ([]byte, error) {
-	if limit <= 0 {
-		limit = 64 * 1024
-	}
-
-	var buf bytes.Buffer
-	var b [1]byte
-
-	for buf.Len() < limit {
-		if err := m.readAll(b[:]); err != nil {
-			return nil, err
-		}
-		buf.WriteByte(b[0])
-		if b[0] == '\n' {
-			return buf.Bytes(), nil
-		}
-	}
-
-	return nil, fmt.Errorf("line exceeds limit=%d", limit)
-}
-
-// ---------- ASCII protocol helpers ----------
-
-func hasLineEnding(s string) bool {
-	return strings.HasSuffix(s, "\n") || strings.HasSuffix(s, "\r\n")
-}
-
-func (m *Manager) readInteger() (int, error) {
-	line, err := m.readLine(1024)
-	if err != nil {
-		return 0, err
-	}
-
-	s := strings.TrimSpace(string(line))
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid integer response %q", s)
-	}
-	return n, nil
-}
-
-// ExecCommand sends an ASCII command and reads a single integer response.
-//
-// Mirrors iiod_client_exec_command():
-//
-//	write command
-//	read integer line
-func (m *Manager) ExecCommand(cmd string) (int, error) {
-	if m.Mode != ModeASCII {
-		return 0, fmt.Errorf("ExecCommand: not in ASCII mode")
-	}
+// writeAll writes the full buffer to the socket, handling short writes.
+// Buffered writing is safe; reading is NOT buffered.
+func (m *Manager) writeAll(b []byte) error {
 	if m.conn == nil {
-		return 0, fmt.Errorf("ExecCommand: not connected")
+		return fmt.Errorf("writeAll: not connected")
 	}
 
-	if !hasLineEnding(cmd) {
-		cmd += "\r\n"
+	for len(b) > 0 {
+		m.applyWriteDeadline()
+		n, err := m.conn.Write(b)
+		if err != nil {
+			return err
+		}
+		b = b[n:]
+	}
+	return nil
+}
+
+// readAll reads exactly len(b) bytes from the socket.
+// This MUST use the raw connection, not a buffered reader.
+func (m *Manager) readAll(b []byte) error {
+	if m.conn == nil {
+		return fmt.Errorf("readAll: not connected")
 	}
 
-	if err := m.writeAll([]byte(cmd)); err != nil {
-		return 0, err
+	m.applyReadDeadline()
+	_, err := io.ReadFull(m.conn, b)
+	return err
+}
+
+// readLine reads a single LF-terminated line (ASCII), returning it as a string.
+// It reads from the raw socket byte-by-byte to avoid buffering issues.
+func (m *Manager) readLine() (string, error) {
+	if m.conn == nil {
+		return "", fmt.Errorf("readLine: not connected")
 	}
 
-	return m.readInteger()
+	var buf []byte
+	var one [1]byte
+
+	for {
+		m.applyReadDeadline()
+		_, err := m.conn.Read(one[:])
+		if err != nil {
+			return "", err
+		}
+		b := one[0]
+		buf = append(buf, b)
+		if b == '\n' {
+			break
+		}
+	}
+	return string(buf), nil
 }
 
 // ---------- Higher-level operations ----------

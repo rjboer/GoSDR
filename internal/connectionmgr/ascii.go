@@ -2,54 +2,8 @@ package connectionmgr
 
 import (
 	"fmt"
-	"io"
 	"strconv"
-	"time"
 )
-
-// applyReadDeadline applies the configured read timeout to the socket.
-func (m *Manager) applyReadDeadline() {
-	if m.conn != nil && m.Timeout > 0 {
-		_ = m.conn.SetReadDeadline(time.Now().Add(m.Timeout))
-	}
-}
-
-// applyWriteDeadline applies the configured write timeout to the socket.
-func (m *Manager) applyWriteDeadline() {
-	if m.conn != nil && m.Timeout > 0 {
-		_ = m.conn.SetWriteDeadline(time.Now().Add(m.Timeout))
-	}
-}
-
-// writeAll writes the full buffer to the socket, handling short writes.
-// Buffered writing is safe; reading is NOT buffered.
-func (m *Manager) writeAll(b []byte) error {
-	if m.conn == nil {
-		return fmt.Errorf("writeAll: not connected")
-	}
-
-	for len(b) > 0 {
-		m.applyWriteDeadline()
-		n, err := m.conn.Write(b)
-		if err != nil {
-			return err
-		}
-		b = b[n:]
-	}
-	return nil
-}
-
-// readAll reads exactly len(b) bytes from the socket.
-// This MUST use the raw connection, not a buffered reader.
-func (m *Manager) readAll(b []byte) error {
-	if m.conn == nil {
-		return fmt.Errorf("readAll: not connected")
-	}
-
-	m.applyReadDeadline()
-	_, err := io.ReadFull(m.conn, b)
-	return err
-}
 
 // readInteger reads a single ASCII integer terminated by '\n'.
 // It reads byte-by-byte directly from the socket to avoid any read-ahead.
@@ -141,31 +95,6 @@ func (m *Manager) writeLine(cmd string) error {
 		cmd += "\r\n"
 	}
 	return m.writeAll([]byte(cmd))
-}
-
-// readLine reads a single LF-terminated line (ASCII), returning it as a string.
-// It reads from the raw socket byte-by-byte to avoid buffering issues.
-func (m *Manager) readLine() (string, error) {
-	if m.conn == nil {
-		return "", fmt.Errorf("readLine: not connected")
-	}
-
-	var buf []byte
-	var one [1]byte
-
-	for {
-		m.applyReadDeadline()
-		_, err := m.conn.Read(one[:])
-		if err != nil {
-			return "", err
-		}
-		b := one[0]
-		buf = append(buf, b)
-		if b == '\n' {
-			break
-		}
-	}
-	return string(buf), nil
 }
 
 // ExecASCII is an alias for ExecCommand (legacy naming used by other helpers).
