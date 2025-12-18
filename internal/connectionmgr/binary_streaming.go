@@ -87,6 +87,50 @@ func (m *Manager) EnableBuffer(buf *Buffer) error {
 	return err
 }
 
+// DisableBuffer sends DISABLE_BUFFER for the given Buffer.
+func (m *Manager) DisableBuffer(buf *Buffer) error {
+	if m == nil {
+		return fmt.Errorf("nil Manager")
+	}
+	if buf == nil {
+		return fmt.Errorf("DisableBuffer: buffer is nil")
+	}
+	if m.Mode != ModeBinary {
+		return fmt.Errorf("DisableBuffer: not in binary mode")
+	}
+
+	_, _, err := m.roundTripBinary(
+		opDisableBuffer,
+		buf.Dev,
+		int32(buf.ID),
+		nil,
+		nil,
+	)
+	return err
+}
+
+// FreeBuffer sends FREE_BUFFER for the given Buffer.
+func (m *Manager) FreeBuffer(buf *Buffer) error {
+	if m == nil {
+		return fmt.Errorf("nil Manager")
+	}
+	if buf == nil {
+		return fmt.Errorf("FreeBuffer: buffer is nil")
+	}
+	if m.Mode != ModeBinary {
+		return fmt.Errorf("FreeBuffer: not in binary mode")
+	}
+
+	_, _, err := m.roundTripBinary(
+		opFreeBuffer,
+		buf.Dev,
+		int32(buf.ID),
+		nil,
+		nil,
+	)
+	return err
+}
+
 // CreateBlock allocates a block on the server with the requested byte size.
 func (m *Manager) CreateBlock(buf *Buffer, blockSize int) (*Block, error) {
 	if m == nil {
@@ -123,6 +167,28 @@ func (m *Manager) CreateBlock(buf *Buffer, blockSize int) (*Block, error) {
 		Size:   blockSize,
 		buffer: buf,
 	}, nil
+}
+
+// FreeBlock releases a block previously created on the given Buffer.
+func (m *Manager) FreeBlock(blk *Block) error {
+	if m == nil {
+		return fmt.Errorf("nil Manager")
+	}
+	if blk == nil || blk.buffer == nil {
+		return fmt.Errorf("FreeBlock: block or parent buffer is nil")
+	}
+	if m.Mode != ModeBinary {
+		return fmt.Errorf("FreeBlock: not in binary mode")
+	}
+
+	_, _, err := m.roundTripBinary(
+		opFreeBlock,
+		blk.buffer.Dev,
+		composeBlockCode(blk.buffer.ID, blk.ID),
+		nil,
+		nil,
+	)
+	return err
 }
 
 // TransferBlock performs one TRANSFER_BLOCK transaction and reads the payload into dst.

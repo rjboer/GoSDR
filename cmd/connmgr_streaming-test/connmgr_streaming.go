@@ -14,11 +14,11 @@ func main() {
 	// ---------------------------------------------------------------------
 	iiodAddress := "192.168.2.1:30431"
 	ioTimeout := 5 * time.Second
-	doBinaryHandshakeTest := true
-
-	deviceID := "cf-ad9361-lpc"
-	channelMask := "00000003" // RX channels 0 + 1
-	samples := uint64(1024)
+	blockSize := 16 * 1024
+	devIndex := uint8(0)      // Target device index for the binary buffer
+	channels := []uint8{0, 1} // RX channel indices to enable
+	streamTransfers := 5      // Number of blocks to read before exiting
+	cyclic := false           // Whether to enqueue blocks cyclically
 
 	// ---------------------------------------------------------------------
 	// Logging
@@ -68,54 +68,63 @@ func main() {
 	log.Printf("[INFO] XML received: %d bytes", len(xml))
 
 	// ---------------------------------------------------------------------
-	// 4. Open ASCII buffer
+	// 4. Enter BINARY mode
 	// ---------------------------------------------------------------------
-	log.Println("[STEP 5] Opening ASCII buffer...")
-	if err := m.OpenBufferASCII(deviceID, samples, channelMask, false); err != nil {
-		log.Fatalf("OPEN failed: %v", err)
+	log.Println("[STEP 5] Entering binary streaming mode...")
+	if err := m.EnterBinaryMode(); err != nil {
+		log.Fatalf("EnterBinaryMode failed: %v", err)
+	}
+
+	// ---------------------------------------------------------------------
+	// 5. Create/enable binary buffer
+	// ---------------------------------------------------------------------
+	log.Println("[STEP 6] Creating binary buffer...")
+	buf, err := m.CreateBuffer(devIndex, channels, cyclic)
+	if err != nil {
+		log.Fatalf("CreateBuffer failed: %v", err)
 	}
 	defer func() {
-		log.Println("[CLEANUP] Closing buffer...")
-		_ = m.CloseBufferASCII(deviceID)
+		log.Println("[CLEANUP] Disabling buffer...")
+		if err := m.DisableBuffer(buf); err != nil {
+			log.Printf("[WARN] DisableBuffer error: %v", err)
+		}
+		log.Println("[CLEANUP] Freeing buffer...")
+		if err := m.FreeBuffer(buf); err != nil {
+			log.Printf("[WARN] FreeBuffer error: %v", err)
+		}
+	}()
+
+	log.Println("[STEP 7] Enabling buffer...")
+	if err := m.EnableBuffer(buf); err != nil {
+		log.Fatalf("EnableBuffer failed: %v", err)
+	}
+
+	// ---------------------------------------------------------------------
+	// 6. Create block
+	// ---------------------------------------------------------------------
+	log.Printf("[STEP 8] Creating block (size=%d)...", blockSize)
+	blk, err := m.CreateBlock(buf, blockSize)
+	if err != nil {
+		log.Fatalf("CreateBlock failed: %v", err)
+	}
+	defer func() {
+		log.Println("[CLEANUP] Freeing block...")
+		if err := m.FreeBlock(blk); err != nil {
+			log.Printf("[WARN] FreeBlock error: %v", err)
+		}
 	}()
 
 	// ---------------------------------------------------------------------
-	// 5. Read samples
+	// 7. Stream blocks
 	// ---------------------------------------------------------------------
-	log.Println("[STEP 6] Reading samples...")
-	buf := make([]byte, 64*1024)
-
-	n, err := m.ReadBufferASCII(deviceID, buf)
-	if err != nil {
-		log.Fatalf("READBUF failed: %v", err)
-	}
-
-	log.Printf("[INFO] Read %d bytes from %s", n, deviceID)
-
-	// At this point:
-	//   buf[:n] → feed directly into your demuxer / extract pipeline
-
-	// ---------------------------------------------------------------------
-	// 6. Optional: test BINARY handshake
-	// ---------------------------------------------------------------------
-	if doBinaryHandshakeTest {
-		log.Println("[STEP 7] Testing BINARY handshake on new connection...")
-		bm := connectionmgr.New(iiodAddress)
-		bm.SetTimeout(ioTimeout)
-
-		if err := bm.Connect(); err != nil {
-			log.Fatalf("Binary-test connect failed: %v", err)
-		}
-		defer bm.Close()
-
-		ok, err := bm.TryUpgradeToBinary()
+	log.Println("[STEP 9] Streaming RX data...")
+	payload := make([]byte, blockSize)
+	for i := 0; i < streamTransfers; i++ {
+		n, err := m.TransferBlock(blk, payload)
 		if err != nil {
-			log.Printf("[ERROR] BINARY handshake error: %v", err)
-		} else if ok {
-			log.Printf("[INFO] BINARY supported (unexpected on Pluto)")
-		} else {
-			log.Printf("[INFO] BINARY not supported (expected)")
+			log.Fatalf("TransferBlock failed: %v", err)
 		}
+		log.Printf("[STREAM] Block %d received %d bytes", i+1, n)
 	}
 
 	log.Println("====================================================")
