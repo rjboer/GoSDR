@@ -2,9 +2,179 @@ package connectionmgr
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
+	"sync"
 )
+
+// StreamQueueConfig controls buffering between producers and consumers in binary streaming.
+// Watermarks provide backpressure signaling for callers that want to react to queue pressure
+// (e.g., slow down writers when the high watermark is crossed, resume when the low watermark
+// is reached again).
+type StreamQueueConfig struct {
+	Depth           int
+	HighWatermark   int
+	LowWatermark    int
+	HighWatermarkCh chan<- struct{}
+	LowWatermarkCh  chan<- struct{}
+}
+
+type streamQueueConfig struct {
+	depth         int
+	highWatermark int
+	lowWatermark  int
+	highCh        chan<- struct{}
+	lowCh         chan<- struct{}
+}
+
+func normalizeStreamQueueConfig(cfg StreamQueueConfig) streamQueueConfig {
+	const defaultDepth = 8
+
+	depth := cfg.Depth
+	if depth <= 0 {
+		depth = defaultDepth
+	}
+	high := cfg.HighWatermark
+	if high <= 0 || high > depth {
+		high = depth - 1
+	}
+	low := cfg.LowWatermark
+	if low < 0 || low >= high {
+		low = high / 2
+	}
+
+	highCh := cfg.HighWatermarkCh
+	if highCh == nil {
+		highCh = make(chan struct{}, 1)
+	}
+	lowCh := cfg.LowWatermarkCh
+	if lowCh == nil {
+		lowCh = make(chan struct{}, 1)
+	}
+
+	return streamQueueConfig{depth: depth, highWatermark: high, lowWatermark: low, highCh: highCh, lowCh: lowCh}
+}
+
+var (
+	errQueueClosed  = errors.New("stream queue closed")
+	errQueueStopped = errors.New("stream queue stopped")
+)
+
+type streamQueue struct {
+	cfg      streamQueueConfig
+	mu       sync.Mutex
+	notEmpty *sync.Cond
+	notFull  *sync.Cond
+	items    [][]byte
+	closed   bool
+	err      error
+	belowLow bool
+}
+
+func newStreamQueue(cfg StreamQueueConfig) *streamQueue {
+	nCfg := normalizeStreamQueueConfig(cfg)
+	q := &streamQueue{
+		cfg:      nCfg,
+		belowLow: true,
+	}
+	q.notEmpty = sync.NewCond(&q.mu)
+	q.notFull = sync.NewCond(&q.mu)
+	return q
+}
+
+func (q *streamQueue) close(err error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	q.closed = true
+	if err != nil {
+		q.err = err
+	}
+	q.notEmpty.Broadcast()
+	q.notFull.Broadcast()
+}
+
+func (q *streamQueue) enqueue(item []byte, stop <-chan struct{}) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for !q.closed && len(q.items) >= q.cfg.depth {
+		if stop != nil {
+			q.mu.Unlock()
+			select {
+			case <-stop:
+				return errQueueStopped
+			default:
+			}
+			q.mu.Lock()
+		}
+		q.notFull.Wait()
+	}
+
+	if q.closed {
+		if q.err != nil {
+			return q.err
+		}
+		return errQueueClosed
+	}
+
+	q.items = append(q.items, item)
+	q.emitWatermarksLocked()
+	q.notEmpty.Signal()
+	return nil
+}
+
+func (q *streamQueue) dequeue(stop <-chan struct{}) ([]byte, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for len(q.items) == 0 && !q.closed {
+		if stop != nil {
+			q.mu.Unlock()
+			select {
+			case <-stop:
+				return nil, errQueueStopped
+			default:
+			}
+			q.mu.Lock()
+		}
+		q.notEmpty.Wait()
+	}
+
+	if len(q.items) == 0 {
+		if q.err != nil {
+			return nil, q.err
+		}
+		return nil, errQueueClosed
+	}
+
+	item := q.items[0]
+	q.items = q.items[1:]
+	q.emitWatermarksLocked()
+	q.notFull.Signal()
+	return item, nil
+}
+
+func (q *streamQueue) emitWatermarksLocked() {
+	size := len(q.items)
+	if size >= q.cfg.highWatermark && q.belowLow {
+		q.belowLow = false
+		select {
+		case q.cfg.highCh <- struct{}{}:
+		default:
+		}
+	}
+	if size <= q.cfg.lowWatermark && !q.belowLow {
+		q.belowLow = true
+		select {
+		case q.cfg.lowCh <- struct{}{}:
+		default:
+		}
+	}
+}
 
 // Buffer models a binary streaming buffer on the IIOD server.
 type Buffer struct {
@@ -282,7 +452,10 @@ func (m *Manager) TransferTxBlock(blk *Block, payload []byte) (int, error) {
 }
 
 // StartRXStream continuously issues TRANSFER_BLOCK and delivers payload copies to out until stop is signaled.
-func (m *Manager) StartRXStream(buf *Buffer, blk *Block, out chan<- []byte, stop <-chan struct{}) error {
+// A bounded queue mediates between the network producer and the caller-provided consumer channel so that
+// spikes in either direction do not permanently stall the other side. Queue depth and watermarks are
+// controlled via cfg.
+func (m *Manager) StartRXStream(buf *Buffer, blk *Block, out chan<- []byte, stop <-chan struct{}, cfg StreamQueueConfig) error {
 	if buf == nil {
 		return fmt.Errorf("StartRXStream: buffer is nil")
 	}
@@ -296,41 +469,89 @@ func (m *Manager) StartRXStream(buf *Buffer, blk *Block, out chan<- []byte, stop
 		return fmt.Errorf("StartRXStream: out channel is nil")
 	}
 
+	q := newStreamQueue(cfg)
+	if stop != nil {
+		go func() {
+			<-stop
+			q.close(errQueueStopped)
+		}()
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
 	payload := make([]byte, blk.Size)
 
-	for {
-		select {
-		case <-stop:
-			return nil
-		default:
-		}
+	producer := func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
 
-		n, err := m.TransferBlock(blk, payload)
-		if err != nil {
-			return err
-		}
-		if n <= 0 {
-			continue
-		}
+			n, err := m.TransferBlock(blk, payload)
+			if err != nil {
+				errCh <- err
+				q.close(err)
+				return
+			}
+			if n <= 0 {
+				continue
+			}
 
-		copyLen := n
-		if copyLen > len(payload) {
-			copyLen = len(payload)
-		}
+			copyLen := n
+			if copyLen > len(payload) {
+				copyLen = len(payload)
+			}
 
-		frame := make([]byte, copyLen)
-		copy(frame, payload[:copyLen])
+			frame := make([]byte, copyLen)
+			copy(frame, payload[:copyLen])
 
-		select {
-		case out <- frame:
-		case <-stop:
-			return nil
+			if err := q.enqueue(frame, stop); err != nil {
+				if !errors.Is(err, errQueueClosed) && !errors.Is(err, errQueueStopped) {
+					errCh <- err
+				}
+				return
+			}
 		}
+	}
+
+	consumer := func() {
+		defer wg.Done()
+		for {
+			frame, err := q.dequeue(stop)
+			if err != nil {
+				if !errors.Is(err, errQueueClosed) && !errors.Is(err, errQueueStopped) {
+					errCh <- err
+				}
+				return
+			}
+
+			select {
+			case <-stop:
+				q.close(errQueueStopped)
+				return
+			case out <- frame:
+			}
+		}
+	}
+
+	wg.Add(2)
+	go producer()
+	go consumer()
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
 	}
 }
 
 // StartTXStream continuously dequeues payloads and transmits them until stop is signaled.
-func (m *Manager) StartTXStream(buf *Buffer, blk *Block, in <-chan []byte, stop <-chan struct{}) error {
+func (m *Manager) StartTXStream(buf *Buffer, blk *Block, in <-chan []byte, stop <-chan struct{}, cfg StreamQueueConfig) error {
 	if buf == nil {
 		return fmt.Errorf("StartTXStream: buffer is nil")
 	}
@@ -344,21 +565,73 @@ func (m *Manager) StartTXStream(buf *Buffer, blk *Block, in <-chan []byte, stop 
 		return fmt.Errorf("StartTXStream: input channel is nil")
 	}
 
-	for {
-		select {
-		case <-stop:
-			return nil
-		case frame, ok := <-in:
-			if !ok {
-				return nil
-			}
-			if len(frame) > blk.Size {
-				frame = frame[:blk.Size]
-			}
-			if _, err := m.TransferTxBlock(blk, frame); err != nil {
-				return err
+	q := newStreamQueue(cfg)
+	if stop != nil {
+		go func() {
+			<-stop
+			q.close(errQueueStopped)
+		}()
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+
+	producer := func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				q.close(errQueueStopped)
+				return
+			case frame, ok := <-in:
+				if !ok {
+					q.close(nil)
+					return
+				}
+				if len(frame) > blk.Size {
+					frame = frame[:blk.Size]
+				}
+				copyFrame := make([]byte, len(frame))
+				copy(copyFrame, frame)
+				if err := q.enqueue(copyFrame, stop); err != nil {
+					if !errors.Is(err, errQueueClosed) && !errors.Is(err, errQueueStopped) {
+						errCh <- err
+					}
+					return
+				}
 			}
 		}
+	}
+
+	consumer := func() {
+		defer wg.Done()
+		for {
+			frame, err := q.dequeue(stop)
+			if err != nil {
+				if !errors.Is(err, errQueueClosed) && !errors.Is(err, errQueueStopped) {
+					errCh <- err
+				}
+				return
+			}
+
+			if _, err := m.TransferTxBlock(blk, frame); err != nil {
+				errCh <- err
+				q.close(err)
+				return
+			}
+		}
+	}
+
+	wg.Add(2)
+	go producer()
+	go consumer()
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
 	}
 }
 
