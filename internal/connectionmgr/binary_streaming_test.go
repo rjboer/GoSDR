@@ -245,3 +245,55 @@ func TestStartRXStreamStopsOnSignal(t *testing.T) {
 		t.Fatalf("StartRXStream error: %v", err)
 	}
 }
+
+func TestTransferTxBlockTracksInFlight(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	m := &Manager{Timeout: time.Second, Mode: ModeBinary}
+	m.SetConn(client)
+
+	buf := &Buffer{ID: 0, Dev: 1, inFlight: make(map[uint16]int)}
+	blk := &Block{ID: 0, Size: 4, buffer: buf}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+
+		var hdr [8]byte
+		sizePayload := make([]byte, 8)
+		if _, err := io.ReadFull(server, hdr[:]); err != nil {
+			t.Errorf("read transfer hdr: %v", err)
+			return
+		}
+		if _, err := io.ReadFull(server, sizePayload); err != nil {
+			t.Errorf("read size: %v", err)
+			return
+		}
+		payload := make([]byte, binary.LittleEndian.Uint64(sizePayload))
+		if _, err := io.ReadFull(server, payload); err != nil {
+			t.Errorf("read payload: %v", err)
+			return
+		}
+
+		var resp [8]byte
+		binary.BigEndian.PutUint16(resp[0:2], 0)
+		resp[2] = opResponse
+		resp[3] = buf.Dev
+		binary.BigEndian.PutUint32(resp[4:8], 0)
+		_, _ = server.Write(resp[:])
+	}()
+
+	if buf.inFlight[blk.ID] != 0 {
+		t.Fatalf("expected clean in-flight state")
+	}
+	if _, err := m.TransferTxBlock(blk, []byte{1, 2, 3, 4}); err != nil {
+		t.Fatalf("TransferTxBlock: %v", err)
+	}
+	if buf.inFlight[blk.ID] != 0 {
+		t.Fatalf("in-flight counter not cleared: %d", buf.inFlight[blk.ID])
+	}
+
+	<-done
+}

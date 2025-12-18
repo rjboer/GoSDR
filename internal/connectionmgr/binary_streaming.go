@@ -14,6 +14,7 @@ type Buffer struct {
 	Cyclic   bool
 
 	nextBlockID uint16
+	inFlight    map[uint16]int
 }
 
 // Block models a fixed-size transfer block associated with a Buffer.
@@ -62,6 +63,7 @@ func (m *Manager) CreateBuffer(dev uint8, channels []uint8, cyclic bool) (*Buffe
 		Dev:      dev,
 		Channels: sortedCh,
 		Cyclic:   cyclic,
+		inFlight: make(map[uint16]int),
 	}, nil
 }
 
@@ -180,6 +182,9 @@ func (m *Manager) FreeBlock(blk *Block) error {
 	if m.Mode != ModeBinary {
 		return fmt.Errorf("FreeBlock: not in binary mode")
 	}
+	if blk.buffer.inFlight[blk.ID] > 0 {
+		return fmt.Errorf("FreeBlock: block %d is still in-flight", blk.ID)
+	}
 
 	_, _, err := m.roundTripBinary(
 		opFreeBlock,
@@ -209,6 +214,14 @@ func (m *Manager) TransferBlock(blk *Block, dst []byte) (int, error) {
 		return 0, fmt.Errorf("TransferBlock: block size must be > 0")
 	}
 
+	if blk.buffer.inFlight == nil {
+		blk.buffer.inFlight = make(map[uint16]int)
+	}
+	blk.buffer.inFlight[blk.ID]++
+	defer func() {
+		blk.buffer.inFlight[blk.ID]--
+	}()
+
 	sizeLE := make([]byte, 8)
 	binary.LittleEndian.PutUint64(sizeLE, uint64(bytesUsed))
 
@@ -223,6 +236,48 @@ func (m *Manager) TransferBlock(blk *Block, dst []byte) (int, error) {
 		return copied, err
 	}
 
+	return int(resp.Code), nil
+}
+
+// TransferTxBlock writes a payload for the given block and returns the status code.
+func (m *Manager) TransferTxBlock(blk *Block, payload []byte) (int, error) {
+	if m == nil {
+		return 0, fmt.Errorf("nil Manager")
+	}
+	if blk == nil || blk.buffer == nil {
+		return 0, fmt.Errorf("TransferTxBlock: block or parent buffer is nil")
+	}
+	if m.Mode != ModeBinary {
+		return 0, fmt.Errorf("TransferTxBlock: not in binary mode")
+	}
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("TransferTxBlock: payload is empty")
+	}
+
+	if blk.buffer.inFlight == nil {
+		blk.buffer.inFlight = make(map[uint16]int)
+	}
+	blk.buffer.inFlight[blk.ID]++
+	defer func() {
+		blk.buffer.inFlight[blk.ID]--
+	}()
+
+	sizeLE := make([]byte, 8)
+	binary.LittleEndian.PutUint64(sizeLE, uint64(len(payload)))
+
+	resp, _, err := m.roundTripBinary(
+		opTransferBlock,
+		blk.buffer.Dev,
+		composeBlockCode(blk.buffer.ID, blk.ID),
+		[][]byte{sizeLE, payload},
+		nil,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if resp.Code < 0 {
+		return 0, ErrIiodStatus{Op: resp.Op, Dev: resp.Dev, Code: resp.Code}
+	}
 	return int(resp.Code), nil
 }
 
@@ -270,6 +325,39 @@ func (m *Manager) StartRXStream(buf *Buffer, blk *Block, out chan<- []byte, stop
 		case out <- frame:
 		case <-stop:
 			return nil
+		}
+	}
+}
+
+// StartTXStream continuously dequeues payloads and transmits them until stop is signaled.
+func (m *Manager) StartTXStream(buf *Buffer, blk *Block, in <-chan []byte, stop <-chan struct{}) error {
+	if buf == nil {
+		return fmt.Errorf("StartTXStream: buffer is nil")
+	}
+	if blk == nil {
+		return fmt.Errorf("StartTXStream: block is nil")
+	}
+	if blk.buffer != buf {
+		return fmt.Errorf("StartTXStream: block does not belong to buffer")
+	}
+	if in == nil {
+		return fmt.Errorf("StartTXStream: input channel is nil")
+	}
+
+	for {
+		select {
+		case <-stop:
+			return nil
+		case frame, ok := <-in:
+			if !ok {
+				return nil
+			}
+			if len(frame) > blk.Size {
+				frame = frame[:blk.Size]
+			}
+			if _, err := m.TransferTxBlock(blk, frame); err != nil {
+				return err
+			}
 		}
 	}
 }
