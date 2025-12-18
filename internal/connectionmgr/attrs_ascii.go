@@ -31,11 +31,11 @@ func (m *Manager) ReadDeviceAttrASCII(devID, attr string) (string, error) {
 	_ = n
 
 	// If you already have a "readLine" helper in ascii.go, use it here.
-	line, err := m.readLine()
+	line, err := m.readLine(4096)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
 // ReadChannelAttrASCII reads a channel attribute (INPUT/OUTPUT) using legacy ASCII.
@@ -62,11 +62,11 @@ func (m *Manager) ReadChannelAttrASCII(devID string, isOutput bool, chanID, attr
 	}
 	_ = n
 
-	line, err := m.readLine()
+	line, err := m.readLine(4096)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
 // WriteDeviceAttrASCII writes a device attribute using legacy ASCII.
@@ -201,7 +201,7 @@ func (m *Manager) SetChannelEnabledASCII(devID string, isOutput bool, chanID, at
 //
 // - func (m *Manager) ExecASCII(cmd string) (int, error)          // write cmd + CRLF, read integer header
 // - func (m *Manager) readInteger() (int, error)                 // reads one integer line
-// - func (m *Manager) readLine() (string, error)                 // reads one line (ending in \n)
+// - func (m *Manager) readLine(maxLen int) ([]byte, error)       // reads one line (ending in \n)
 // - func (m *Manager) writeLine(cmd string) error                // writes cmd + "\r\n"
 // - func (m *Manager) writeAll(b []byte) error                   // writes all bytes
 //
