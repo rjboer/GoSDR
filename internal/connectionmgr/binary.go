@@ -23,13 +23,19 @@ type iiodCommand struct {
 }
 
 // =======================
-// IIOD binary opcodes
+// IIOD binary opcodes (see iiod-responder.h)
 // =======================
 const (
-	opCreateBuffer  = 0x10
-	opEnableBuffer  = 0x11
-	opCreateBlock   = 0x12
-	opTransferBlock = 0x13
+	opResponse           = 0x00
+	opCreateBuffer       = 0x0d
+	opFreeBuffer         = 0x0e
+	opEnableBuffer       = 0x0f
+	opDisableBuffer      = 0x10
+	opCreateBlock        = 0x11
+	opFreeBlock          = 0x12
+	opTransferBlock      = 0x13
+	opEnqueueBlockCyclic = 0x14
+	opRetryDequeueBlock  = 0x15
 )
 
 //
@@ -38,8 +44,8 @@ const (
 // =======================
 //
 
-// sendBinaryCommand writes exactly one binary command header.
-func (m *Manager) sendBinaryCommand(op, dev uint8, code int32) error {
+// sendBinaryCommand writes exactly one binary command header followed by any payload slices.
+func (m *Manager) sendBinaryCommand(op, dev uint8, code int32, payloads ...[]byte) error {
 	if m == nil || m.conn == nil {
 		return fmt.Errorf("sendBinaryCommand: not connected")
 	}
@@ -53,7 +59,20 @@ func (m *Manager) sendBinaryCommand(op, dev uint8, code int32) error {
 	hdr[3] = dev
 	binary.BigEndian.PutUint32(hdr[4:8], uint32(code))
 
-	return m.writeAll(hdr[:])
+	if err := m.writeAll(hdr[:]); err != nil {
+		return err
+	}
+
+	for _, payload := range payloads {
+		if len(payload) == 0 {
+			continue
+		}
+		if err := m.writeAll(payload); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // recvBinaryResponseHeader reads exactly one binary response header.
@@ -91,37 +110,54 @@ func (m *Manager) discardN(n int) error {
 	return nil
 }
 
-// roundTripBinary sends a command, receives a response header,
-// and optionally reads a fixed-size payload.
+// roundTripBinary sends a command (with optional payload slices), receives a response header,
+// and reads up to len(respPayload) bytes from the response payload, discarding any overflow.
 func (m *Manager) roundTripBinary(
 	op, dev uint8,
 	code int32,
-	payloadDst []byte,
-) (iiodCommand, error) {
+	cmdPayload [][]byte,
+	respPayload []byte,
+) (iiodCommand, int, error) {
 
-	if err := m.sendBinaryCommand(op, dev, code); err != nil {
-		return iiodCommand{}, err
+	if err := m.sendBinaryCommand(op, dev, code, cmdPayload...); err != nil {
+		return iiodCommand{}, 0, err
 	}
 
 	resp, err := m.recvBinaryResponseHeader()
 	if err != nil {
-		return iiodCommand{}, err
+		return iiodCommand{}, 0, err
 	}
 
 	if resp.Code < 0 {
-		return resp, fmt.Errorf(
+		return resp, 0, fmt.Errorf(
 			"iiod binary error: op=0x%02x dev=%d code=%d",
 			op, dev, resp.Code,
 		)
 	}
 
-	if len(payloadDst) > 0 {
-		if err := m.readAll(payloadDst); err != nil {
-			return resp, err
+	payloadLen := int(resp.Code)
+	copied := 0
+	if payloadLen > 0 {
+		copyLen := payloadLen
+		if copyLen > len(respPayload) {
+			copyLen = len(respPayload)
+		}
+		if copyLen > 0 {
+			if err := m.readAll(respPayload[:copyLen]); err != nil {
+				return resp, copied, err
+			}
+			copied = copyLen
+		}
+
+		remaining := payloadLen - copyLen
+		if remaining > 0 {
+			if err := m.discardN(remaining); err != nil {
+				return resp, copied, err
+			}
 		}
 	}
 
-	return resp, nil
+	return resp, copied, nil
 }
 
 //
@@ -132,10 +168,11 @@ func (m *Manager) roundTripBinary(
 
 // CreateBinaryRXBuffer issues CREATE_BUFFER
 func (m *Manager) CreateBinaryRXBuffer(dev uint8, samples int) error {
-	resp, err := m.roundTripBinary(
+	resp, _, err := m.roundTripBinary(
 		opCreateBuffer,
 		dev,
 		int32(samples),
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -149,10 +186,11 @@ func (m *Manager) CreateBinaryRXBuffer(dev uint8, samples int) error {
 
 // EnableBinaryRXBuffer issues ENABLE_BUFFER
 func (m *Manager) EnableBinaryRXBuffer(dev uint8) error {
-	resp, err := m.roundTripBinary(
+	resp, _, err := m.roundTripBinary(
 		opEnableBuffer,
 		dev,
 		1,
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -166,10 +204,11 @@ func (m *Manager) EnableBinaryRXBuffer(dev uint8) error {
 
 // CreateBinaryRXBlock issues CREATE_BLOCK
 func (m *Manager) CreateBinaryRXBlock(dev uint8, blockSize int) error {
-	resp, err := m.roundTripBinary(
+	resp, _, err := m.roundTripBinary(
 		opCreateBlock,
 		dev,
 		int32(blockSize),
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -193,10 +232,11 @@ func (m *Manager) TransferBinaryRXBlock(
 	}
 	buf = buf[:blockSize]
 
-	resp, err := m.roundTripBinary(
+	resp, _, err := m.roundTripBinary(
 		opTransferBlock,
 		dev,
 		int32(blockSize),
+		nil,
 		buf,
 	)
 	if err != nil {
