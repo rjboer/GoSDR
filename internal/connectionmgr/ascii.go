@@ -67,6 +67,9 @@ func (m *Manager) ExecCommand(cmd string) (int, error) {
 	if m.conn == nil {
 		return 0, fmt.Errorf("ExecCommand: not connected")
 	}
+	if m.Mode == ModeBinary {
+		return 0, fmt.Errorf("ExecCommand: ASCII helpers are disabled in binary mode")
+	}
 
 	if !hasLineEnding(cmd) {
 		cmd += "\r\n"
