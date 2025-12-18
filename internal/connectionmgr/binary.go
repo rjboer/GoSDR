@@ -3,6 +3,7 @@ package connectionmgr
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
 // =======================
@@ -128,13 +129,6 @@ func (m *Manager) roundTripBinary(
 		return iiodCommand{}, 0, err
 	}
 
-	if resp.Code < 0 {
-		return resp, 0, fmt.Errorf(
-			"iiod binary error: op=0x%02x dev=%d code=%d",
-			op, dev, resp.Code,
-		)
-	}
-
 	payloadLen := int(resp.Code)
 	copied := 0
 	if payloadLen > 0 {
@@ -158,6 +152,17 @@ func (m *Manager) roundTripBinary(
 	}
 
 	return resp, copied, nil
+}
+
+// ErrIiodStatus surfaces status codes carried in IIOD responses (including negative errno values).
+type ErrIiodStatus struct {
+	Op   uint8
+	Dev  uint8
+	Code int32
+}
+
+func (e ErrIiodStatus) Error() string {
+	return fmt.Sprintf("iiod status op=0x%02x dev=%d code=%d", e.Op, e.Dev, e.Code)
 }
 
 //
@@ -202,6 +207,62 @@ func (m *Manager) EnableBinaryRXBuffer(dev uint8) error {
 	return nil
 }
 
+// DisableBinaryRXBuffer issues DISABLE_BUFFER
+func (m *Manager) DisableBinaryRXBuffer(dev uint8) error {
+	resp, _, err := m.roundTripBinary(
+		opDisableBuffer,
+		dev,
+		1,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Code < 0 {
+		return fmt.Errorf("DISABLE_BUFFER failed: %d", resp.Code)
+	}
+	return nil
+}
+
+// FreeBinaryRXBuffer issues FREE_BUFFER
+func (m *Manager) FreeBinaryRXBuffer(dev uint8) error {
+	resp, _, err := m.roundTripBinary(
+		opFreeBuffer,
+		dev,
+		1,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Code < 0 {
+		return fmt.Errorf("FREE_BUFFER failed: %d", resp.Code)
+	}
+	return nil
+}
+
+// CreateBinaryTXBuffer mirrors CreateBinaryRXBuffer for transmit paths.
+func (m *Manager) CreateBinaryTXBuffer(dev uint8, samples int) error {
+	return m.CreateBinaryRXBuffer(dev, samples)
+}
+
+// EnableBinaryTXBuffer mirrors EnableBinaryRXBuffer for transmit paths.
+func (m *Manager) EnableBinaryTXBuffer(dev uint8) error {
+	return m.EnableBinaryRXBuffer(dev)
+}
+
+// DisableBinaryTXBuffer mirrors DisableBinaryRXBuffer for transmit paths.
+func (m *Manager) DisableBinaryTXBuffer(dev uint8) error {
+	return m.DisableBinaryRXBuffer(dev)
+}
+
+// FreeBinaryTXBuffer mirrors FreeBinaryRXBuffer for transmit paths.
+func (m *Manager) FreeBinaryTXBuffer(dev uint8) error {
+	return m.FreeBinaryRXBuffer(dev)
+}
+
 // CreateBinaryRXBlock issues CREATE_BLOCK
 func (m *Manager) CreateBinaryRXBlock(dev uint8, blockSize int) error {
 	resp, _, err := m.roundTripBinary(
@@ -220,31 +281,97 @@ func (m *Manager) CreateBinaryRXBlock(dev uint8, blockSize int) error {
 	return nil
 }
 
-// TransferBinaryRXBlock performs one TRANSFER_BLOCK and returns raw samples.
+// CreateBinaryTXBlock mirrors CreateBinaryRXBlock for transmit paths.
+func (m *Manager) CreateBinaryTXBlock(dev uint8, blockSize int) error {
+	return m.CreateBinaryRXBlock(dev, blockSize)
+}
+
+// BinaryTransferResult describes a parsed TRANSFER_BLOCK response.
+type BinaryTransferResult struct {
+	Payload    []byte
+	StatusCode int32
+	StatusOnly bool
+}
+
+// TransferBinaryRXBlock performs one TRANSFER_BLOCK and returns structured results with retry on short reads.
 func (m *Manager) TransferBinaryRXBlock(
 	dev uint8,
 	blockSize int,
 	buf []byte,
-) ([]byte, error) {
+) (*BinaryTransferResult, error) {
 
 	if cap(buf) < blockSize {
 		buf = make([]byte, blockSize)
 	}
 	buf = buf[:blockSize]
 
-	resp, _, err := m.roundTripBinary(
+	var (
+		resp   iiodCommand
+		copied int
+		err    error
+	)
+
+	retries := 3
+	backoff := 5 * time.Millisecond
+
+	for attempt := 0; attempt <= retries; attempt++ {
+		resp, copied, err = m.roundTripBinary(
+			opTransferBlock,
+			dev,
+			int32(blockSize),
+			nil,
+			buf,
+		)
+		if err == nil && (int(resp.Code) == copied || resp.Code <= 0) {
+			break
+		}
+
+		if attempt == retries {
+			_ = m.DisableBinaryRXBuffer(dev)
+			return nil, fmt.Errorf("TRANSFER_BLOCK short read after retries: %w", err)
+		}
+		time.Sleep(time.Duration(attempt+1) * backoff)
+	}
+
+	if resp.Code < 0 {
+		return nil, ErrIiodStatus{Op: resp.Op, Dev: resp.Dev, Code: resp.Code}
+	}
+
+	result := &BinaryTransferResult{StatusCode: resp.Code, StatusOnly: resp.Code == 0}
+	if resp.Code > 0 {
+		used := copied
+		if used > len(buf) {
+			used = len(buf)
+		}
+		result.Payload = append([]byte(nil), buf[:used]...)
+	}
+
+	return result, nil
+}
+
+// TransferBinaryTXBlock performs one TRANSFER_BLOCK for transmit and returns status feedback.
+func (m *Manager) TransferBinaryTXBlock(
+	dev uint8,
+	payload []byte,
+) (*BinaryTransferResult, error) {
+	size := len(payload)
+	resp, copied, err := m.roundTripBinary(
 		opTransferBlock,
 		dev,
-		int32(blockSize),
+		int32(size),
+		[][]byte{payload},
 		nil,
-		buf,
 	)
 	if err != nil {
 		return nil, err
 	}
 	if resp.Code < 0 {
-		return nil, fmt.Errorf("TRANSFER_BLOCK failed: %d", resp.Code)
+		return nil, ErrIiodStatus{Op: resp.Op, Dev: resp.Dev, Code: resp.Code}
 	}
 
-	return buf, nil
+	return &BinaryTransferResult{
+		Payload:    payload[:copied],
+		StatusCode: resp.Code,
+		StatusOnly: resp.Code == 0,
+	}, nil
 }
