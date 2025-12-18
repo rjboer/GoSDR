@@ -129,29 +129,34 @@ func (m *Manager) readAll(b []byte) error {
 	return err
 }
 
-// readLine reads a single LF-terminated line (ASCII), returning it as a string.
-// It reads from the raw socket byte-by-byte to avoid buffering issues.
-func (m *Manager) readLine() (string, error) {
+// readLine reads a single LF-terminated line (ASCII) up to maxLen bytes.
+// It reads from the raw socket byte-by-byte to avoid buffering issues and
+// returns the raw bytes, including the trailing '\n'.
+func (m *Manager) readLine(maxLen int) ([]byte, error) {
 	if m.conn == nil {
-		return "", fmt.Errorf("readLine: not connected")
+		return nil, fmt.Errorf("readLine: not connected")
+	}
+	if maxLen <= 0 {
+		return nil, fmt.Errorf("readLine: invalid maxLen %d", maxLen)
 	}
 
-	var buf []byte
+	buf := make([]byte, 0, maxLen)
 	var one [1]byte
 
-	for {
+	for len(buf) < maxLen {
 		m.applyReadDeadline()
 		_, err := m.conn.Read(one[:])
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		b := one[0]
 		buf = append(buf, b)
 		if b == '\n' {
-			break
+			return buf, nil
 		}
 	}
-	return string(buf), nil
+
+	return buf, fmt.Errorf("readLine: exceeded maxLen %d without newline", maxLen)
 }
 
 // ---------- Higher-level operations ----------
