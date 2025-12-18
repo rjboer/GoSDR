@@ -195,7 +195,7 @@ func TestStartRXStreamStopsOnSignal(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	go func() {
-		errCh <- m.StartRXStream(buf, blk, out, stop)
+		errCh <- m.StartRXStream(buf, blk, out, stop, StreamQueueConfig{})
 	}()
 
 	go func() {
@@ -296,4 +296,202 @@ func TestTransferTxBlockTracksInFlight(t *testing.T) {
 	}
 
 	<-done
+}
+
+func TestStreamQueueSignalsWatermarks(t *testing.T) {
+	highCh := make(chan struct{}, 1)
+	lowCh := make(chan struct{}, 1)
+	q := newStreamQueue(StreamQueueConfig{Depth: 3, HighWatermark: 2, LowWatermark: 1, HighWatermarkCh: highCh, LowWatermarkCh: lowCh})
+
+	stop := make(chan struct{})
+	if err := q.enqueue([]byte{1}, stop); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := q.enqueue([]byte{2}, stop); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	select {
+	case <-highCh:
+	case <-time.After(time.Second):
+		t.Fatalf("high watermark not signaled")
+	}
+
+	if _, err := q.dequeue(stop); err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+
+	select {
+	case <-lowCh:
+	case <-time.After(time.Second):
+		t.Fatalf("low watermark not signaled")
+	}
+}
+
+func TestStartRXStreamHandlesJitteryConsumer(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	m := &Manager{Timeout: time.Second, Mode: ModeBinary}
+	m.SetConn(client)
+
+	buf := &Buffer{ID: 0, Dev: 1}
+	blk := &Block{ID: 0, Size: 4, buffer: buf}
+
+	stop := make(chan struct{})
+	out := make(chan []byte, 1)
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- m.StartRXStream(buf, blk, out, stop, StreamQueueConfig{Depth: 2, HighWatermark: 2, LowWatermark: 1})
+	}()
+
+	received := make([][]byte, 0, 5)
+	go func() {
+		var hdr [8]byte
+		sizePayload := make([]byte, 8)
+		for i := 0; i < 5; i++ {
+			if _, err := io.ReadFull(server, hdr[:]); err != nil {
+				return
+			}
+			if hdr[2] != opTransferBlock {
+				t.Errorf("unexpected op %d", hdr[2])
+				return
+			}
+			if _, err := io.ReadFull(server, sizePayload); err != nil {
+				return
+			}
+			time.Sleep(time.Duration(i%2) * 20 * time.Millisecond)
+			payload := []byte{byte(i), byte(i + 1), byte(i + 2), byte(i + 3)}
+
+			var resp [8]byte
+			binary.BigEndian.PutUint16(resp[0:2], 0)
+			resp[2] = opResponse
+			resp[3] = buf.Dev
+			binary.BigEndian.PutUint32(resp[4:8], uint32(len(payload)))
+			_, _ = server.Write(resp[:])
+			_, _ = server.Write(payload)
+		}
+
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+
+			if _, err := io.ReadFull(server, hdr[:]); err != nil {
+				return
+			}
+			if _, err := io.ReadFull(server, sizePayload); err != nil {
+				return
+			}
+
+			var resp [8]byte
+			binary.BigEndian.PutUint16(resp[0:2], 0)
+			resp[2] = opResponse
+			resp[3] = buf.Dev
+			binary.BigEndian.PutUint32(resp[4:8], 0)
+			_, _ = server.Write(resp[:])
+		}
+	}()
+
+	deadline := time.After(2 * time.Second)
+	for len(received) < 5 {
+		select {
+		case frame := <-out:
+			received = append(received, frame)
+			time.Sleep(15 * time.Millisecond)
+		case <-deadline:
+			t.Fatalf("timeout waiting for frames; got %d", len(received))
+		}
+	}
+	close(stop)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("StartRXStream error: %v", err)
+	}
+	if len(received) != 5 {
+		t.Fatalf("expected 5 frames, got %d", len(received))
+	}
+}
+
+func TestStartTXStreamBackpressureAndShutdown(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	m := &Manager{Timeout: time.Second, Mode: ModeBinary}
+	m.SetConn(client)
+
+	buf := &Buffer{ID: 0, Dev: 1}
+	blk := &Block{ID: 0, Size: 4, buffer: buf}
+
+	in := make(chan []byte, 4)
+	for i := 0; i < cap(in); i++ {
+		in <- []byte{byte(i), byte(i + 1), byte(i + 2), byte(i + 3)}
+	}
+	close(in)
+
+	stop := make(chan struct{})
+	errCh := make(chan error, 1)
+	frames := make(chan []byte, 4)
+
+	go func() {
+		errCh <- m.StartTXStream(buf, blk, in, stop, StreamQueueConfig{Depth: 2, HighWatermark: 2, LowWatermark: 1})
+	}()
+
+	go func() {
+		defer close(frames)
+		var hdr [8]byte
+		sizePayload := make([]byte, 8)
+		for i := 0; i < 4; i++ {
+			if _, err := io.ReadFull(server, hdr[:]); err != nil {
+				return
+			}
+			if hdr[2] != opTransferBlock {
+				t.Errorf("unexpected op %d", hdr[2])
+				return
+			}
+			if _, err := io.ReadFull(server, sizePayload); err != nil {
+				return
+			}
+			payload := make([]byte, binary.LittleEndian.Uint64(sizePayload))
+			if _, err := io.ReadFull(server, payload); err != nil {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+			frames <- payload
+
+			var resp [8]byte
+			binary.BigEndian.PutUint16(resp[0:2], 0)
+			resp[2] = opResponse
+			resp[3] = buf.Dev
+			binary.BigEndian.PutUint32(resp[4:8], 0)
+			_, _ = server.Write(resp[:])
+		}
+	}()
+
+	deadline := time.After(2 * time.Second)
+	received := 0
+	for received < 4 {
+		select {
+		case frame, ok := <-frames:
+			if !ok {
+				t.Fatalf("frames channel closed early after %d", received)
+			}
+			if len(frame) == 0 {
+				t.Fatalf("empty frame received")
+			}
+			received++
+		case <-deadline:
+			t.Fatalf("timeout waiting for tx frames; got %d", received)
+		}
+	}
+	close(stop)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("StartTXStream error: %v", err)
+	}
 }
