@@ -104,12 +104,24 @@ These scenarios occur during:
 - End-of-stream conditions
 
 ### Future work
-The client should be extended to:
+The client should be extended with concrete handling and tests:
 
-- Always parse and surface the binary response code
-- Tolerate zero-length payloads
-- Distinguish between transient conditions and fatal errors
-- Avoid assuming “payload always follows”
+1. **Status-only and zero-length payload responses**
+   - Parsing logic: treat the binary header as authoritative, and allow `TRANSFER_BLOCK` to complete successfully when the payload length is zero while still returning the status code to the caller.
+   - Acceptance: callers receive a typed result indicating `StatusOnly` without attempting to read payload bytes; zero-length payloads no longer trigger EOF or framing errors.
+
+2. **Negative codes vs. transport errors**
+   - Surfacing: map negative return codes into protocol errors that carry the server-provided code and context, while reserving transport/channel errors for socket failures and desynchronization.
+   - Acceptance: observability shows distinct error types (e.g., `ErrIiodStatus(-22)` vs `ErrTransport`), and retry logic can branch on protocol vs. transport without ambiguity.
+
+3. **Short reads and underruns**
+   - Behavior: on payload shorter than requested, attempt a bounded retry (configurable retry count/backoff). If underrun persists, perform buffer teardown and surface a retriable condition upstream.
+   - Acceptance: retries are invoked exactly as configured; persistent underrun triggers teardown/cleanup without leaking buffers or goroutines; logs capture the retry/teardown sequence.
+
+4. **Testing plan**
+   - Table-driven unit tests that enumerate: status-only responses, zero-length payloads with success code, negative status codes, short reads that recover via retry, and short reads that force teardown after retry exhaustion.
+   - Integration cases that drive a responder to emit each scenario, asserting distinct error typing and teardown/retry behavior on real sockets.
+   - Acceptance: each listed scenario has a unit test and an integration case; CI fails if any response type regresses.
 
 This is a protocol-level improvement, not a transport or framing issue.
 
