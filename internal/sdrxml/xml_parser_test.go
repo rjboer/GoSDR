@@ -1,4 +1,5 @@
 package sdrxml
+
 import (
 	"os"
 	"path/filepath"
@@ -6,10 +7,8 @@ import (
 	"testing"
 )
 
-func TestParseIIODXMLBuildsIndex(t *testing.T) {
-	raw, err := os.ReadFile("pluto.xml")
-// examplePath returns the absolute path to one of the example XML files
-// that live alongside this test file.
+// examplePath returns the absolute path to one of the example XML files that
+// live alongside this test file.
 func examplePath(name string) string {
 	_, thisFile, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(thisFile), name)
@@ -20,7 +19,6 @@ func loadExampleXML(t *testing.T, name string) []byte {
 
 	raw, err := os.ReadFile(examplePath(name))
 	if err != nil {
-		t.Fatalf("failed to read example XML: %v", err)
 		t.Fatalf("failed to read example XML %q: %v", name, err)
 	}
 
@@ -31,55 +29,56 @@ func TestParsePlutoXMLBuildsIndex(t *testing.T) {
 	raw := loadExampleXML(t, "pluto.xml")
 
 	var ctx SDRContext
-	index, err := ctx.Parse(raw)
-	if err != nil {
 	if err := ctx.Parse(raw); err != nil {
 		t.Fatalf("expected XML to parse, got error: %v", err)
 	}
 
-	if index == nil {
-		t.Fatalf("expected index to be non-nil")
 	if ctx.Index == nil {
 		t.Fatalf("expected index to be built")
 	}
 
 	if ctx.Name != "local" || ctx.VersionMajor != "0" || ctx.VersionMinor != "25" {
-@@ -29,12 +45,14 @@ func TestParseIIODXMLBuildsIndex(t *testing.T) {
+		t.Fatalf("unexpected context metadata: %+v", ctx)
+	}
+
+	if len(ctx.Device) != 4 {
 		t.Fatalf("expected 4 devices in the example XML, got %d", len(ctx.Device))
 	}
 
-	devByName, err := index.LookupDevice("ad9361-phy")
 	idx := ctx.Index
+	if idx.NoDevices != 4 {
+		t.Fatalf("expected index to report 4 devices, got %d", idx.NoDevices)
+	}
 
 	devByName, err := idx.LookupDevice("ad9361-phy")
 	if err != nil {
 		t.Fatalf("LookupDevice by name failed: %v", err)
 	}
 
-	devByID, err := index.LookupDevice("iio:device0")
 	devByID, err := idx.LookupDevice("iio:device0")
 	if err != nil {
 		t.Fatalf("LookupDevice by ID failed: %v", err)
 	}
-@@ -43,7 +61,7 @@ func TestParseIIODXMLBuildsIndex(t *testing.T) {
+
+	if devByName != devByID {
 		t.Fatalf("device lookup by name and ID should reference the same entry")
 	}
 
-	channel, err := index.LookupChannel("ad9361-phy", "TX_LO")
 	channel, err := idx.LookupChannel("ad9361-phy", "TX_LO")
 	if err != nil {
 		t.Fatalf("LookupChannel failed: %v", err)
 	}
-@@ -52,7 +70,7 @@ func TestParseIIODXMLBuildsIndex(t *testing.T) {
-		t.Fatalf("unexpected channel attributes: %+v", channel)
+
+	if len(channel.Attribute) == 0 {
+		t.Fatalf("unexpected channel attributes: %+v", channel.Attribute)
 	}
 
-	filename, err := index.LookupAttributeFile("ad9361-phy", "TX_LO", "external")
 	filename, err := idx.LookupAttributeFile("ad9361-phy", "TX_LO", "external")
 	if err != nil {
 		t.Fatalf("LookupAttributeFile failed: %v", err)
 	}
-@@ -61,3 +79,44 @@ func TestParseIIODXMLBuildsIndex(t *testing.T) {
+
+	if filename != "out_altvoltage1_TX_LO_external" {
 		t.Fatalf("unexpected filename for attribute: %s", filename)
 	}
 }
