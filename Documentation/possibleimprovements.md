@@ -41,6 +41,45 @@ The following features are out of scope for the current phase and must be added 
 
 These omissions are intentional. The current focus is correctness and protocol alignment, not throughput optimization or device policy.
 
+### Action Plan
+Ordered by recommended implementation priority, each missing capability should be delivered with clear objectives, dependency notes, success criteria, and explicit test coverage expectations:
+
+1. **TX (transmit) streaming**
+   - Objective: Add deterministic TX buffer lifecycle and streaming parity with RX.
+   - Dependencies: Requires buffer lifecycle parity (allocate/enable/transfer/teardown) and TX underrun signaling surfaced to callers.
+   - Success: Sustained TX at target sample rate without underruns or framing errors over long-duration runs.
+   - Tests: Integration tests that stream TX tone patterns at multiple rates; unit tests for TX buffer setup/teardown edge cases.
+
+2. **Multiple blocks in flight**
+   - Objective: Allow pipelined `CREATE_BLOCK`/`TRANSFER_BLOCK` sequences to improve throughput.
+   - Dependencies: Depends on TX/RX buffer correctness and block reference tracking to avoid double-free or misordered completion.
+   - Success: Measured throughput improves with >1 inflight block without introducing overruns/underruns or misordered payloads.
+   - Tests: Integration benchmarks with 2–4 inflight blocks; unit tests for block bookkeeping and completion handling.
+
+3. **Asynchronous / non-blocking enqueue–dequeue queues**
+   - Objective: Decouple producer/consumer timing with async queues for RX ingest and TX submission.
+   - Dependencies: Builds on multi-block support and requires thread-safe queue management around buffer locks.
+   - Success: RX/TX processing remains stable under scheduler jitter; no dropped samples when producers/consumers temporarily stall.
+   - Tests: Concurrency-focused unit tests on queue backpressure behavior; integration tests with simulated jittered producers/consumers.
+
+4. **Buffer watermark / refill threshold control**
+   - Objective: Expose and honor buffer watermarks to control refill thresholds and reduce underrun/overrun risk.
+   - Dependencies: Relies on async queue plumbing and accurate buffer occupancy reporting from the transport layer.
+   - Success: Configurable watermarks demonstrably reduce underruns/overruns in stress tests compared to default settings.
+   - Tests: Integration stress tests sweeping watermark settings; unit tests for configuration validation and translation to protocol commands.
+
+5. **Trigger-based or externally synchronized starts**
+   - Objective: Support start conditions tied to triggers (e.g., GPIO, PPS) for coordinated RX/TX.
+   - Dependencies: Requires stable buffer lifecycle and watermark handling so trigger-armed buffers remain valid until fire.
+   - Success: Triggered starts initiate reliably within expected latency bounds and align across RX/TX when requested.
+   - Tests: Integration tests with simulated trigger events; unit tests for trigger configuration parsing and state transitions.
+
+6. **Multi-client coordination and arbitration**
+   - Objective: Manage multiple IIOD client IDs with clear ownership and arbitration rules.
+   - Dependencies: Requires mature single-client streaming (including above items) and client ID wiring across transports.
+   - Success: Concurrent clients can stream without interfering headers or buffer collisions; policy rejects incompatible mixes.
+   - Tests: Integration tests with simultaneous clients performing RX/TX; unit tests for client ID routing and conflict detection.
+
 ## Transfer block response handling
 ### Current behavior
 The current implementation assumes that each `TRANSFER_BLOCK` response contains:
