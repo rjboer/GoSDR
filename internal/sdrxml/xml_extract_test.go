@@ -136,7 +136,7 @@ func TestExtract(t *testing.T) {
 			name:   "scale applied",
 			rawHex: "0100", // 1 in LE u16
 			pf:     pf(16, false, false, 0, 0.5),
-			want:   int64(float64(1) * 0.5),
+			want:   0,
 		},
 
 		// ---------------------------------------------------------

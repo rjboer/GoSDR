@@ -81,7 +81,7 @@ func TestBinaryFraming_NoDesyncOnOddChunking(t *testing.T) {
 
 	// Client round trip 1
 	got1 := make([]byte, len(payload1))
-	if _, err := m.roundTripBinary(op, dev, 0, got1); err != nil {
+	if _, _, err := m.roundTripBinary(op, dev, 0, nil, got1); err != nil {
 		t.Fatalf("rt1: %v", err)
 	}
 	if len(got1) != len(payload1) {
@@ -95,7 +95,7 @@ func TestBinaryFraming_NoDesyncOnOddChunking(t *testing.T) {
 
 	// Client round trip 2
 	got2 := make([]byte, len(payload2))
-	if _, err := m.roundTripBinary(op, dev, 0, got2); err != nil {
+	if _, _, err := m.roundTripBinary(op, dev, 0, nil, got2); err != nil {
 		t.Fatalf("rt2: %v", err)
 	}
 	if len(got2) != len(payload2) {

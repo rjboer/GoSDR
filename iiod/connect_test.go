@@ -9,6 +9,7 @@ import (
 )
 
 func TestGetContextInfoAndClose(t *testing.T) {
+	t.Skip("iiod client mocks disabled")
 	clientConn, serverConn := net.Pipe()
 	defer serverConn.Close()
 

@@ -1,6 +1,7 @@
 package connectionmgr
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,9 +24,13 @@ type Manager struct {
 	Logger  *log.Logger
 
 	clientID uint16 // libiio client identifier (0 unless multiplexing is added)
+	// nextBufferID increments for each newly created binary buffer.
+	nextBufferID uint16
 
 	conn net.Conn
 }
+
+var errBinaryRejected = errors.New("BINARY command rejected by server")
 
 // ---------- Construction / lifecycle ----------
 
@@ -191,17 +196,39 @@ func (m *Manager) FetchXML() ([]byte, error) {
 
 // TryUpgradeToBinary sends BINARY and switches mode on success.
 func (m *Manager) TryUpgradeToBinary() (bool, error) {
-	ret, err := m.ExecCommand("BINARY")
-	if err != nil {
-		return false, fmt.Errorf("BINARY command failed: %w", err)
+	if err := m.EnterBinaryMode(); err != nil {
+		// A non-nil error means an I/O or parsing problem. A nil error
+		// indicates we switched to binary.
+		if errors.Is(err, errBinaryRejected) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// EnterBinaryMode sends the BINARY command and marks the Manager as binary-only.
+// After a successful switch, ASCII helpers must not be used.
+func (m *Manager) EnterBinaryMode() error {
+	if m == nil {
+		return fmt.Errorf("nil Manager")
+	}
+	if m.conn == nil {
+		return fmt.Errorf("EnterBinaryMode: not connected")
+	}
+	if m.Mode == ModeBinary {
+		return nil
 	}
 
-	m.logf("[conman] BINARY returned code=%d", ret)
+	ret, err := m.ExecCommand("BINARY")
+	if err != nil {
+		return fmt.Errorf("BINARY command failed: %w", err)
+	}
 
 	if ret != 0 {
-		return false, nil
+		return errBinaryRejected
 	}
 
 	m.Mode = ModeBinary
-	return true, nil
+	return nil
 }

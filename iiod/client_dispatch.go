@@ -78,6 +78,9 @@ func (c *Client) getXMLContextWithContextText(ctx context.Context) (string, erro
 	if _, err := c.sendCommandString(ctx, "PRINT"); err != nil {
 		return "", err
 	}
+	if c.xmlContext != "" {
+		return c.xmlContext, nil
+	}
 	// readRawXML handles the streaming response for PRINT
 	return c.readRawXML(ctx)
 }
