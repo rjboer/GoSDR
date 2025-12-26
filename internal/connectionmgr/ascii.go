@@ -28,8 +28,21 @@ func (m *Manager) readInteger() (int, error) {
 	return val, nil
 }
 
-// ExecCommand sends a single ASCII command and reads the integer response.
-// This is used for TIMEOUT, PRINT, OPEN, CLOSE, etc.
+// ExecCommand writes an ASCII command line (adding CRLF if missing), then
+// reads the server's integer status line.
+//
+// Parameters:
+//   - cmd: the ASCII command to send (for example TIMEOUT, PRINT, OPEN, CLOSE).
+//
+// Behavior:
+//   - refuses to run when the manager is disconnected or already in binary
+//     mode, because ASCII bootstrap commands are not valid there.
+//   - sends the command verbatim (ensuring a trailing CRLF) and returns the
+//     integer parsed from the next line of the stream.
+//
+// Returns:
+//   - the integer status/value reported by the device (0 for success or
+//     negative errno codes) or an error if the socket write/read fails.
 func (m *Manager) ExecCommand(cmd string) (int, error) {
 	if m.conn == nil {
 		return 0, fmt.Errorf("ExecCommand: not connected")
@@ -67,7 +80,8 @@ func (m *Manager) writeLine(cmd string) error {
 	return m.writeAll([]byte(cmd))
 }
 
-// ExecASCII is an alias for ExecCommand (legacy naming used by other helpers).
+// ExecASCII forwards to ExecCommand; it exists for callers that still use the
+// legacy ASCII helper name.
 func (m *Manager) ExecASCII(cmd string) (int, error) {
 	return m.ExecCommand(cmd)
 }

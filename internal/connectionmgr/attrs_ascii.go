@@ -10,8 +10,18 @@ import (
 	"time"
 )
 
-// ReadDeviceAttrASCII reads a device attribute using legacy ASCII.
-// Equivalent format to libiio: "READ %s %s\r\n". :contentReference[oaicite:7]{index=7}
+// ReadDeviceAttrASCII sends a legacy ASCII READ for a device-level attribute.
+//
+// Parameters:
+//   - devID: device identifier string (for example "ad9361-phy").
+//   - attr: attribute name to read.
+//
+// Protocol:
+//   - issues "READ <devID> <attr>\r\n" and expects the next line to contain the
+//     attribute value.
+//
+// Returns the trimmed attribute string or an error if the manager is not
+// connected, parameters are missing, or the server returns an invalid payload.
 func (m *Manager) ReadDeviceAttrASCII(devID, attr string) (string, error) {
 	if m == nil || m.conn == nil {
 		return "", errors.New("not connected")
@@ -40,8 +50,20 @@ func (m *Manager) ReadDeviceAttrASCII(devID, attr string) (string, error) {
 	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
-// ReadChannelAttrASCII reads a channel attribute (INPUT/OUTPUT) using legacy ASCII.
-// Equivalent to libiio: "READ %s INPUT|OUTPUT %s %s\r\n". :contentReference[oaicite:8]{index=8}
+// ReadChannelAttrASCII reads a channel attribute through the ASCII protocol.
+//
+// Parameters:
+//   - devID: device identifier string.
+//   - isOutput: whether the channel direction is OUTPUT (INPUT otherwise).
+//   - chanID: channel identifier (for example "voltage0").
+//   - attr: attribute name to read.
+//
+// Protocol:
+//   - issues "READ <devID> INPUT|OUTPUT <chanID> <attr>\r\n" and reads one
+//     payload line containing the value.
+//
+// Returns the trimmed attribute string or an error if validation, write, or
+// read fails.
 func (m *Manager) ReadChannelAttrASCII(devID string, isOutput bool, chanID, attr string) (string, error) {
 	if m == nil || m.conn == nil {
 		return "", errors.New("not connected")
@@ -71,7 +93,10 @@ func (m *Manager) ReadChannelAttrASCII(devID string, isOutput bool, chanID, attr
 	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
-// todo: rjboer: remove this function
+// ReadChannelAttrASCII2 mirrors ReadChannelAttrASCII but also returns the raw
+// status code. This helper is retained for callers that need to differentiate
+// transport errors from device-side errno returns until they migrate to the
+// newer API.
 func (m *Manager) ReadChannelAttrASCII2(
 	dev string,
 	isOutput bool,
@@ -141,8 +166,19 @@ func (m *Manager) ReadChannelAttrASCII2(
 	return value, status, nil
 }
 
-// WriteDeviceAttrASCII writes a device attribute using legacy ASCII.
-// Equivalent to libiio: "WRITE %s %s %lu\r\n" + bytes, then read integer response. :contentReference[oaicite:9]{index=9}
+// WriteDeviceAttrASCII writes a device attribute using the ASCII protocol.
+//
+// Parameters:
+//   - devID: device identifier string.
+//   - attr: attribute name to write.
+//   - value: raw payload written without an automatic newline.
+//
+// Protocol:
+//   - issues "WRITE <devID> <attr> <len>\r\n" followed by <len> raw bytes.
+//   - reads the following integer status (0 for success, negative errno on
+//     failure).
+//
+// Returns the integer status or an error if validation or socket IO fails.
 func (m *Manager) WriteDeviceAttrASCII(devID, attr, value string) (int, error) {
 	if m == nil || m.conn == nil {
 		return 0, errors.New("not connected")
@@ -171,8 +207,17 @@ func (m *Manager) WriteDeviceAttrASCII(devID, attr, value string) (int, error) {
 	return resp, nil
 }
 
-// WriteChannelAttrASCII writes a channel attribute (INPUT/OUTPUT) using legacy ASCII.
-// Equivalent to libiio: "WRITE %s INPUT|OUTPUT %s %s %lu\r\n" + bytes, then read integer. :contentReference[oaicite:10]{index=10}
+// WriteChannelAttrASCII writes a channel attribute (INPUT or OUTPUT) via ASCII
+// WRITE.
+//
+// Parameters mirror WriteDeviceAttrASCII but include the channel identifier and
+// direction flag.
+//
+// Protocol:
+//   - issues "WRITE <devID> INPUT|OUTPUT <chanID> <attr> <len>\r\n" then sends
+//     <len> raw bytes, and finally reads the integer status line.
+//
+// Returns the integer status or an error if validation or socket IO fails.
 func (m *Manager) WriteChannelAttrASCII(devID string, isOutput bool, chanID, attr, value string) (int, error) {
 	if m == nil || m.conn == nil {
 		return 0, errors.New("not connected")
@@ -208,8 +253,12 @@ func (m *Manager) WriteChannelAttrASCII(devID string, isOutput bool, chanID, att
 // Convenience helpers (Step 3)
 //
 
-// SetLOFrequencyHzASCII sets LO frequency (you must pass the correct device/channel/attr for your Pluto XML).
-// Example commonly used on AD9361: dev="ad9361-phy", isOutput=false, chan="altvoltage0", attr="frequency".
+// SetLOFrequencyHzASCII writes the LO frequency attribute using ASCII WRITE.
+//
+// The caller supplies the exact device/channel/attribute triplet expected by
+// the target XML (for example dev="ad9361-phy", chan="altvoltage0",
+// attr="frequency"). A non-zero response status is surfaced as an error so
+// callers see device-side errno codes.
 func (m *Manager) SetLOFrequencyHzASCII(devID string, isOutput bool, chanID string, hz int64) error {
 	resp, err := m.WriteChannelAttrASCII(devID, isOutput, chanID, "frequency", strconv.FormatInt(hz, 10))
 	if err != nil {
@@ -221,8 +270,9 @@ func (m *Manager) SetLOFrequencyHzASCII(devID string, isOutput bool, chanID stri
 	return nil
 }
 
-// SetSampleRateHzASCII sets sample rate on the device (attr name varies; on Pluto often "sampling_frequency").
-// For AD9361, this is usually on channels like "voltage0" input: attr "sampling_frequency".
+// SetSampleRateHzASCII writes the sampling rate via ASCII WRITE. Attribute names
+// depend on the backend (commonly "sampling_frequency"). Non-zero device
+// responses are returned as errors.
 func (m *Manager) SetSampleRateHzASCII(devID string, isOutput bool, chanID string, hz int64) error {
 	resp, err := m.WriteChannelAttrASCII(devID, isOutput, chanID, "sampling_frequency", strconv.FormatInt(hz, 10))
 	if err != nil {
@@ -234,8 +284,10 @@ func (m *Manager) SetSampleRateHzASCII(devID string, isOutput bool, chanID strin
 	return nil
 }
 
-// SetHardwareGainDBASCII sets hardware gain in dB (attr name often "hardwaregain").
-// This is typically on output channels for TX or input channels for RX depending on device.
+// SetHardwareGainDBASCII writes a gain value using ASCII WRITE. The attribute is
+// often named "hardwaregain" and may exist on RX or TX channels depending on
+// the device. The helper formats the float without trailing zeros and reports
+// non-zero statuses as errors.
 func (m *Manager) SetHardwareGainDBASCII(devID string, isOutput bool, chanID string, gainDB float64) error {
 	// Many drivers accept float strings; keep plain formatting.
 	val := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.3f", gainDB), "0"), ".")
@@ -249,9 +301,10 @@ func (m *Manager) SetHardwareGainDBASCII(devID string, isOutput bool, chanID str
 	return nil
 }
 
-// SetChannelEnabledASCII toggles a channel enable attribute.
-// The exact attribute can differ by backend; common patterns include "en" or "enabled" or scan_elements "<chan>_en".
-// This is a best-effort helper: pass attrName explicitly.
+// SetChannelEnabledASCII toggles a channel-enable style attribute via ASCII
+// WRITE. The caller specifies attrName explicitly because attribute naming
+// conventions vary (for example "en", "enabled", or scan_elements
+// "<chan>_en"). Non-zero statuses are reported as errors.
 func (m *Manager) SetChannelEnabledASCII(devID string, isOutput bool, chanID, attrName string, enabled bool) error {
 	v := "0"
 	if enabled {
@@ -275,6 +328,10 @@ func (m *Manager) SetChannelEnabledASCII(devID string, isOutput bool, chanID, at
 // - func (m *Manager) readLine(maxLen int) ([]byte, error)       // reads one line (ending in \n)
 // - func (m *Manager) writeLine(cmd string) error                // writes cmd + "\r\n"
 // - func (m *Manager) writeAll(b []byte) error                   // writes all bytes
+// DrainASCII consumes any pending bytes from the ASCII connection using a short
+// read deadline. It is intended to realign the stream after a protocol error.
+// The method returns nil on timeout (meaning drained) or propagates socket
+// errors otherwise.
 func (m *Manager) DrainASCII() error {
 	buf := make([]byte, 1)
 	_ = m.conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
@@ -291,6 +348,9 @@ func (m *Manager) DrainASCII() error {
 	}
 }
 
+// HelpfunctionASCII sends the HELP command and drains the multi-line response
+// from the ASCII server. It is primarily for debugging or manual discovery and
+// returns the first socket error encountered.
 func (m *Manager) HelpfunctionASCII() error {
 
 	log.Println("HelpfunctionASCII function")
@@ -304,6 +364,10 @@ func (m *Manager) HelpfunctionASCII() error {
 	log.Println("HelpfunctionASCII: function done")
 	return err
 }
+
+// VersionASCII issues the VERSION command over ASCII and drains the response
+// body. The method is used during bootstrap to detect server capabilities and
+// returns any write/read error encountered.
 func (m *Manager) VersionASCII() error {
 
 	log.Println("VersionASCII function")
@@ -318,6 +382,9 @@ func (m *Manager) VersionASCII() error {
 	return err
 }
 
+// ZPrintASCII sends the ZPRINT command (extended PRINT variant) and drains the
+// response stream. Errors from socket writes or reads are returned to the
+// caller.
 func (m *Manager) ZPrintASCII() error {
 
 	log.Println("ZPrintASCII function")
@@ -332,6 +399,9 @@ func (m *Manager) ZPrintASCII() error {
 	return err
 }
 
+// PrintASCII issues the PRINT command to fetch the ASCII device inventory and
+// drains the response. It logs the number of bytes consumed and returns any
+// socket error encountered.
 func (m *Manager) PrintASCII() error {
 
 	log.Println("PRINT function")
@@ -351,6 +421,10 @@ func (m *Manager) PrintASCII() error {
 	return err
 }
 
+// SwitchToBinary attempts the ASCII "BINARY" mode switch and drains the
+// response stream. Modern servers start in ASCII mode automatically; callers
+// should transition to binary helpers after this call succeeds. Any socket
+// error is returned.
 func (m *Manager) SwitchToBinary() error {
 
 	log.Println("SwitchToBinary function")
