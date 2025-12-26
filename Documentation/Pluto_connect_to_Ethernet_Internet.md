@@ -61,16 +61,19 @@ It needs more power then a phone! Buy a large thing.
 It will give ethernet stutters (or one minute it is there, next minute not). 
 
 Next step:
+- Powercycle the pluto, power-off, power-on. 
+
+If it still not works:
 - Seperate the ethernet settings. choose a different subnet for the USB adapter to make sure no colisions are there. 
-I
-For instance 192.168.2.23 for the ethernet adapter (with a subnet 255.255.255.0) . 
+For instance 192.168.2.23 for the ethernet adapter (with a subnet 255.255.255.0) 
 For the usb subnet then for instance choose ip range/subnet 192.168.3.1 with 255.255.255.0
 
+- Use nslookup (in cmd) to check if the dns resolves
 If you don't space it appart, it will look like this:
 ```batch
 > nslookup plutosdr.home
 Server:  mijnmodem.kpn
-Address:  2a02:a475:ced9:0:66cc:22ff:fe6e:9d2f
+Address:  ipv6:xxxx:xxxx:0:xxxx:xxxx:xxxx:xxxx
 
 Name:    plutosdr.home
 Addresses:  192.168.2.50
