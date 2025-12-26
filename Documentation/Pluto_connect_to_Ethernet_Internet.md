@@ -158,6 +158,11 @@ I used this filter...:
 Plug the pluto in, and find your sdr. 
 
 
-
+- Powershell TCP ping
+In order to check if the right port is available.
+```powershell
+Using powershell you can then test if the tcp port is open:
+Test-NetConnection 192.168.2.23 -Port 30431
+```
 
 
