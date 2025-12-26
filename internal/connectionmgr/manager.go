@@ -145,7 +145,6 @@ func (m *Manager) writeAll(b []byte) error {
 }
 
 // readAll reads exactly len(b) bytes from the socket.
-// This MUST use the raw connection, not a buffered reader.
 func (m *Manager) readAll(b []byte) error {
 	if m.conn == nil {
 		return fmt.Errorf("readAll: not connected")
@@ -158,48 +157,53 @@ func (m *Manager) readAll(b []byte) error {
 	return err
 }
 
-// readLine reads a single LF-terminated line (ASCII) up to maxLen bytes.
-// It reads from the raw socket byte-by-byte to avoid buffering issues and
-// returns the raw bytes, including the trailing '\n'.
+// readLine reads exactly maxLen bytes from the IIOD socket and validates the
+// trailing newline delimiter.
+//
+// Protocol expectations:
+//   - Callers must provide the exact number of bytes expected for the line,
+//     including its trailing line ending.
+//   - Lines must terminate with '\n'. A preceding '\r' is permitted but not
+//     stripped.
+//
+// Parameters:
+//   - maxLen specifies the exact byte count to read, including the trailing
+//     newline sequence.
+//   - output controls optional debug logging of the captured line.
+//
+// Returns the raw line when exactly maxLen bytes are read and the final byte
+// is '\n'. Errors are returned when:
+//   - the Manager is disconnected or misconfigured,
+//   - maxLen is zero or negative,
+//   - the read completes without a trailing '\n',
+//   - fewer than maxLen bytes are received (including timeout conditions).
 func (m *Manager) readLine(
 	maxLen int, output bool,
 ) (line []byte, err error) {
 	if m == nil || m.conn == nil {
-		return nil, fmt.Errorf("readAllWithTimeout: not connected")
+		return nil, fmt.Errorf("readLine: not connected")
 	}
 	if maxLen <= 0 {
-		return nil, fmt.Errorf("readAllWithTimeout: invalid maxBytes %d", maxLen)
+		return nil, fmt.Errorf("readLine: invalid maxBytes %d", maxLen)
 	}
 
-	// Deadline makes the conn.Read return with a net.Error timeout.
-	_ = m.conn.SetReadDeadline(time.Now().Add(time.Second * 5))
+	buf := make([]byte, maxLen)
+	m.applyReadDeadline()
+	n, rErr := io.ReadFull(m.conn, buf)
+	if rErr != nil {
+		return buf[:n], fmt.Errorf("readLine: failed to read %d bytes: %w", maxLen, rErr)
+	}
 
-	// LimitReader prevents unbounded memory use.
-	r := io.LimitReader(m.conn, int64(maxLen))
-
-	b, err := io.ReadAll(r)
+	if n == 0 || buf[n-1] != '\n' {
+		return buf[:n], fmt.Errorf("readLine: line missing trailing newline")
+	}
 
 	if output {
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			err = nil
-		}
-		log.Printf("Bytes read:%b \nMessage:\n %q \nError: %v", len(b), string(b), err)
-		log.Println("Readline string: ", string(b))
-	}
-	if err == nil {
-		return b, nil
+		log.Printf("Bytes read:%b \nMessage:\n %q \nError: %v", len(buf), string(buf), nil)
+		log.Println("Readline string: ", string(buf))
 	}
 
-	// Timeout handling: if we got some bytes, treat timeout as "done draining".
-	if ne, ok := err.(net.Error); ok && ne.Timeout() {
-		if len(b) > 0 {
-			return b, nil
-		}
-		fmt.Println("Readline error1")
-		return nil, err
-	}
-
-	return b, nil
+	return buf, nil
 }
 
 // ---------- Higher-level operations ----------

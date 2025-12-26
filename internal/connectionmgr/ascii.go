@@ -3,60 +3,27 @@ package connectionmgr
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
-// readInteger reads a single ASCII integer terminated by '\n'.
-// It reads byte-by-byte directly from the socket to avoid any read-ahead.
-// This matches libiio's iiod_client_read_integer() semantics exactly.
+// readInteger reads a single ASCII integer terminated by '\n'. The call
+// leverages readLine's fixed-length strategy to avoid per-byte socket reads
+// while preserving protocol semantics.
 func (m *Manager) readInteger() (int, error) {
-	if m.conn == nil {
-		return 0, fmt.Errorf("readInteger: not connected")
+	line, err := m.readLine(64, false)
+	if err != nil {
+		return 0, err
 	}
 
-	var buf []byte
-	var one [1]byte
-	started := false
-
-	for {
-		m.applyReadDeadline()
-		_, err := m.conn.Read(one[:])
-		if err != nil {
-			return 0, err
-		}
-
-		b := one[0]
-
-		// Newline ends the integer ONLY if we started collecting
-		if b == '\n' {
-			if started {
-				break
-			}
-			// Otherwise ignore stray newline
-			continue
-		}
-
-		// Ignore CR
-		if b == '\r' {
-			continue
-		}
-
-		// Accept digits and optional minus
-		if (b >= '0' && b <= '9') || b == '-' {
-			started = true
-			buf = append(buf, b)
-			continue
-		}
-
-		// Otherwise: binary junk → skip
-	}
-
-	if len(buf) == 0 {
+	trimmed := strings.TrimSpace(string(line))
+	trimmed = strings.Trim(trimmed, "\x00")
+	if trimmed == "" {
 		return 0, fmt.Errorf("empty integer line")
 	}
 
-	val, err := strconv.Atoi(string(buf))
-	if err != nil {
-		return 0, fmt.Errorf("parse integer %q: %w", string(buf), err)
+	val, convErr := strconv.Atoi(trimmed)
+	if convErr != nil {
+		return 0, fmt.Errorf("parse integer %q: %w", trimmed, convErr)
 	}
 	return val, nil
 }
