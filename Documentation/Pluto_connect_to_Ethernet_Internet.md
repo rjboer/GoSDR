@@ -62,9 +62,20 @@ It will give ethernet stutters (or one minute it is there, next minute not).
 
 Next step:
 - Seperate the ethernet settings. choose a different subnet for the USB adapter to make sure no colisions are there. 
+I
 For instance 192.168.2.23 for the ethernet adapter (with a subnet 255.255.255.0) . 
 For the usb subnet then for instance choose ip range/subnet 192.168.3.1 with 255.255.255.0
 
+If you don't space it appart, it will look like this:
+```
+> nslookup plutosdr.home
+Server:  mijnmodem.kpn
+Address:  2a02:a475:ced9:0:66cc:22ff:fe6e:9d2f
+
+Name:    plutosdr.home
+Addresses:  192.168.2.50
+          192.168.2.23
+```
 
 
 
