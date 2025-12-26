@@ -1,4 +1,4 @@
-package connectionmgr
+package main
 
 import (
 	"fmt"
@@ -6,17 +6,17 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
+
+	man "github.com/RJBOER/GoSDR/internal/connectionmgr"
 )
 
-func TestIntegratedSDRTEST(test *testing.T) {
-
+func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
-	addr := "192.168.3.1:30433"
+	addr := "192.168.2.1:30431"
 
-	m := &Manager{
+	m := &man.Manager{
 		Address: addr,
 		Timeout: 5 * time.Second,
 	}
@@ -29,46 +29,16 @@ func TestIntegratedSDRTEST(test *testing.T) {
 	defer m.Close()
 
 	m.EnterBinaryMode3()
-	m.clientID = 0x01 // any non-zero client ID is fine
+	m.clientID = 0x1234 // any non-zero client ID is fine
 
 	// ------------------------------------------------------------
 	// 2) Switch to binary mode (ASCII bootstrap)
-	// We dont switch to binary mode here, because we are already in binary mode
-	//binary mode is implied by the use of the binary header.
-	// it is therefor not needed to switch to binary mode using the ASCII protocol.
 	// ------------------------------------------------------------
-	// log.Printf("[TEST] Switching to binary mode")
-	// if _, err := m.conn.Write([]byte("BINARY\r\n")); err != nil {
-	// 	log.Fatalf("[TEST] failed to switch to binary mode: %v", err)
-	// }
-	// m.PrimeASCII()
-
-	log.Println("-------------------------STEP1-------------------------")
-	m.VersionASCII()
-	log.Println("-------------------------STEP2-------------------------")
-	m.HelpfunctionASCII()
-	log.Println("-------------------------STEP3-------------------------")
-	m.PrintASCII() //PRINT\n function
-	log.Println("-------------------------STEP4-------------------------")
-	m.SwitchToBinary()
-	log.Println("-------------------------STEP5-------------------------")
-
-	data, err := m.Print(0)
-	if err != nil {
-		log.Fatalf("[TEST] Print failedd: %v", err)
+	log.Printf("[TEST] Switching to binary mode")
+	if _, err := m.conn.Write([]byte("BINARY\r\n")); err != nil {
+		log.Fatalf("[TEST] failed to switch to binary mode: %v", err)
 	}
-	log.Printf("[TEST] Print received (%d bytes), data:%v", len(data), data)
-	log.Println("-------------------------STEP5-------------------------")
-	// ------------------------------------------------------------
-	// 3) PrimeCTX function
-	// ------------------------------------------------------------
-	data, err = m.PrimeCTX(0)
-	if err != nil {
-		log.Fatalf("[TEST] PrimeCTX failedd: %v", err)
-	}
-	log.Printf("[TEST] PrimeCTX received (%d bytes), data:%v", len(data), data)
-	log.Println("-------------------------STEP6-------------------------")
-	return
+
 	// ------------------------------------------------------------
 	// 3) Retrieve XML using your existing wrapper
 	// ------------------------------------------------------------
@@ -79,22 +49,21 @@ func TestIntegratedSDRTEST(test *testing.T) {
 	}
 	log.Printf("[TEST] XML received (%d bytes)", len(xml))
 
-	if err := os.WriteFile("./pluto.xml", xml, 0644); err != nil {
+	if err := os.WriteFile("pluto.xml", xml, 0644); err != nil {
 		log.Printf("[TEST] WARNING: failed to write pluto.xml: %v", err)
 	} else {
 		log.Printf("[TEST] wrote pluto.xml")
 	}
-	return
 
 	// ------------------------------------------------------------
 	// 4) Read some device attributes (direct base-function usage)
 	// ------------------------------------------------------------
 	readDevAttr := func(name string) (string, error) {
-		hdr, plan, err := m.sendBinaryCommand(opReadAttr, 0, 0, lpString(name))
+		hdr, plan, err := m.sendBinaryCommand(man.opReadAttr, 0, 0, man.lpString(name))
 		if err != nil {
 			return "", err
 		}
-		if hdr == nil || hdr.Opcode != opResponse {
+		if hdr == nil || hdr.Opcode != man.opResponse {
 			return "", fmt.Errorf("readDevAttr(%s): unexpected response opcode", name)
 		}
 
@@ -128,11 +97,11 @@ func TestIntegratedSDRTEST(test *testing.T) {
 	// 5) Read channel-indexed attributes (code = channel index)
 	// ------------------------------------------------------------
 	readChnAttr := func(chIdx int32, name string) (string, error) {
-		hdr, plan, err := m.sendBinaryCommand(opReadChnAttr, 0, chIdx, lpString(name))
+		hdr, plan, err := m.sendBinaryCommand(man.opReadChnAttr, 0, chIdx, man.lpString(name))
 		if err != nil {
 			return "", err
 		}
-		if hdr == nil || hdr.Opcode != opResponse {
+		if hdr == nil || hdr.Opcode != man.opResponse {
 			return "", fmt.Errorf("readChnAttr(%d,%s): unexpected response opcode", chIdx, name)
 		}
 
@@ -186,4 +155,5 @@ func TestIntegratedSDRTEST(test *testing.T) {
 	*/
 
 	log.Printf("[TEST] Pluto binary protocol test completed successfully")
+
 }

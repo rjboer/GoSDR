@@ -19,6 +19,11 @@ const (
 	Error
 )
 
+
+func ()
+
+
+
 func (l Level) String() string {
 	switch l {
 	case Debug:

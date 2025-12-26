@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ReadDeviceAttrASCII reads a device attribute using legacy ASCII.
@@ -31,7 +33,7 @@ func (m *Manager) ReadDeviceAttrASCII(devID, attr string) (string, error) {
 	_ = n
 
 	// If you already have a "readLine" helper in ascii.go, use it here.
-	line, err := m.readLine(4096)
+	line, err := m.readLine(4096, true)
 	if err != nil {
 		return "", err
 	}
@@ -62,11 +64,81 @@ func (m *Manager) ReadChannelAttrASCII(devID string, isOutput bool, chanID, attr
 	}
 	_ = n
 
-	line, err := m.readLine(4096)
+	line, err := m.readLine(4096, true)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimRight(string(line), "\r\n"), nil
+}
+
+// todo: rjboer: remove this function
+func (m *Manager) ReadChannelAttrASCII2(
+	dev string,
+	isOutput bool,
+	channel string,
+	attr string,
+) (string, int, error) {
+
+	if m == nil {
+		return "", 0, fmt.Errorf("nil Manager")
+	}
+	if m.conn == nil {
+		return "", 0, fmt.Errorf("ReadChannelAttrASCII: not connected")
+	}
+	if m.Mode != ModeASCII {
+		return "", 0, fmt.Errorf("ReadChannelAttrASCII: not in ASCII mode")
+	}
+
+	dir := "INPUT"
+	if isOutput {
+		dir = "OUTPUT"
+	}
+
+	cmd := fmt.Sprintf("READ %s %s %s %s", dev, dir, channel, attr)
+	m.logf("[attr][READ][chn] -> %q", cmd)
+
+	// --- Send command ---
+	if err := m.writeAll([]byte(cmd + "\n")); err != nil {
+		return "", 0, fmt.Errorf("READ write failed: %w", err)
+	}
+
+	// --- Read status line ---
+	line, err := m.readLine(64, false)
+	if err != nil {
+		return "", 0, fmt.Errorf("READ status read failed: %w", err)
+	}
+
+	// IMPORTANT: strip whitespace AND NULs
+	statusStr := strings.TrimSpace(string(line))
+	statusStr = strings.Trim(statusStr, "\x00")
+
+	if statusStr == "" {
+		return "", 0, fmt.Errorf("READ returned empty status line")
+	}
+
+	status, err := strconv.Atoi(statusStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("READ invalid status %q: %w", statusStr, err)
+	}
+
+	// --- Non-zero status: STOP HERE ---
+	if status != 0 {
+		m.logf("[attr][READ][RC=%d] %s/%s/%s/%s", status, dev, dir, channel, attr)
+		return "", status, nil
+	}
+
+	// --- Read exactly ONE payload line ---
+	valLine, err := m.readLine(4096, true)
+	if err != nil {
+		return "", status, fmt.Errorf("READ value read failed: %w", err)
+	}
+
+	value := strings.TrimRight(string(valLine), "\r\n")
+	value = strings.Trim(value, "\x00")
+
+	m.logf("[attr][READ][OK] %s/%s/%s/%s = %q", dev, dir, channel, attr, value)
+
+	return value, status, nil
 }
 
 // WriteDeviceAttrASCII writes a device attribute using legacy ASCII.
@@ -195,7 +267,6 @@ func (m *Manager) SetChannelEnabledASCII(devID string, isOutput bool, chanID, at
 	return nil
 }
 
-//
 // The following helpers are expected to exist in your ascii.go.
 // If you don't have them, implement them there (NOT duplicated elsewhere):
 //
@@ -204,4 +275,94 @@ func (m *Manager) SetChannelEnabledASCII(devID string, isOutput bool, chanID, at
 // - func (m *Manager) readLine(maxLen int) ([]byte, error)       // reads one line (ending in \n)
 // - func (m *Manager) writeLine(cmd string) error                // writes cmd + "\r\n"
 // - func (m *Manager) writeAll(b []byte) error                   // writes all bytes
-//
+func (m *Manager) DrainASCII() error {
+	buf := make([]byte, 1)
+	_ = m.conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+	for {
+		_, err := m.conn.Read(buf)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				fmt.Println("buffer:", buf)
+				fmt.Println("drained buffer")
+				return nil // drained
+			}
+			return err
+		}
+	}
+}
+
+func (m *Manager) HelpfunctionASCII() error {
+
+	log.Println("HelpfunctionASCII function")
+	data := []byte("HELP\n")
+	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
+	_, err := m.conn.Write(data)
+	if err != nil {
+		return err
+	}
+	m.readLine(512*1024, true)
+	log.Println("HelpfunctionASCII: function done")
+	return err
+}
+func (m *Manager) VersionASCII() error {
+
+	log.Println("VersionASCII function")
+	data := []byte("VERSION\n")
+	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
+	_, err := m.conn.Write(data)
+	if err != nil {
+		return err
+	}
+	m.readLine(512*1024, true)
+	log.Println("VersionASCII function done")
+	return err
+}
+
+func (m *Manager) ZPrintASCII() error {
+
+	log.Println("ZPrintASCII function")
+	data := []byte("ZPRINT\n")
+	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
+	_, err := m.conn.Write(data)
+	if err != nil {
+		return err
+	}
+	m.readLine(512*1024, false)
+	log.Println("ZPrintASCII function done")
+	return err
+}
+
+func (m *Manager) PrintASCII() error {
+
+	log.Println("PRINT function")
+	data := []byte("PRINT\n")
+	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
+	_, err := m.conn.Write(data)
+	if err != nil {
+		return err
+	}
+	log.Println("Print:Draining read buffer")
+	data, err = m.readLine(512*1024, false)
+	fmt.Println("Print:number of bytes read:", len(data))
+	if err != nil {
+		fmt.Println("Print:Error reading data:", err)
+	}
+	fmt.Println("Print:Drained read buffer, Done")
+	return err
+}
+
+func (m *Manager) SwitchToBinary() error {
+
+	log.Println("SwitchToBinary function")
+
+	data := []byte("BINARY\n")
+	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
+	_, err := m.conn.Write(data)
+	if err != nil {
+		return err
+	}
+	log.Println("SwitchToBinary:Draining read buffer")
+	m.readLine(1024*512, true)
+	log.Println("SwitchToBinary:Drained read buffer, Done")
+	return err
+}

@@ -67,6 +67,145 @@ func (m *Manager) CreateBuffer(dev uint8, channels []uint8, cyclic bool) (*Buffe
 	}, nil
 }
 
+func (m *Manager) CreateBuffer2(
+	dev uint8,
+	channels []uint8,
+	cyclic bool,
+) (*Buffer, error) {
+
+	if m == nil {
+		return nil, fmt.Errorf("nil Manager")
+	}
+	if m.conn == nil {
+		return nil, fmt.Errorf("CreateBuffer: not connected")
+	}
+	if m.Mode != ModeBinary {
+		return nil, fmt.Errorf("CreateBuffer: not in binary mode")
+	}
+	if len(channels) == 0 {
+		return nil, fmt.Errorf("CreateBuffer: at least one channel is required")
+	}
+
+	// Channel mask goes in CODE
+	mask := encodeChannelMask2(channels)
+
+	// 1. Send command
+	fmt.Println("Send command")
+	if err := m.sendBinaryCommand(opCreateBuffer, dev, mask); err != nil {
+		return nil, err
+	}
+
+	// 2. Read response header
+	fmt.Println("Read response header")
+	var resp iiodCommand
+	if err := m.readBinaryHeader(&resp); err != nil {
+		return nil, err
+	}
+	fmt.Println("Print response header:", resp)
+
+	// 3. Check return code
+	fmt.Println("Check return code")
+	if resp.Code < 0 {
+		return nil, fmt.Errorf("CREATE_BUFFER failed: %d", resp.Code)
+	}
+
+	bufID := uint16(resp.Code)
+
+	fmt.Println("CreateBuffer2: buffer ID", bufID)
+	return &Buffer{
+		ID:       bufID,
+		Dev:      dev,
+		Channels: append([]uint8(nil), channels...),
+		Cyclic:   cyclic,
+		inFlight: make(map[uint16]int),
+	}, nil
+}
+
+func (m *Manager) CreateBuffer3(dev uint8, channels []uint8, cyclic bool) (*Buffer, error) {
+	if m.Mode != ModeBinary {
+		return nil, fmt.Errorf("CreateBuffer: not in binary mode")
+	}
+	fmt.Println("CreateBuffer3: device", dev, "channels", channels)
+	maskPayload := encodeChannelMask3(channels)
+
+	// IMPORTANT:
+	// code = number of channels
+	if err := m.sendBinaryCommand(
+		opCreateBuffer,
+		dev,
+		int32(len(channels)),
+		maskPayload,
+	); err != nil {
+		return nil, err
+	}
+
+	// // Send payload immediately after header
+	// if err := m.writeAll(maskPayload); err != nil {
+	// 	return nil, err
+	// }
+
+	// Read binary response header
+	// var hdr [8]byte
+	// if err := m.readAll(hdr[:]); err != nil {
+	// 	return nil, err
+	// }
+	// fmt.Println("Print binary response header", hdr)
+	// rc := int32(binary.BigEndian.Uint32(hdr[4:8]))
+	// if rc < 0 {
+	// 	return nil, fmt.Errorf("CREATE_BUFFER failed rc=%d", rc)
+	// }
+
+	// bufID := uint16(rc)
+	// fmt.Println("CreateBuffer3: buffer ID", bufID)
+	return &Buffer{
+		ID:       0,
+		Dev:      dev,
+		Channels: append([]uint8(nil), channels...),
+		Cyclic:   cyclic,
+	}, nil
+}
+
+func encodeChannelMask3(channels []uint8) []byte {
+	var mask uint32
+	for _, ch := range channels {
+		if ch >= 32 {
+			panic("channel index out of range")
+		}
+		mask |= 1 << ch
+	}
+
+	buf := make([]byte, 4)
+	binary.BigEndian.PutUint32(buf, mask)
+	return buf
+}
+
+func encodeChannelMask2(channels []uint8) int32 {
+	var mask int32
+	for _, ch := range channels {
+		if ch >= 32 {
+			panic("channel index out of range")
+		}
+		mask |= 1 << ch
+	}
+	return mask
+}
+
+func (m *Manager) readBinaryHeader(cmd *iiodCommand) error {
+	var hdr [8]byte
+	if err := m.readAll(hdr[:]); err != nil {
+		return err
+	}
+
+	fmt.Println("Read binary header", hdr)
+
+	cmd.ClientID = binary.BigEndian.Uint16(hdr[0:2])
+	cmd.Op = hdr[2]
+	cmd.Dev = hdr[3]
+	cmd.Code = int32(binary.BigEndian.Uint32(hdr[4:8]))
+
+	return nil
+}
+
 // EnableBuffer sends ENABLE_BUFFER for the given Buffer.
 func (m *Manager) EnableBuffer(buf *Buffer) error {
 	if m == nil {
