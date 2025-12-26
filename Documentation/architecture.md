@@ -74,6 +74,26 @@ subgraph CLIENT["Go IIOD Client Library"]
         ERR["Error Handler\n(timeouts, overflow)"]
     end
 
+    %% =============================
+    %% NEW: Detailed ASCII & Manager Architecture
+    %% =============================
+    subgraph MGR_DETAIL["Manager Internals (connectionmgr)"]
+        MGR["Manager Struct"]
+        ASCII_IO["ASCII I/O Layer\n(optimized readLine)"]
+        ATTR_AL["Attribute Abstraction\n(attrs_ascii.go)"]
+        STREAM_AL["Streaming Abstraction\n(buffer_ascii.go)"]
+    end
+
+    subgraph DISC_DETAIL["Discovery Internals (mdns)"]
+        ZEROCONF["ZeroConf Resolver"]
+        HOSTMAP["Host Deduplication"]
+    end
+
+    subgraph CTX_DETAIL["Context Parsing (sdrxml)"]
+        UNMARSHAL["XML Unmarshal"]
+        IDXBUILD["Index Builder\n(O(1) Map Construction)"]
+    end
+
 end
 
 %% =============================
@@ -95,17 +115,30 @@ end
 UI --> CTRL
 CTRL --> MDNS --> RESOLVE --> TCP
 
+%% Discovery Detail
+MDNS --> ZEROCONF --> HOSTMAP --> RESOLVE
+
 %% Connection + handshake
 TCP --> ASCII_DET --> SEND_MAGIC --> SWITCHBIN
 
+%% Manager Integration
+TCP --> MGR
+MGR --> ASCII_IO
+MGR --> ATTR_AL --> ASCII_S
+MGR --> STREAM_AL --> ASCII_S
+
 %% After mode switch, start XML build
 SWITCHBIN --> XMLREQ --> XMLRX --> XMLDEC --> XMLPARSE
-XMLPARSE --> CTXOBJ --> DEVOBJ --> CHOBJ --> MAPS
+XMLPARSE --> UNMARSHAL --> IDXBUILD --> CTXOBJ
+IDXBUILD --> MAPS
+CTXOBJ --> DEVOBJ --> CHOBJ --> MAPS
 
 %% Attribute config stage
 CTRL --> CFGFLOW
 CFGFLOW --> READA
 CFGFLOW --> WRITEA
+READA --> ATTR_AL
+WRITEA --> ATTR_AL
 
 %% Buffer + block state machine
 CTRL --> BUFCREATE --> BUFENABLE
@@ -135,4 +168,10 @@ WRITEA --> BINARY_S
 BUFCREATE --> BINARY_S
 BLOCKXFER --> BINARY_S
 
+%% Detailed ASCII Interaction
+ATTR_AL --> ASCII_S
+STREAM_AL --> ASCII_S
+
 BINARY_S --> LIBIIO --> KDRV --> HW
+ASCII_S --> LIBIIO
+```
