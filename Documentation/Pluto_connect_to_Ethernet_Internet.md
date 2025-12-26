@@ -17,7 +17,7 @@ Then connect it to your pc using the other usb-c port (the usb-c port closest to
 It mounts the sdcard in "this pc", and open config.txt
 
 Under the network settings you will see (as default):
-```
+```bash
 [NETWORK]
 hostname = plutosdr
 ipaddr = 192.168.2.1
@@ -67,7 +67,7 @@ For instance 192.168.2.23 for the ethernet adapter (with a subnet 255.255.255.0)
 For the usb subnet then for instance choose ip range/subnet 192.168.3.1 with 255.255.255.0
 
 If you don't space it appart, it will look like this:
-```
+```batch
 > nslookup plutosdr.home
 Server:  mijnmodem.kpn
 Address:  2a02:a475:ced9:0:66cc:22ff:fe6e:9d2f
@@ -79,7 +79,7 @@ Addresses:  192.168.2.50
 
 when done well it looks like this:
 username: root, default password: analog
-```
+```bash
 Welcome to:
 ______ _       _        _________________
 | ___ \ |     | |      /  ___|  _  \ ___ \
@@ -123,9 +123,32 @@ in CMD type:
 ```batch
 arp -a
 ```
+it will look like this:
+```batch
+Interface: 192.168.2.8 --- 0x1b
+  Internet Address      Physical Address      Type
+  192.168.2.2           10-2c-6b-45-c1-5c     dynamic
+  192.168.2.6           00-02-9b-f4-e5-68     dynamic
+  192.168.2.19          f6-39-0c-a6-b0-5a     dynamic
+  192.168.2.23          f6-39-0c-a6-b0-5a     dynamic
+  192.168.2.254         64-cc-22-6e-9d-2f     dynamic
+  192.168.2.255         ff-ff-ff-ff-ff-ff     static
+  224.0.0.2             01-00-5e-00-00-02     static
+  224.0.0.251           01-00-5e-00-00-fb     static
+  224.0.0.252           01-00-5e-00-00-fc     static
+  239.255.255.250       01-00-5e-7f-ff-fa     static
+  255.255.255.255       ff-ff-ff-ff-ff-ff     static
+```
 
+If you have plugged it in multiple times (on and off power) it might have gotten a new IP adress, look for ip adresses that have the same Physical adress. 
+In my example the 192.168.2.19 and the .23, check both. The physical adresses don't nessesarily match the pluto.
 
-
+- If you still cant find the pluto or the arp table is huge or spanning a large subnet... then use wireshark.
+disconnect the pluto from the ethernetport. 
+Setup wireshark. 
+I used this filter...:
+(ip.dst_host matches pluto)  || (ip.src_host matches pluto)
+Plug the pluto in, and find your sdr. 
 
 
 
