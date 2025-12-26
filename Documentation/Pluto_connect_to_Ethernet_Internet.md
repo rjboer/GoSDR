@@ -77,9 +77,52 @@ Addresses:  192.168.2.50
           192.168.2.23
 ```
 
+when done well it looks like this:
+username: root, default password: analog
+```
+Welcome to:
+______ _       _        _________________
+| ___ \ |     | |      /  ___|  _  \ ___ \
+| |_/ / |_   _| |_ ___ \ `--.| | | | |_/ /
+|  __/| | | | | __/ _ \ `--. \ | | |    /
+| |   | | |_| | || (_) /\__/ / |/ /| |\ \
+\_|   |_|\__,_|\__\___/\____/|___/ \_| \_|
 
+v0.38-1-g6f8e-dirty
+https://wiki.analog.com/university/tools/pluto
+# ifconfig
+eth0      Link encap:Ethernet  HWaddr 66:49:BD:2C:8F:2A
+          inet addr:192.168.2.23  Bcast:0.0.0.0  Mask:255.255.255.0
+          UP BROADCAST MULTICAST  MTU:1500  Metric:1
+          RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000
+          RX bytes:0 (0.0 B)  TX bytes:0 (0.0 B)
+          Interrupt:35 Base address:0xb000
 
+lo        Link encap:Local Loopback
+          inet addr:127.0.0.1  Mask:255.0.0.0
+          UP LOOPBACK RUNNING  MTU:65536  Metric:1
+          RX packets:18 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:18 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000
+          RX bytes:1979 (1.9 KiB)  TX bytes:1979 (1.9 KiB)
 
+usb0      Link encap:Ethernet  HWaddr 00:05:F7:6F:C4:23
+          inet addr:192.168.3.1  Bcast:0.0.0.0  Mask:255.255.255.0
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:506 errors:0 dropped:168 overruns:0 frame:0
+          TX packets:221 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000
+          RX bytes:67447 (65.8 KiB)  TX bytes:144068 (140.6 KiB)
+
+```
+If you cannot find it then:
+- us the arp table
+in CMD type:
+```batch
+arp -a
+```
 
 
 
