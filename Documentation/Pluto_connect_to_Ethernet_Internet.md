@@ -146,7 +146,8 @@ Interface: 192.168.2.8 --- 0x1b
 If you have plugged it in multiple times (on and off power) it might have gotten a new IP adress, look for ip adresses that have the same Physical adress. 
 In my example the 192.168.2.19 and the .23, check both. The physical adresses don't nessesarily match the pluto.
 
-- If you still cant find the pluto or the arp table is huge or spanning a large subnet... then use wireshark.
+- Wireshark: 
+If you still cant find the pluto or the arp table is huge or spanning a large subnet... then use wireshark.
 disconnect the pluto from the ethernetport. 
 Setup wireshark. 
 I used this filter...:
