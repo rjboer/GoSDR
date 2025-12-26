@@ -17,13 +17,35 @@ Then connect it to your pc using the other usb-c port (the usb-c port closest to
 It mounts the sdcard in "this pc", and open config.txt
 
 Under the network settings you will see (as default):
-Hostname	pluto
-IP Address (PlutoSDR)	192.168.2.1
-IP Address (HOST)	192.168.2.10
-Netmask	255.255.255.0
+```
+[NETWORK]
+hostname = plutosdr
+ipaddr = 192.168.2.1
+ipaddr_host = 192.168.2.10
+netmask = 255.255.255.0
 
+[WLAN]
+ssid_wlan = 
+pwd_wlan = 
+ipaddr_wlan = 
 
-Empty the pluto SDR ip adress settings. 
+[USB_ETHERNET]
+ipaddr_eth = 
+netmask_eth = 255.255.255.0
+
+[SYSTEM]
+xo_correction = 
+udc_handle_suspend = 0
+# USB Communication Device Class Compatibility Mode [rndis|ncm|ecm]
+usb_ethernet_mode = rndis
+
+[ACTIONS]
+diagnostic_report = 0
+dfu = 0
+reset = 0
+calibrate = 0
+```
+Empty the pluto SDR ethernet ip adress settings. 
 Emptying makes it go in DHCP mode. 
 Save the file. 
 
@@ -34,11 +56,14 @@ If all is well you will recieve an IP adress.
 
 
 If all is not well, which often is the case:
-- Check the usb-c powersupply (is it large enough?), too small too little power. 
-It needs more power then a phone! 
-Buy a large thing. 
+- Check the usb-c powersupply (is it large enough?), too small,  too little power. 
+It needs more power then a phone! Buy a large thing. 
 It will give ethernet stutters (or one minute it is there, next minute not). 
-- 
+
+Next step:
+- Seperate the ethernet settings. choose a different subnet for the USB adapter to make sure no colisions are there. 
+For instance 192.168.2.23 for the ethernet adapter (with a subnet 255.255.255.0) . 
+For the usb subnet then for instance choose ip range/subnet 192.168.3.1 with 255.255.255.0
 
 
 
