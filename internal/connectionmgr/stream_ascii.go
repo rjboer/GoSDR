@@ -70,8 +70,22 @@ func (h *StreamASCIIHandle) setErr(err error) {
 	}
 }
 
-// StartStreamASCII runs a continuous READBUF loop on an already-open Manager connection.
-// It assumes you already did: Connect -> TIMEOUT -> PRINT/XML -> OPEN buffer.
+// StartStreamASCII runs a continuous READBUF loop on an already-open Manager
+// connection.
+//
+// Parameters:
+//   - parent: context to cancel streaming.
+//   - cfg: StreamASCIIConfig describing device ID, READBUF length, backpressure
+//     behavior, and optional per-chunk deadline overrides.
+//
+// Protocol:
+//   - repeatedly issues READBUF <deviceID> <len>\r\n and consumes the integer
+//     size plus payload for each iteration.
+//
+// Returns a handle that can stop the goroutine and expose the first error
+// encountered (transport failures or a negative errno surfaced by
+// ReadBufferASCII). The caller must have completed ASCII bootstrap steps (e.g.
+// TIMEOUT, PRINT/XML, OPEN) before starting.
 func (m *Manager) StartStreamASCII(parent context.Context, cfg StreamASCIIConfig) (*StreamASCIIHandle, error) {
 	if m == nil {
 		return nil, errors.New("nil Manager")

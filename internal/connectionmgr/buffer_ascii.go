@@ -5,12 +5,20 @@ import (
 	"log"
 )
 
-// OpenBufferASCII opens an IIO buffer using the legacy ASCII protocol.
+// OpenBufferASCII sends the ASCII OPEN command to allocate a buffer.
 //
-// Equivalent to iiod_client_open_with_mask() in libiio.
+// Parameters:
+//   - deviceID: IIO device identifier (for example "cf-ad9361-lpc").
+//   - samples: number of samples per buffer.
+//   - maskHex: channel mask as a hex string (e.g. "ffffffff" or "00000003").
+//   - cyclic: whether to request a cyclic buffer.
 //
-// maskHex must be a hex string representing the channel mask,
-// exactly as IIOD expects (e.g. "ffffffff" or "00000003").
+// Protocol:
+//   - issues "OPEN <deviceID> <samples> <maskHex>[ CYCLIC]\r\n" and expects an
+//     integer response.
+//
+// Returns nil on success or an error when not in ASCII mode, the command fails
+// to send, or the response is a negative errno code.
 func (m *Manager) OpenBufferASCII(
 	deviceID string,
 	samples uint64,
@@ -36,7 +44,11 @@ func (m *Manager) OpenBufferASCII(
 	return nil
 }
 
-// ReadBufferASCII reads raw bytes from an open buffer.
+// ReadBufferASCII reads raw bytes from an open buffer using the READBUF command.
+//
+// Parameters:
+//   - deviceID: IIO device identifier.
+//   - dst: caller-provided byte slice to fill.
 //
 // Protocol (legacy ASCII):
 //
@@ -46,11 +58,10 @@ func (m *Manager) OpenBufferASCII(
 //	   if N == 0: end
 //	   if N < 0: error (negative errno)
 //
-// IMPORTANT:
-// If the server announces N bytes but the caller's dst does not have enough remaining
-// capacity, we MUST still read and discard the remainder to keep the TCP stream aligned.
-// Otherwise the next readInteger() will start in the middle of binary payload and parse
-// garbage (your “announced bytes=-4096” symptom).
+// The method always drains the full N bytes announced by the server, copying up
+// to len(dst) into dst and discarding overflow to preserve stream alignment.
+// It returns the number of bytes copied into dst or an error when the mode is
+// incorrect, IO fails, or the server returns a negative errno.
 func (m *Manager) ReadBufferASCII(deviceID string, dst []byte) (int, error) {
 	if m.Mode != ModeASCII {
 		return 0, fmt.Errorf("ReadBufferASCII: not in ASCII mode")
@@ -121,9 +132,9 @@ func (m *Manager) drainBytes(n int) error {
 	return nil
 }
 
-// CloseBufferASCII closes an open ASCII buffer.
-//
-// Equivalent to iiod_client_close_unlocked().
+// CloseBufferASCII issues the ASCII CLOSE command to release a buffer.
+// It returns nil on success or an error when the manager is not in ASCII mode,
+// the command fails, or the server replies with a negative errno.
 func (m *Manager) CloseBufferASCII(deviceID string) error {
 	if m.Mode != ModeASCII {
 		return fmt.Errorf("CloseBufferASCII: not in ASCII mode")
