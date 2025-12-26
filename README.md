@@ -1,5 +1,8 @@
 ## `README.md`
 
+please dont use this yet.... fixing bugs.....
+
+
 This started when I saw a script from Jon Kraft about beamforming and direction of arrival tracking using an Pluto SDR. 
 I have a pluto+ SDR and I enjoyed this very much. 
 However to set this up was a pain and to explain deployment to others was undoable.
