@@ -150,7 +150,10 @@ In my example the 192.168.2.19 and the .23, check both. The physical adresses do
 disconnect the pluto from the ethernetport. 
 Setup wireshark. 
 I used this filter...:
+
+```
 (ip.dst_host matches pluto)  || (ip.src_host matches pluto)
+```
 Plug the pluto in, and find your sdr. 
 
 
