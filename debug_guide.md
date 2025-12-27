@@ -14,6 +14,13 @@
 
 ## Recommended Debug Enhancements
 
+### ASCII debug attribute writes (current protocol)
+
+- Command form: `WRITE <device> DEBUG <attr> <len>` followed immediately by `<len>` raw payload bytes (no automatic newline).
+- Response: a single integer line. Negative values are errno-style failures and should be surfaced as errors; non-negative values indicate success.
+
+This mirrors libiio's debug attribute handling and is implemented in the ASCII connection manager to support tooling that emits diagnostic blobs directly to device debug endpoints.
+
 ### 1. Structured Logging with Levels
 
 **Why:** Different verbosity levels for development vs. production
