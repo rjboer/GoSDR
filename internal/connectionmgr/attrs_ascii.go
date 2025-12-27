@@ -301,6 +301,35 @@ func (m *Manager) SetHardwareGainDBASCII(devID string, isOutput bool, chanID str
 	return nil
 }
 
+// SetTimeoutASCII configures the server-side socket timeout using the ASCII
+// TIMEOUT command.
+//
+// Protocol:
+//   - issues "TIMEOUT <timeoutMs>\r\n" and reads the following integer status.
+//   - a zero or positive status indicates success; negative values mirror errno
+//     codes and are treated as errors.
+//
+// Parameters:
+//   - timeoutMs: timeout in milliseconds. Negative values are rejected before
+//     issuing the command.
+//
+// Returns nil on success or an error for validation failures, transport errors,
+// or negative device statuses.
+func (m *Manager) SetTimeoutASCII(timeoutMs int) error {
+	if timeoutMs < 0 {
+		return fmt.Errorf("timeoutMs must be >= 0")
+	}
+
+	status, err := m.ExecASCII(fmt.Sprintf("TIMEOUT %d", timeoutMs))
+	if err != nil {
+		return fmt.Errorf("TIMEOUT command failed: %w", err)
+	}
+	if status < 0 {
+		return fmt.Errorf("TIMEOUT command returned %d", status)
+	}
+	return nil
+}
+
 // SetChannelEnabledASCII toggles a channel-enable style attribute via ASCII
 // WRITE. The caller specifies attrName explicitly because attribute naming
 // conventions vary (for example "en", "enabled", or scan_elements
