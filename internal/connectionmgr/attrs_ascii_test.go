@@ -400,6 +400,135 @@ func TestWriteDeviceAttrASCIIErrorStatus(t *testing.T) {
 	}
 }
 
+func TestWriteChannelAttrASCIIInputPayloadOrdering(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	done := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(server)
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			done <- fmt.Errorf("failed to read command line: %w", err)
+			return
+		}
+
+		value := "abc123"
+		expected := fmt.Sprintf("WRITE ad9361-phy INPUT voltage0 raw %d\r\n", len(value))
+		if line != expected {
+			done <- fmt.Errorf("unexpected command line: %q", line)
+			return
+		}
+
+		payload := make([]byte, len(value))
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			done <- fmt.Errorf("failed to read payload: %w", err)
+			return
+		}
+		if string(payload) != value {
+			done <- fmt.Errorf("payload mismatch: %q", payload)
+			return
+		}
+
+		_ = server.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+		if _, err := reader.Peek(1); err == nil {
+			done <- fmt.Errorf("unexpected data after payload")
+			return
+		} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+			done <- fmt.Errorf("peek error after payload: %w", err)
+			return
+		}
+		_ = server.SetReadDeadline(time.Time{})
+
+		writeIntegerLine(t, server, 0)
+		done <- nil
+	}()
+
+	status, err := mgr.WriteChannelAttrASCII("ad9361-phy", false, "voltage0", "raw", "abc123")
+	if err != nil {
+		t.Fatalf("WriteChannelAttrASCII returned error: %v", err)
+	}
+	if status != 0 {
+		t.Fatalf("expected status 0, got %d", status)
+	}
+
+	if goroutineErr := <-done; goroutineErr != nil {
+		t.Fatalf("server goroutine error: %v", goroutineErr)
+	}
+}
+
+func TestWriteChannelAttrASCIIOutputErrors(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	done := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(server)
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			done <- fmt.Errorf("failed to read command line: %w", err)
+			return
+		}
+
+		expected := "WRITE cf-ad9361-lpc OUTPUT voltage1 calibscale 0\r\n"
+		if line != expected {
+			done <- fmt.Errorf("unexpected command line: %q", line)
+			return
+		}
+
+		_ = server.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+		if _, err := reader.Peek(1); err == nil {
+			done <- fmt.Errorf("unexpected payload bytes")
+			return
+		} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+			done <- fmt.Errorf("peek error: %w", err)
+			return
+		}
+		_ = server.SetReadDeadline(time.Time{})
+
+		writeIntegerLine(t, server, -110)
+		done <- nil
+	}()
+
+	status, err := mgr.WriteChannelAttrASCII("cf-ad9361-lpc", true, "voltage1", "calibscale", "")
+	if err != nil {
+		t.Fatalf("WriteChannelAttrASCII returned error: %v", err)
+	}
+	if status != -110 {
+		t.Fatalf("expected status -110, got %d", status)
+	}
+
+	if goroutineErr := <-done; goroutineErr != nil {
+		t.Fatalf("server goroutine error: %v", goroutineErr)
+	}
+}
+
+func TestWriteChannelAttrASCIIInvalidStatus(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	go func() {
+		reader := bufio.NewReader(server)
+		reader.ReadString('\n')
+		writeRawStatusLine(t, server, "not-a-number")
+	}()
+
+	if _, err := mgr.WriteChannelAttrASCII("pluto", false, "voltage2", "offset", "7"); err == nil || !strings.Contains(err.Error(), "parse integer") {
+		t.Fatalf("expected integer parse error, got %v", err)
+	}
+}
+
 func writeRawStatusLine(t *testing.T, conn net.Conn, raw string) {
 	t.Helper()
 
