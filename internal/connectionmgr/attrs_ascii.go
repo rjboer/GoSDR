@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ReadDeviceAttrASCII sends a legacy ASCII READ for a device-level attribute.
@@ -327,6 +328,74 @@ func (m *Manager) SetTimeoutASCII(timeoutMs int) error {
 	if status < 0 {
 		return fmt.Errorf("TIMEOUT command returned %d", status)
 	}
+	return nil
+}
+
+// GetTriggerASCII fetches the active trigger name for a device using the ASCII
+// GETTRIG command.
+//
+// Protocol:
+//   - issues "GETTRIG <deviceID>\r\n".
+//   - reads the subsequent integer length using readInteger().
+//   - reads exactly length+1 bytes (payload plus trailing newline) using
+//     readLine, trimming trailing whitespace from the result.
+//
+// Returns the trimmed trigger name or an error for validation failures,
+// negative lengths, or IO errors.
+func (m *Manager) GetTriggerASCII(deviceID string) (string, error) {
+	if m == nil || m.conn == nil {
+		return "", fmt.Errorf("not connected")
+	}
+	if deviceID == "" {
+		return "", fmt.Errorf("deviceID is required")
+	}
+
+	if err := m.writeLine(fmt.Sprintf("GETTRIG %s", deviceID)); err != nil {
+		return "", err
+	}
+
+	length, err := m.readInteger()
+	if err != nil {
+		return "", fmt.Errorf("GETTRIG length read failed: %w", err)
+	}
+	if length < 0 {
+		return "", fmt.Errorf("GETTRIG returned negative length %d", length)
+	}
+
+	line, err := m.readLine(length+1, true)
+	if err != nil {
+		return "", fmt.Errorf("GETTRIG payload read failed: %w", err)
+	}
+
+	value := strings.TrimRightFunc(string(line), unicode.IsSpace)
+	value = strings.TrimRight(value, "\x00")
+	return value, nil
+}
+
+// SetTriggerASCII selects a trigger using the ASCII SETTRIG command. An empty
+// triggerName clears the trigger configuration when supported by the device.
+// Negative device responses are returned as errors.
+func (m *Manager) SetTriggerASCII(deviceID, triggerName string) error {
+	if m == nil || m.conn == nil {
+		return fmt.Errorf("not connected")
+	}
+	if deviceID == "" {
+		return fmt.Errorf("deviceID is required")
+	}
+
+	cmd := fmt.Sprintf("SETTRIG %s", deviceID)
+	if triggerName != "" {
+		cmd = fmt.Sprintf("%s %s", cmd, triggerName)
+	}
+
+	status, err := m.ExecASCII(cmd)
+	if err != nil {
+		return fmt.Errorf("SETTRIG command failed: %w", err)
+	}
+	if status < 0 {
+		return fmt.Errorf("SETTRIG command returned %d", status)
+	}
+
 	return nil
 }
 
