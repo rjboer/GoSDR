@@ -529,6 +529,90 @@ func TestWriteChannelAttrASCIIInvalidStatus(t *testing.T) {
 	}
 }
 
+func TestWriteDebugAttrASCIIPayloadOrdering(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	done := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(server)
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			done <- fmt.Errorf("failed to read command line: %w", err)
+			return
+		}
+
+		payload := []byte("xyz")
+		expected := fmt.Sprintf("WRITE ad9361-phy DEBUG trace %d\r\n", len(payload))
+		if line != expected {
+			done <- fmt.Errorf("unexpected command line: %q", line)
+			return
+		}
+
+		buf := make([]byte, len(payload))
+		if _, err := io.ReadFull(reader, buf); err != nil {
+			done <- fmt.Errorf("failed to read payload: %w", err)
+			return
+		}
+		if string(buf) != string(payload) {
+			done <- fmt.Errorf("payload mismatch: %q", buf)
+			return
+		}
+
+		_ = server.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+		if _, err := reader.Peek(1); err == nil {
+			done <- fmt.Errorf("unexpected data after payload")
+			return
+		} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+			done <- fmt.Errorf("peek error after payload: %w", err)
+			return
+		}
+		_ = server.SetReadDeadline(time.Time{})
+
+		writeIntegerLine(t, server, 0)
+		done <- nil
+	}()
+
+	status, err := mgr.WriteDebugAttrASCII("ad9361-phy", "trace", []byte("xyz"))
+	if err != nil {
+		t.Fatalf("WriteDebugAttrASCII returned error: %v", err)
+	}
+	if status != 0 {
+		t.Fatalf("expected status 0, got %d", status)
+	}
+
+	if goroutineErr := <-done; goroutineErr != nil {
+		t.Fatalf("server goroutine error: %v", goroutineErr)
+	}
+}
+
+func TestWriteDebugAttrASCIIErrorStatus(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	go func() {
+		reader := bufio.NewReader(server)
+		reader.ReadString('\n')
+		io.ReadFull(reader, make([]byte, len("payload")))
+		writeIntegerLine(t, server, -19)
+	}()
+
+	status, err := mgr.WriteDebugAttrASCII("pluto", "trace", []byte("payload"))
+	if err == nil || !strings.Contains(err.Error(), "returned -19") {
+		t.Fatalf("expected error for negative status, got %v", err)
+	}
+	if status != -19 {
+		t.Fatalf("expected status -19, got %d", status)
+	}
+}
+
 func writeRawStatusLine(t *testing.T, conn net.Conn, raw string) {
 	t.Helper()
 
