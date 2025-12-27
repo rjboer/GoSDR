@@ -211,8 +211,8 @@ func TestReadBufferAttrASCIISuccess(t *testing.T) {
 		n, _ := server.Read(buf)
 		received = string(buf[:n])
 
-		writeIntegerLine(t, server, 5)
-		server.Write([]byte("value\r\n"))
+		writeIntegerLine(t, server, len("value"))
+		server.Write([]byte("value\n"))
 	}()
 
 	value, err := mgr.ReadBufferAttrASCII("cf-ad9361-lpc", "samples")
