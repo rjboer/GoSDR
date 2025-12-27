@@ -84,15 +84,21 @@ func (m *Manager) ReadChannelAttrASCII(devID string, isOutput bool, chanID, attr
 	cmd := fmt.Sprintf("READ %s %s %s %s", devID, dir, chanID, attr)
 	log.Printf("[attr][READ][chn] -> %q", cmd)
 
-	n, err := m.ExecASCII(cmd)
+	length, err := m.ExecASCII(cmd)
 	if err != nil {
 		return "", err
 	}
-	_ = n
+	if length < 0 {
+		return "", fmt.Errorf("READ returned negative length %d", length)
+	}
 
-	line, err := m.readLine(4096, true)
+	payloadLen := length + 1 // account for trailing '\n'
+	line, err := m.readLine(payloadLen, true)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("READ payload read failed: %w", err)
+	}
+	if len(line) != payloadLen {
+		return "", fmt.Errorf("READ payload truncated: expected %d bytes, got %d", payloadLen, len(line))
 	}
 	return strings.TrimRight(string(line), "\r\n"), nil
 }
