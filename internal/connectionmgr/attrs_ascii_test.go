@@ -613,6 +613,18 @@ func TestWriteDebugAttrASCIIErrorStatus(t *testing.T) {
 	}
 }
 
+func TestWriteDebugAttrASCIINonASCIIMode(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeBinary, conn: client}
+
+	if _, err := mgr.WriteDebugAttrASCII("ad9361-phy", "trace", []byte("1")); err == nil || !strings.Contains(err.Error(), "ASCII mode") {
+		t.Fatalf("expected ASCII mode error, got %v", err)
+	}
+}
+
 func TestWriteBufferAttrASCIIPayloadOrdering(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
@@ -744,6 +756,18 @@ func TestWriteBufferAttrASCIINegativeStatus(t *testing.T) {
 	}
 	if status != -5 {
 		t.Fatalf("expected status -5, got %d", status)
+	}
+}
+
+func TestWriteBufferAttrASCIINonASCIIMode(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeBinary, conn: client}
+
+	if _, err := mgr.WriteBufferAttrASCII("cf-ad9361-lpc", "cyclic", []byte("1")); err == nil || !strings.Contains(err.Error(), "ASCII mode") {
+		t.Fatalf("expected ASCII mode error, got %v", err)
 	}
 }
 

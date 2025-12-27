@@ -323,6 +323,9 @@ func (m *Manager) WriteDebugAttrASCII(devID, attr string, payload []byte) (int, 
 	if m == nil || m.conn == nil {
 		return 0, errors.New("not connected")
 	}
+	if m.Mode != ModeASCII {
+		return 0, fmt.Errorf("WriteDebugAttrASCII: not in ASCII mode")
+	}
 	if devID == "" || attr == "" {
 		return 0, errors.New("devID and attr are required")
 	}
@@ -365,6 +368,9 @@ func (m *Manager) WriteDebugAttrASCII(devID, attr string, payload []byte) (int, 
 func (m *Manager) WriteBufferAttrASCII(devID, attr string, payload []byte) (int, error) {
 	if m == nil || m.conn == nil {
 		return 0, errors.New("not connected")
+	}
+	if m.Mode != ModeASCII {
+		return 0, fmt.Errorf("WriteBufferAttrASCII: not in ASCII mode")
 	}
 	if devID == "" || attr == "" {
 		return 0, errors.New("devID and attr are required")
