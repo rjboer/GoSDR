@@ -91,10 +91,11 @@ func (m *Manager) OpenBufferASCII(
 //	   if N == 0: end
 //	   if N < 0: error (negative errno)
 //
-// The method always drains the full N bytes announced by the server, copying up
-// to len(dst) into dst and discarding overflow to preserve stream alignment.
-// It returns the number of bytes copied into dst or an error when the mode is
-// incorrect, IO fails, or the server returns a negative errno.
+// The method consumes the announced mask line, reads exactly N bytes into dst
+// (erroring when dst is too small), and then drains the trailing newline to keep
+// the stream aligned. It returns the number of bytes copied into dst or an
+// error when the mode is incorrect, IO fails, or the server returns a negative
+// errno.
 func (m *Manager) ReadBufferASCII(deviceID string, dst []byte) (int, error) {
 	if m.Mode != ModeASCII {
 		return 0, fmt.Errorf("ReadBufferASCII: not in ASCII mode")
@@ -122,27 +123,33 @@ func (m *Manager) ReadBufferASCII(deviceID string, dst []byte) (int, error) {
 		return 0, nil
 	}
 
-	toCopy := n
-	if toCopy > len(dst) {
-		toCopy = len(dst)
+	if n > len(dst) {
+		return 0, fmt.Errorf("READBUF announced %d bytes but destination capacity is %d", n, len(dst))
+	}
+
+	// The server sends a hex mask line after the length; consume it to align the
+	// stream before reading binary data.
+	if _, err := m.readLine(64, false); err != nil {
+		return 0, fmt.Errorf("READBUF: failed to consume mask line: %w", err)
 	}
 
 	// Read payload
-	if err := m.readAll(dst[:toCopy]); err != nil {
-		return toCopy, err
+	if err := m.readAll(dst[:n]); err != nil {
+		return 0, err
 	}
 
-	// Discard overflow payload
-	remaining := n - toCopy
-	if remaining > 0 {
-		if err := m.drainBytes(remaining); err != nil {
-			return toCopy, err
-		}
-		log.Printf("[READBUF] truncated payload: copied=%d drained=%d", toCopy, remaining)
+	// Consume the trailing newline to keep the socket aligned for the next
+	// command.
+	var newline [1]byte
+	if err := m.readAll(newline[:]); err != nil {
+		return 0, err
+	}
+	if newline[0] != '\n' {
+		return 0, fmt.Errorf("READBUF: expected trailing newline, got %q", newline[0])
 	}
 
-	log.Printf("[READBUF] completed: total=%d bytes", toCopy)
-	return toCopy, nil
+	log.Printf("[READBUF] completed: total=%d bytes", n)
+	return n, nil
 }
 
 // drainBytes reads and discards exactly n bytes from the socket.
