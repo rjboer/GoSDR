@@ -1,6 +1,7 @@
 package connectionmgr
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -156,6 +157,57 @@ func (m *Manager) ReadBufferASCII(deviceID string, dst []byte) (int, error) {
 
 	log.Printf("[READBUF] completed: total=%d bytes", n)
 	return n, nil
+}
+
+// WriteBufferASCII writes raw bytes to an open buffer using the WRITEBUF command.
+//
+// Parameters:
+//   - deviceID: IIO device identifier.
+//   - payload: raw bytes to stream to the device.
+//
+// Protocol (legacy ASCII):
+//
+//	WRITEBUF <dev> <bytes>\r\n
+//	<- integer N (bytes accepted)
+//
+// The method streams the payload via writeAll, then parses the returned integer
+// status. Negative statuses are surfaced as errors. If the server reports a
+// positive byte count that does not match the payload length, the partial write
+// count is returned alongside an error to keep the stream aligned for the next
+// command.
+func (m *Manager) WriteBufferASCII(deviceID string, payload []byte) (int, error) {
+	if m == nil || m.conn == nil {
+		return 0, errors.New("not connected")
+	}
+	if m.Mode != ModeASCII {
+		return 0, fmt.Errorf("WriteBufferASCII: not in ASCII mode")
+	}
+	if deviceID == "" {
+		return 0, errors.New("deviceID is required")
+	}
+
+	cmd := fmt.Sprintf("WRITEBUF %s %d", deviceID, len(payload))
+	log.Printf("[WRITEBUF] -> %q", cmd)
+
+	if err := m.writeLine(cmd); err != nil {
+		return 0, err
+	}
+	if err := m.writeAll(payload); err != nil {
+		return 0, err
+	}
+
+	written, err := m.readInteger()
+	if err != nil {
+		return 0, err
+	}
+	if written < 0 {
+		return written, fmt.Errorf("WRITEBUF returned %d", written)
+	}
+	if written != len(payload) {
+		return written, fmt.Errorf("WRITEBUF wrote %d of %d bytes", written, len(payload))
+	}
+
+	return written, nil
 }
 
 // drainBytes reads and discards exactly n bytes from the socket.
