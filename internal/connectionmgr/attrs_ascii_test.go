@@ -100,3 +100,92 @@ func TestReadDeviceAttrASCIIShortPayload(t *testing.T) {
 		t.Fatalf("expected short read error, got %v", err)
 	}
 }
+
+func TestReadChannelAttrASCIIInput(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	done := make(chan struct{})
+	var received string
+
+	go func() {
+		defer close(done)
+
+		buf := make([]byte, 128)
+		n, _ := server.Read(buf)
+		received = string(buf[:n])
+
+		writeIntegerLine(t, server, 4)
+		server.Write([]byte("beep\n"))
+	}()
+
+	value, err := mgr.ReadChannelAttrASCII("ad9361-phy", false, "voltage0", "raw")
+	if err != nil {
+		t.Fatalf("ReadChannelAttrASCII returned error: %v", err)
+	}
+
+	<-done
+
+	if !strings.HasPrefix(received, "READ ad9361-phy INPUT voltage0 raw") {
+		t.Fatalf("unexpected command sent: %q", received)
+	}
+	if value != "beep" {
+		t.Fatalf("unexpected value returned: %q", value)
+	}
+}
+
+func TestReadChannelAttrASCIIOutput(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	done := make(chan struct{})
+	var received string
+
+	go func() {
+		defer close(done)
+
+		buf := make([]byte, 128)
+		n, _ := server.Read(buf)
+		received = string(buf[:n])
+
+		writeIntegerLine(t, server, 3)
+		server.Write([]byte("yay\n"))
+	}()
+
+	value, err := mgr.ReadChannelAttrASCII("ad9361-phy", true, "voltage1", "raw")
+	if err != nil {
+		t.Fatalf("ReadChannelAttrASCII returned error: %v", err)
+	}
+
+	<-done
+
+	if !strings.HasPrefix(received, "READ ad9361-phy OUTPUT voltage1 raw") {
+		t.Fatalf("unexpected command sent: %q", received)
+	}
+	if value != "yay" {
+		t.Fatalf("unexpected value returned: %q", value)
+	}
+}
+
+func TestReadChannelAttrASCIINegativeLength(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	go func() {
+		server.Read(make([]byte, 128))
+		writeIntegerLine(t, server, -4)
+	}()
+
+	if _, err := mgr.ReadChannelAttrASCII("pluto", false, "voltage0", "status"); err == nil || !strings.Contains(err.Error(), "negative length") {
+		t.Fatalf("expected negative length error, got %v", err)
+	}
+}
