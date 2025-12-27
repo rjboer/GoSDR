@@ -117,11 +117,11 @@ func TestReadBufferASCIIMaskLineConsumed(t *testing.T) {
 }
 
 func TestOpenBufferASCIICommandFormatting(t *testing.T) {
-	tests := []struct {
-		name    string
-		cyclic  bool
-		maskHex string
-		wantCmd string
+        tests := []struct {
+                name    string
+                cyclic  bool
+                maskHex string
+                wantCmd string
 	}{
 		{
 			name:    "non-cyclic",
@@ -172,7 +172,56 @@ func TestOpenBufferASCIICommandFormatting(t *testing.T) {
 				t.Fatalf("unexpected command: got %q want %q", received, tt.wantCmd)
 			}
 		})
-	}
+        }
+}
+
+func TestCloseBufferASCIICommandSentAndParsed(t *testing.T) {
+        client, server := net.Pipe()
+        defer client.Close()
+        defer server.Close()
+
+        mgr := &Manager{Mode: ModeASCII, conn: client}
+
+        done := make(chan struct{})
+        var received string
+        go func() {
+                defer close(done)
+
+                buf := make([]byte, 128)
+                n, _ := server.Read(buf)
+                received = string(buf[:n])
+
+                writeIntegerLine(t, server, 0)
+        }()
+
+        if err := mgr.CloseBufferASCII("cf-ad9361-lpc"); err != nil {
+                t.Fatalf("CloseBufferASCII returned error: %v", err)
+        }
+
+        <-done
+
+        if received != "CLOSE cf-ad9361-lpc\r\n" {
+                t.Fatalf("unexpected command sent: %q", received)
+        }
+}
+
+func TestCloseBufferASCIIPropagatesErrno(t *testing.T) {
+        client, server := net.Pipe()
+        defer client.Close()
+        defer server.Close()
+
+        mgr := &Manager{Mode: ModeASCII, conn: client}
+
+        go func() {
+                buf := make([]byte, 128)
+                server.Read(buf) // consume CLOSE command
+                writeIntegerLine(t, server, -6)
+        }()
+
+        err := mgr.CloseBufferASCII("cf-ad9361-lpc")
+        if err == nil || !strings.Contains(err.Error(), "-6") {
+                t.Fatalf("expected errno error, got: %v", err)
+        }
 }
 
 func TestOpenBufferASCIINegativeStatus(t *testing.T) {
