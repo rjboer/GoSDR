@@ -3,6 +3,7 @@ package connectionmgr
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -119,6 +120,96 @@ func TestReadBufferASCIIMaskLineConsumed(t *testing.T) {
 	}
 }
 
+func TestReadBufferASCIIStreamingResponder(t *testing.T) {
+	payload := []byte{0x00, 0xff, '\n', 0x7f}
+
+	client, responder := newASCIIMockResponder(t, []asciiMockStep{
+		newReadbufStep("cf-ad9361-lpc", len(payload), "00000003", payload),
+	})
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	dst := make([]byte, len(payload))
+
+	n, err := mgr.ReadBufferASCII("cf-ad9361-lpc", dst)
+	responder.wait(t)
+
+	if err != nil {
+		t.Fatalf("ReadBufferASCII returned error: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("expected %d bytes read, got %d", len(payload), n)
+	}
+	if !bytes.Equal(dst, payload) {
+		t.Fatalf("payload mismatch: got %x want %x", dst, payload)
+	}
+}
+
+func TestReadBufferASCIINegativeLength(t *testing.T) {
+	client, responder := newASCIIMockResponder(t, []asciiMockStep{
+		{
+			name:           "READBUF errno",
+			expectLine:     "READBUF cf-ad9361-lpc 8\r\n",
+			responseStatus: intPtr(-9),
+		},
+	})
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	dst := make([]byte, 8)
+
+	n, err := mgr.ReadBufferASCII("cf-ad9361-lpc", dst)
+	responder.wait(t)
+
+	if err == nil || !strings.Contains(err.Error(), "-9") {
+		t.Fatalf("expected errno error, got %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected zero bytes read on error, got %d", n)
+	}
+}
+
+func TestReadBufferASCIIPayloadSizeMismatch(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+
+		recv := make([]byte, 128)
+		server.Read(recv)
+
+		writeIntegerLine(t, server, 4)
+		writeStringLine(t, server, "00000003")
+		if _, err := server.Write([]byte{0xaa, 0xbb}); err != nil {
+			done <- err
+			return
+		}
+		server.Write([]byte("\n"))
+		server.Close()
+	}()
+
+	dst := make([]byte, 4)
+
+	n, err := mgr.ReadBufferASCII("cf-ad9361-lpc", dst)
+
+	if err == nil {
+		t.Fatalf("expected short read error, got nil")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected unexpected EOF error, got %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected zero bytes read on error, got %d", n)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("server goroutine failed: %v", err)
+	}
+}
+
 func TestWriteBufferASCIISendsPayloadAndAlignsStream(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
@@ -224,6 +315,97 @@ func TestWriteBufferASCIINegativeStatus(t *testing.T) {
 	}
 	if written != -7 {
 		t.Fatalf("expected written count -7, got %d", written)
+	}
+}
+
+func TestOpenBufferASCIIMockResponder(t *testing.T) {
+	tests := []struct {
+		name        string
+		mask        string
+		cyclic      bool
+		samples     uint64
+		expectLine  string
+		responseVal int
+	}{
+		{
+			name:        "non-cyclic",
+			mask:        "00ff",
+			cyclic:      false,
+			samples:     1024,
+			expectLine:  "OPEN iio:device0 1024 0x00ff\r\n",
+			responseVal: 0,
+		},
+		{
+			name:        "cyclic",
+			mask:        "0X00fF",
+			cyclic:      true,
+			samples:     2048,
+			expectLine:  "OPEN iio:device0 2048 0x00fF CYCLIC\r\n",
+			responseVal: 4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, responder := newASCIIMockResponder(t, []asciiMockStep{
+				{
+					name:           "OPEN",
+					expectLine:     tt.expectLine,
+					responseStatus: intPtr(tt.responseVal),
+				},
+			})
+			mgr := &Manager{Mode: ModeASCII, conn: client}
+
+			err := mgr.OpenBufferASCII("iio:device0", tt.samples, tt.mask, tt.cyclic)
+			responder.wait(t)
+
+			if err != nil {
+				t.Fatalf("OpenBufferASCII returned error: %v", err)
+			}
+		})
+	}
+}
+
+func TestCloseBufferASCIIMockResponder(t *testing.T) {
+	client, responder := newASCIIMockResponder(t, []asciiMockStep{
+		{
+			name:           "CLOSE",
+			expectLine:     "CLOSE cf-ad9361-lpc\r\n",
+			responseStatus: intPtr(0),
+		},
+	})
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	err := mgr.CloseBufferASCII("cf-ad9361-lpc")
+	responder.wait(t)
+
+	if err != nil {
+		t.Fatalf("CloseBufferASCII returned error: %v", err)
+	}
+}
+
+func TestWriteBufferASCIIMockResponder(t *testing.T) {
+	payload := []byte("payload-bytes")
+
+	client, responder := newASCIIMockResponder(t, []asciiMockStep{
+		{
+			name:             "WRITEBUF",
+			expectLine:       fmt.Sprintf("WRITEBUF %s %d\r\n", "cf-ad9361-dds", len(payload)),
+			expectPayloadLen: len(payload),
+			expectPayload:    payload,
+			responseStatus:   intPtr(len(payload)),
+		},
+	})
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	written, err := mgr.WriteBufferASCII("cf-ad9361-dds", payload)
+	responder.wait(t)
+
+	if err != nil {
+		t.Fatalf("WriteBufferASCII returned error: %v", err)
+	}
+	if written != len(payload) {
+		t.Fatalf("expected %d bytes written, got %d", len(payload), written)
 	}
 }
 

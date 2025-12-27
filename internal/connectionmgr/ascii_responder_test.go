@@ -81,10 +81,7 @@ func (r *asciiMockResponder) run() {
 				return
 			}
 		case step.responseStatus != nil:
-			if _, err := fmt.Fprintf(r.conn, "%d\n", *step.responseStatus); err != nil {
-				r.errCh <- fmt.Errorf("step %d (%s): write status: %w", idx, step.name, err)
-				return
-			}
+			writeIntegerLine(r.t, r.conn, *step.responseStatus)
 		}
 
 		if len(step.responsePayload) > 0 {
@@ -138,7 +135,7 @@ func TestASCIIMockResponderCommands(t *testing.T) {
 			steps: []asciiMockStep{{
 				name:            "PRINT",
 				expectLine:      "PRINT\n",
-				responsePayload: []byte("context dump\n"),
+				responsePayload: fixedLengthPayload(512*1024, "context dump"),
 			}},
 			run: func(m *Manager) error { return m.PrintASCII() },
 		},
@@ -285,8 +282,8 @@ func TestASCIIMockResponderDataFlows(t *testing.T) {
 			steps: []asciiMockStep{{
 				name:            "READ DEV",
 				expectLine:      "READ ad9361-phy gain\r\n",
-				responseStatus:  intPtr(4),
-				responsePayload: []byte("5dB\n"),
+				responseStatus:  intPtr(len("5dB")),
+				responsePayload: fixedLengthPayload(len("5dB")+1, "5dB"),
 			}},
 			runString:  func(m *Manager) (string, error) { return m.ReadDeviceAttrASCII("ad9361-phy", "gain") },
 			wantString: "5dB",
@@ -345,6 +342,32 @@ func TestASCIIMockResponderDataFlows(t *testing.T) {
 			}
 		})
 	}
+}
+
+func newReadbufStep(deviceID string, announcedLength int, mask string, payload []byte) asciiMockStep {
+	resp := make([]byte, 0, len(mask)+len(payload)+2)
+	resp = append(resp, []byte(mask)...)
+	resp = append(resp, '\n')
+	resp = append(resp, payload...)
+	resp = append(resp, '\n')
+
+	return asciiMockStep{
+		name:            fmt.Sprintf("READBUF %s", deviceID),
+		expectLine:      fmt.Sprintf("READBUF %s %d\r\n", deviceID, announcedLength),
+		responseStatus:  intPtr(announcedLength),
+		responsePayload: resp,
+	}
+}
+
+func fixedLengthPayload(total int, body string) []byte {
+	if total <= 0 {
+		return nil
+	}
+
+	buf := make([]byte, total)
+	copy(buf, []byte(body))
+	buf[len(buf)-1] = '\n'
+	return buf
 }
 
 func intPtr(v int) *int {
