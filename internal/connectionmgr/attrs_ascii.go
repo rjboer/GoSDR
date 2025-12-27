@@ -54,6 +54,49 @@ func (m *Manager) ReadDeviceAttrASCII(devID, attr string) (string, error) {
 	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
+// ReadDebugAttrASCII reads a device debug attribute using the ASCII protocol.
+//
+// Parameters:
+//   - devID: device identifier string (for example "ad9361-phy").
+//   - attr: debug attribute name to read.
+//
+// Protocol:
+//   - issues "READ <devID> DEBUG <attr>\r\n" and expects the next line to
+//     contain the attribute length followed by the payload line.
+//
+// Returns the trimmed attribute string or an error when connection validation,
+// ExecASCII, or payload parsing fails.
+func (m *Manager) ReadDebugAttrASCII(devID, attr string) (string, error) {
+	if m == nil || m.conn == nil {
+		return "", errors.New("not connected")
+	}
+	if devID == "" || attr == "" {
+		return "", errors.New("devID and attr are required")
+	}
+
+	cmd := fmt.Sprintf("READ %s DEBUG %s", devID, attr)
+	log.Printf("[attr][READ][dbg] -> %q", cmd)
+
+	length, err := m.ExecASCII(cmd)
+	if err != nil {
+		return "", err
+	}
+	if length < 0 {
+		return "", fmt.Errorf("READ returned negative length %d", length)
+	}
+
+	payloadLen := length + 1 // trailing '\n'
+	line, err := m.readLine(payloadLen, true)
+	if err != nil {
+		return "", fmt.Errorf("READ payload read failed: %w", err)
+	}
+	if len(line) != payloadLen {
+		return "", fmt.Errorf("READ payload truncated: expected %d bytes, got %d", payloadLen, len(line))
+	}
+
+	return strings.TrimRight(string(line), "\r\n"), nil
+}
+
 // ReadChannelAttrASCII reads a channel attribute through the ASCII protocol.
 //
 // Parameters:

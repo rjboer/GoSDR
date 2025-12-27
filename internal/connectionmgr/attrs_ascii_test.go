@@ -42,6 +42,42 @@ func TestReadDeviceAttrASCIISuccess(t *testing.T) {
 	}
 }
 
+func TestReadDebugAttrASCIISuccess(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	done := make(chan struct{})
+	var received string
+
+	go func() {
+		defer close(done)
+
+		buf := make([]byte, 64)
+		n, _ := server.Read(buf)
+		received = string(buf[:n])
+
+		writeIntegerLine(t, server, 4)
+		server.Write([]byte("pong\n"))
+	}()
+
+	value, err := mgr.ReadDebugAttrASCII("ad9361-phy", "scratch")
+	if err != nil {
+		t.Fatalf("ReadDebugAttrASCII returned error: %v", err)
+	}
+
+	<-done
+
+	if !strings.HasPrefix(received, "READ ad9361-phy DEBUG scratch") {
+		t.Fatalf("unexpected command sent: %q", received)
+	}
+	if value != "pong" {
+		t.Fatalf("unexpected value returned: %q", value)
+	}
+}
+
 func TestReadDeviceAttrASCIIEmpty(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
@@ -97,6 +133,41 @@ func TestReadDeviceAttrASCIIShortPayload(t *testing.T) {
 	}()
 
 	if _, err := mgr.ReadDeviceAttrASCII("pluto", "status"); err == nil || !strings.Contains(err.Error(), "failed to read 5 bytes") {
+		t.Fatalf("expected short read error, got %v", err)
+	}
+}
+
+func TestReadDebugAttrASCIINegativeLength(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	go func() {
+		server.Read(make([]byte, 64))
+		writeIntegerLine(t, server, -7)
+	}()
+
+	if _, err := mgr.ReadDebugAttrASCII("ad9361-phy", "scratch"); err == nil || !strings.Contains(err.Error(), "negative length") {
+		t.Fatalf("expected negative length error, got %v", err)
+	}
+}
+
+func TestReadDebugAttrASCIIShortPayload(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	go func() {
+		server.Read(make([]byte, 64))
+		writeIntegerLine(t, server, 4)
+		server.Write([]byte("ok\n"))
+	}()
+
+	if _, err := mgr.ReadDebugAttrASCII("ad9361-phy", "scratch"); err == nil || !strings.Contains(err.Error(), "failed to read 5 bytes") {
 		t.Fatalf("expected short read error, got %v", err)
 	}
 }

@@ -136,6 +136,7 @@ The [task.md](file:///C:/Users/Roelof%20Jan/.gemini/antigravity/brain/45256e63-e
 | **Get Device Attr** | `READ iio:device0 sampling_frequency\n` | `length\n` followed by `value\n` |
 | **Set Device Attr** | `WRITE iio:device0 sampling_frequency 8\n1000000\n` | `0\n` (or `-errno\n`) |
 | **Get Channel Attr**| `READ iio:device0 INPUT voltage0 rf_bandwidth\n` | `length\n` followed by `value\n` |
+| **Get Debug Attr** | `READ iio:device0 DEBUG direct_reg_access\n` | `length\n` followed by `value\n` |
 | **Set Channel Attr**| `WRITE iio:device0 INPUT voltage0 rf_bandwidth 7\n5000000\n` | `0\n` |
 | **Open Streaming** | `OPEN iio:device0 4096 0001\n` | `0\n` |
 | **Read Buffer** | `READBUF iio:device0 4096\n` | `len\n` followed by `len` raw bytes + `\n` |
