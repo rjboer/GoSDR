@@ -1,7 +1,10 @@
 package connectionmgr
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -116,12 +119,120 @@ func TestReadBufferASCIIMaskLineConsumed(t *testing.T) {
 	}
 }
 
+func TestWriteBufferASCIISendsPayloadAndAlignsStream(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+	payload := []byte("payload-bytes")
+
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+
+		reader := bufio.NewReader(server)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			done <- fmt.Errorf("failed to read command line: %w", err)
+			return
+		}
+
+		expected := fmt.Sprintf("WRITEBUF %s %d\r\n", "cf-ad9361-dds", len(payload))
+		if line != expected {
+			done <- fmt.Errorf("unexpected command line: %q", line)
+			return
+		}
+
+		buf := make([]byte, len(payload))
+		if _, err := io.ReadFull(reader, buf); err != nil {
+			done <- fmt.Errorf("failed to read payload: %w", err)
+			return
+		}
+		if !bytes.Equal(buf, payload) {
+			done <- fmt.Errorf("payload mismatch: %q", buf)
+			return
+		}
+
+		writeIntegerLine(t, server, len(payload))
+		writeIntegerLine(t, server, 0)
+	}()
+
+	written, err := mgr.WriteBufferASCII("cf-ad9361-dds", payload)
+	if err != nil {
+		t.Fatalf("WriteBufferASCII returned error: %v", err)
+	}
+	if written != len(payload) {
+		t.Fatalf("expected %d bytes written, got %d", len(payload), written)
+	}
+
+	next, err := mgr.readInteger()
+	if err != nil {
+		t.Fatalf("failed to read next integer: %v", err)
+	}
+	if next != 0 {
+		t.Fatalf("unexpected trailing integer: got %d", next)
+	}
+
+	if goroutineErr := <-done; goroutineErr != nil {
+		t.Fatalf("server goroutine error: %v", goroutineErr)
+	}
+}
+
+func TestWriteBufferASCIIPartialWrite(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+	payload := []byte("12345")
+
+	go func() {
+		reader := bufio.NewReader(server)
+		reader.ReadString('\n')
+		io.ReadFull(reader, make([]byte, len(payload)))
+		writeIntegerLine(t, server, len(payload)-2)
+	}()
+
+	written, err := mgr.WriteBufferASCII("cf-ad9361-dds", payload)
+	if err == nil || !strings.Contains(err.Error(), "wrote") {
+		t.Fatalf("expected partial write error, got %v", err)
+	}
+	if written != len(payload)-2 {
+		t.Fatalf("expected written count %d, got %d", len(payload)-2, written)
+	}
+}
+
+func TestWriteBufferASCIINegativeStatus(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+	payload := []byte("abcdef")
+
+	go func() {
+		reader := bufio.NewReader(server)
+		reader.ReadString('\n')
+		io.ReadFull(reader, make([]byte, len(payload)))
+		writeIntegerLine(t, server, -7)
+	}()
+
+	written, err := mgr.WriteBufferASCII("cf-ad9361-dds", payload)
+	if err == nil || !strings.Contains(err.Error(), "-7") {
+		t.Fatalf("expected negative status error, got %v", err)
+	}
+	if written != -7 {
+		t.Fatalf("expected written count -7, got %d", written)
+	}
+}
+
 func TestOpenBufferASCIICommandFormatting(t *testing.T) {
-        tests := []struct {
-                name    string
-                cyclic  bool
-                maskHex string
-                wantCmd string
+	tests := []struct {
+		name    string
+		cyclic  bool
+		maskHex string
+		wantCmd string
 	}{
 		{
 			name:    "non-cyclic",
@@ -172,56 +283,56 @@ func TestOpenBufferASCIICommandFormatting(t *testing.T) {
 				t.Fatalf("unexpected command: got %q want %q", received, tt.wantCmd)
 			}
 		})
-        }
+	}
 }
 
 func TestCloseBufferASCIICommandSentAndParsed(t *testing.T) {
-        client, server := net.Pipe()
-        defer client.Close()
-        defer server.Close()
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
 
-        mgr := &Manager{Mode: ModeASCII, conn: client}
+	mgr := &Manager{Mode: ModeASCII, conn: client}
 
-        done := make(chan struct{})
-        var received string
-        go func() {
-                defer close(done)
+	done := make(chan struct{})
+	var received string
+	go func() {
+		defer close(done)
 
-                buf := make([]byte, 128)
-                n, _ := server.Read(buf)
-                received = string(buf[:n])
+		buf := make([]byte, 128)
+		n, _ := server.Read(buf)
+		received = string(buf[:n])
 
-                writeIntegerLine(t, server, 0)
-        }()
+		writeIntegerLine(t, server, 0)
+	}()
 
-        if err := mgr.CloseBufferASCII("cf-ad9361-lpc"); err != nil {
-                t.Fatalf("CloseBufferASCII returned error: %v", err)
-        }
+	if err := mgr.CloseBufferASCII("cf-ad9361-lpc"); err != nil {
+		t.Fatalf("CloseBufferASCII returned error: %v", err)
+	}
 
-        <-done
+	<-done
 
-        if received != "CLOSE cf-ad9361-lpc\r\n" {
-                t.Fatalf("unexpected command sent: %q", received)
-        }
+	if received != "CLOSE cf-ad9361-lpc\r\n" {
+		t.Fatalf("unexpected command sent: %q", received)
+	}
 }
 
 func TestCloseBufferASCIIPropagatesErrno(t *testing.T) {
-        client, server := net.Pipe()
-        defer client.Close()
-        defer server.Close()
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
 
-        mgr := &Manager{Mode: ModeASCII, conn: client}
+	mgr := &Manager{Mode: ModeASCII, conn: client}
 
-        go func() {
-                buf := make([]byte, 128)
-                server.Read(buf) // consume CLOSE command
-                writeIntegerLine(t, server, -6)
-        }()
+	go func() {
+		buf := make([]byte, 128)
+		server.Read(buf) // consume CLOSE command
+		writeIntegerLine(t, server, -6)
+	}()
 
-        err := mgr.CloseBufferASCII("cf-ad9361-lpc")
-        if err == nil || !strings.Contains(err.Error(), "-6") {
-                t.Fatalf("expected errno error, got: %v", err)
-        }
+	err := mgr.CloseBufferASCII("cf-ad9361-lpc")
+	if err == nil || !strings.Contains(err.Error(), "-6") {
+		t.Fatalf("expected errno error, got: %v", err)
+	}
 }
 
 func TestOpenBufferASCIINegativeStatus(t *testing.T) {
