@@ -103,6 +103,51 @@ func (m *Manager) ReadChannelAttrASCII(devID string, isOutput bool, chanID, attr
 	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
+// ReadBufferAttrASCII reads a buffer attribute through the ASCII protocol.
+//
+// Parameters:
+//   - devID: device identifier string.
+//   - attr: buffer attribute name to read.
+//
+// Protocol:
+//   - issues "READ <devID> BUFFER <attr>\r\n" and expects the next line to
+//     contain the attribute value.
+//
+// Returns the trimmed attribute string or an error if validation, write, or
+// read fails.
+func (m *Manager) ReadBufferAttrASCII(devID, attr string) (string, error) {
+	if m == nil || m.conn == nil {
+		return "", errors.New("not connected")
+	}
+	if devID == "" || attr == "" {
+		return "", errors.New("devID and attr are required")
+	}
+
+	cmd := fmt.Sprintf("READ %s BUFFER %s", devID, attr)
+	log.Printf("[attr][READ][buf] -> %q", cmd)
+
+	length, err := m.ExecASCII(cmd)
+	if err != nil {
+		return "", err
+	}
+	if length < 0 {
+		return "", fmt.Errorf("READ returned negative length %d", length)
+	}
+
+	payloadLen := length + 1 // account for trailing '\n'
+	line, err := m.readLine(payloadLen, true)
+	if err != nil {
+		return "", fmt.Errorf("READ payload read failed: %w", err)
+	}
+	if len(line) != payloadLen {
+		return "", fmt.Errorf("READ payload truncated: expected %d bytes, got %d", payloadLen, len(line))
+	}
+
+	value := strings.TrimRight(string(line), "\r\n")
+	value = strings.Trim(value, "\x00")
+	return value, nil
+}
+
 // ReadChannelAttrASCII2 mirrors ReadChannelAttrASCII but also returns the raw
 // status code. This helper is retained for callers that need to differentiate
 // transport errors from device-side errno returns until they migrate to the

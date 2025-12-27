@@ -189,3 +189,56 @@ func TestReadChannelAttrASCIINegativeLength(t *testing.T) {
 		t.Fatalf("expected negative length error, got %v", err)
 	}
 }
+
+func TestReadBufferAttrASCIISuccess(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	done := make(chan struct{})
+	var received string
+
+	go func() {
+		defer close(done)
+
+		buf := make([]byte, 64)
+		n, _ := server.Read(buf)
+		received = string(buf[:n])
+
+		writeIntegerLine(t, server, 5)
+		server.Write([]byte("value\r\n"))
+	}()
+
+	value, err := mgr.ReadBufferAttrASCII("cf-ad9361-lpc", "samples")
+	if err != nil {
+		t.Fatalf("ReadBufferAttrASCII returned error: %v", err)
+	}
+
+	<-done
+
+	if !strings.HasPrefix(received, "READ cf-ad9361-lpc BUFFER samples") {
+		t.Fatalf("unexpected command sent: %q", received)
+	}
+	if value != "value" {
+		t.Fatalf("unexpected value returned: %q", value)
+	}
+}
+
+func TestReadBufferAttrASCIINegativeLength(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	go func() {
+		server.Read(make([]byte, 64))
+		writeIntegerLine(t, server, -7)
+	}()
+
+	if _, err := mgr.ReadBufferAttrASCII("cf-ad9361-lpc", "direction"); err == nil || !strings.Contains(err.Error(), "negative length") {
+		t.Fatalf("expected negative length error, got %v", err)
+	}
+}
