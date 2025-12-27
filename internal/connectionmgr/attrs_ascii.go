@@ -34,20 +34,23 @@ func (m *Manager) ReadDeviceAttrASCII(devID, attr string) (string, error) {
 	cmd := fmt.Sprintf("READ %s %s", devID, attr)
 	log.Printf("[attr][READ][dev] -> %q", cmd)
 
-	n, err := m.ExecASCII(cmd)
+	length, err := m.ExecASCII(cmd)
 	if err != nil {
 		return "", err
 	}
-	// ExecASCII is expected to return the payload line (without trailing newline)
-	// or provide a method to read the following bytes. If your ExecASCII currently
-	// returns only integer status, switch to ExecASCIIReadLine below.
-	_ = n
+	if length < 0 {
+		return "", fmt.Errorf("READ returned negative length %d", length)
+	}
 
-	// If you already have a "readLine" helper in ascii.go, use it here.
-	line, err := m.readLine(4096, true)
+	payloadLen := length + 1 // account for trailing '\n'
+	line, err := m.readLine(payloadLen, true)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("READ payload read failed: %w", err)
 	}
+	if len(line) != payloadLen {
+		return "", fmt.Errorf("READ payload truncated: expected %d bytes, got %d", payloadLen, len(line))
+	}
+
 	return strings.TrimRight(string(line), "\r\n"), nil
 }
 
