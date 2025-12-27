@@ -323,6 +323,9 @@ func (m *Manager) WriteDebugAttrASCII(devID, attr string, payload []byte) (int, 
 	if m == nil || m.conn == nil {
 		return 0, errors.New("not connected")
 	}
+	if m.Mode != ModeASCII {
+		return 0, fmt.Errorf("WriteDebugAttrASCII: not in ASCII mode")
+	}
 	if devID == "" || attr == "" {
 		return 0, errors.New("devID and attr are required")
 	}
@@ -344,6 +347,53 @@ func (m *Manager) WriteDebugAttrASCII(devID, attr string, payload []byte) (int, 
 	if status < 0 {
 		return status, fmt.Errorf("WRITE DEBUG returned %d", status)
 	}
+	return status, nil
+}
+
+// WriteBufferAttrASCII writes a buffer attribute via the ASCII protocol.
+//
+// Parameters:
+//   - devID: device identifier string (for example "cf-ad9361-lpc").
+//   - attr: buffer attribute name to write.
+//   - payload: raw bytes to send verbatim (no implicit newline).
+//
+// Protocol:
+//   - issues "WRITE <devID> BUFFER <attr> <len>\r\n" then streams <len> raw
+//     payload bytes using writeAll.
+//   - reads the integer status line via readInteger; negative statuses are
+//     surfaced as errors while still returning the raw status value.
+//
+// Returns the integer status (0 or positive) or an error if validation, socket
+// IO, or a negative status occurs.
+func (m *Manager) WriteBufferAttrASCII(devID, attr string, payload []byte) (int, error) {
+	if m == nil || m.conn == nil {
+		return 0, errors.New("not connected")
+	}
+	if m.Mode != ModeASCII {
+		return 0, fmt.Errorf("WriteBufferAttrASCII: not in ASCII mode")
+	}
+	if devID == "" || attr == "" {
+		return 0, errors.New("devID and attr are required")
+	}
+
+	cmd := fmt.Sprintf("WRITE %s BUFFER %s %d", devID, attr, len(payload))
+	log.Printf("[attr][WRITE][buf] -> %q (len=%d)", cmd, len(payload))
+
+	if err := m.writeLine(cmd); err != nil {
+		return 0, err
+	}
+	if err := m.writeAll(payload); err != nil {
+		return 0, err
+	}
+
+	status, err := m.readInteger()
+	if err != nil {
+		return 0, err
+	}
+	if status < 0 {
+		return status, fmt.Errorf("WRITE BUFFER returned %d", status)
+	}
+
 	return status, nil
 }
 

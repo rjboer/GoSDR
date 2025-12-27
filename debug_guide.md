@@ -21,6 +21,13 @@
 
 This mirrors libiio's debug attribute handling and is implemented in the ASCII connection manager to support tooling that emits diagnostic blobs directly to device debug endpoints.
 
+### ASCII buffer attribute writes (current protocol)
+
+- Command form: `WRITE <device> BUFFER <attr> <len>` followed by `<len>` raw payload bytes (no automatic newline).
+- Response: a single integer line produced by the device. Negative values indicate errno-style failures and should be treated as errors; zero or positive values indicate success.
+
+This is useful for buffer-level controls such as toggling cyclic mode or updating watermarks while matching libiio's raw wire format.
+
 ### 1. Structured Logging with Levels
 
 **Why:** Different verbosity levels for development vs. production
