@@ -45,7 +45,7 @@ This plan ensures 100% coverage of the IIOD ASCII protocol as defined in [parser
 | `WRITE <dev> <dir> <chan> <attr> <len>` | [WriteChannelAttrASCII(...)](file:///c:/Users/Roelof%20Jan/GolandProjects/RJBOER/GoSDR/internal/connectionmgr/attrs_ascii.go#174-206) | **Verify** |
 | `GETTRIG <dev>` | `GetTriggerASCII(...)` | **Missing** |
 | `SETTRIG <dev> [<trig>]` | `SetTriggerASCII(...)` | **Missing** |
-| `SET <dev> BUFFERS_COUNT <count>` | `SetKernelBuffersCountASCII(...)` | **Missing** |
+| `SET <dev> BUFFERS_COUNT <count>` | `SetKernelBuffersCountASCII(...)` | **Implemented** |
 
 ## 2. Detailed Implementation Steps
 

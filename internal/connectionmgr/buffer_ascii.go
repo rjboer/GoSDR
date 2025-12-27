@@ -5,6 +5,39 @@ import (
 	"log"
 )
 
+// SetKernelBuffersCountASCII configures the number of kernel buffers for a
+// device using the ASCII SET command.
+//
+// Protocol:
+//   - issues "SET <deviceID> BUFFERS_COUNT <count>\r\n" via ExecASCII.
+//   - non-negative return codes indicate success; negative errno values are
+//     surfaced as errors.
+//
+// Parameters:
+//   - deviceID: IIO device identifier (for example "cf-ad9361-lpc").
+//   - count: desired number of kernel buffers; must be zero or positive.
+//
+// Returns nil on success or an error for validation failures, transport
+// errors, or negative device responses.
+func (m *Manager) SetKernelBuffersCountASCII(deviceID string, count int) error {
+	if deviceID == "" {
+		return fmt.Errorf("deviceID is required")
+	}
+	if count < 0 {
+		return fmt.Errorf("count must be >= 0")
+	}
+
+	status, err := m.ExecASCII(fmt.Sprintf("SET %s BUFFERS_COUNT %d", deviceID, count))
+	if err != nil {
+		return fmt.Errorf("SET BUFFERS_COUNT command failed: %w", err)
+	}
+	if status < 0 {
+		return fmt.Errorf("SET BUFFERS_COUNT returned %d", status)
+	}
+
+	return nil
+}
+
 // OpenBufferASCII sends the ASCII OPEN command to allocate a buffer.
 //
 // Parameters:
