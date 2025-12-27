@@ -3,6 +3,7 @@ package connectionmgr
 import (
 	"fmt"
 	"log"
+	"strings"
 )
 
 // SetKernelBuffersCountASCII configures the number of kernel buffers for a
@@ -62,7 +63,12 @@ func (m *Manager) OpenBufferASCII(
 		return fmt.Errorf("OpenBufferASCII: not in ASCII mode")
 	}
 
-	cmd := fmt.Sprintf("OPEN %s %d %s", deviceID, samples, maskHex)
+	mask := strings.TrimPrefix(strings.TrimPrefix(maskHex, "0x"), "0X")
+	if mask == "" {
+		return fmt.Errorf("OpenBufferASCII: maskHex is required")
+	}
+
+	cmd := fmt.Sprintf("OPEN %s %d 0x%s", deviceID, samples, mask)
 	if cyclic {
 		cmd += " CYCLIC"
 	}

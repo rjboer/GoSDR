@@ -115,3 +115,81 @@ func TestReadBufferASCIIMaskLineConsumed(t *testing.T) {
 		t.Fatalf("server goroutine failed: %v", err)
 	}
 }
+
+func TestOpenBufferASCIICommandFormatting(t *testing.T) {
+	tests := []struct {
+		name    string
+		cyclic  bool
+		maskHex string
+		wantCmd string
+	}{
+		{
+			name:    "non-cyclic",
+			cyclic:  false,
+			maskHex: "00ff",
+			wantCmd: "OPEN iio:device0 1024 0x00ff\r\n",
+		},
+		{
+			name:    "cyclic",
+			cyclic:  true,
+			maskHex: "0X00fF",
+			wantCmd: "OPEN iio:device0 2048 0x00fF CYCLIC\r\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer client.Close()
+			defer server.Close()
+
+			mgr := &Manager{Mode: ModeASCII, conn: client}
+
+			done := make(chan struct{})
+			var received string
+			go func() {
+				defer close(done)
+
+				buf := make([]byte, 128)
+				n, _ := server.Read(buf)
+				received = string(buf[:n])
+
+				writeIntegerLine(t, server, 0)
+			}()
+
+			samples := uint64(1024)
+			if tt.cyclic {
+				samples = 2048
+			}
+
+			if err := mgr.OpenBufferASCII("iio:device0", samples, tt.maskHex, tt.cyclic); err != nil {
+				t.Fatalf("OpenBufferASCII returned error: %v", err)
+			}
+
+			<-done
+
+			if received != tt.wantCmd {
+				t.Fatalf("unexpected command: got %q want %q", received, tt.wantCmd)
+			}
+		})
+	}
+}
+
+func TestOpenBufferASCIINegativeStatus(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	go func() {
+		buf := make([]byte, 128)
+		server.Read(buf) // consume OPEN command
+		writeIntegerLine(t, server, -22)
+	}()
+
+	err := mgr.OpenBufferASCII("cf-ad9361-lpc", 512, "03", false)
+	if err == nil || !strings.Contains(err.Error(), "-22") {
+		t.Fatalf("expected errno error, got: %v", err)
+	}
+}
