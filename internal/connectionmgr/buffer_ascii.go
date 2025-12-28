@@ -104,59 +104,68 @@ func (m *Manager) OpenBufferASCII(
 // error when the mode is incorrect, IO fails, or the server returns a negative
 // errno.
 func (m *Manager) ReadBufferASCII(deviceID string, dst []byte) (int, error) {
+	n, _, err := m.ReadBufferASCIIWithMask(deviceID, dst)
+	return n, err
+}
+
+// ReadBufferASCIIWithMask reads raw bytes from an open buffer using the READBUF
+// command and returns the channel mask string announced by the server.
+func (m *Manager) ReadBufferASCIIWithMask(deviceID string, dst []byte) (int, string, error) {
 	if m.Mode != ModeASCII {
-		return 0, fmt.Errorf("ReadBufferASCII: not in ASCII mode")
+		return 0, "", fmt.Errorf("ReadBufferASCII: not in ASCII mode")
 	}
 
 	cmd := fmt.Sprintf("READBUF %s %d", deviceID, len(dst))
 	log.Printf("[READBUF] -> %q", cmd)
 
 	if err := m.writeAll([]byte(cmd + "\r\n")); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	log.Printf("[READBUF] waiting for size integer")
 	n, err := m.readInteger()
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	log.Printf("[READBUF] announced bytes=%d", n)
 
 	if n < 0 {
-		return 0, fmt.Errorf("READBUF error: %d", n)
+		return 0, "", fmt.Errorf("READBUF error: %d", n)
 	}
 	if n == 0 {
-		return 0, nil
+		return 0, "", nil
 	}
 
 	if n > len(dst) {
-		return 0, fmt.Errorf("READBUF announced %d bytes but destination capacity is %d", n, len(dst))
+		return 0, "", fmt.Errorf("READBUF announced %d bytes but destination capacity is %d", n, len(dst))
 	}
 
-	// The server sends a hex mask line after the length; consume it to align the
-	// stream before reading binary data.
-	if _, err := m.readLine(64, false); err != nil {
-		return 0, fmt.Errorf("READBUF: failed to consume mask line: %w", err)
+	maskLine, err := m.readLine(64, true)
+	if err != nil {
+		return 0, "", fmt.Errorf("READBUF: failed to consume mask line: %w", err)
 	}
+	log.Printf("[READBUF] raw mask line=%q", maskLine)
+	mask := strings.TrimSpace(string(maskLine))
 
 	// Read payload
 	if err := m.readAll(dst[:n]); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	// Consume the trailing newline to keep the socket aligned for the next
 	// command.
 	var newline [1]byte
 	if err := m.readAll(newline[:]); err != nil {
-		return 0, err
+		return 0, "", err
 	}
+	log.Printf("[READBUF] trailing delimiter byte=%q", newline[0])
 	if newline[0] != '\n' {
-		return 0, fmt.Errorf("READBUF: expected trailing newline, got %q", newline[0])
+		return 0, "", fmt.Errorf("READBUF: expected trailing newline, got %q", newline[0])
 	}
 
-	log.Printf("[READBUF] completed: total=%d bytes", n)
-	return n, nil
+	log.Printf("[READBUF] completed: total=%d bytes mask=%s", n, mask)
+	return n, mask, nil
 }
 
 // WriteBufferASCII writes raw bytes to an open buffer using the WRITEBUF command.
