@@ -1,8 +1,11 @@
 package connectionmgr
 
 import (
+	"bytes"
+	"compress/zlib"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strconv"
@@ -593,76 +596,144 @@ func (m *Manager) DrainASCII() error {
 	}
 }
 
-// HelpfunctionASCII sends the HELP command and drains the multi-line response
-// from the ASCII server. It is primarily for debugging or manual discovery and
-// returns the first socket error encountered.
+func (m *Manager) readASCIIPayload(length int) ([]byte, error) {
+	if m == nil || m.conn == nil {
+		return nil, errors.New("not connected")
+	}
+	if length < 0 {
+		return nil, fmt.Errorf("negative payload length %d", length)
+	}
+
+	payloadLen := length + 1 // include trailing '\n'
+	payload, err := m.readLine(payloadLen, false)
+	if err != nil {
+		return nil, fmt.Errorf("read payload: %w", err)
+	}
+	if len(payload) != payloadLen {
+		return nil, fmt.Errorf("payload truncated: expected %d bytes, got %d", payloadLen, len(payload))
+	}
+
+	return bytes.TrimRight(payload, "\r\n"), nil
+}
+
+func (m *Manager) readASCIIStringPayload(cmd string) (string, error) {
+	if m == nil || m.conn == nil {
+		return "", errors.New("not connected")
+	}
+
+	length, err := m.ExecASCII(cmd)
+	if err != nil {
+		return "", err
+	}
+	if length < 0 {
+		return "", fmt.Errorf("%s returned %d", cmd, length)
+	}
+
+	payload, err := m.readASCIIPayload(length)
+	if err != nil {
+		return "", fmt.Errorf("%s payload read failed: %w", cmd, err)
+	}
+
+	return string(payload), nil
+}
+
+// HelpASCII sends HELP and returns the trimmed response body. The socket is
+// fully drained for the response so subsequent calls remain aligned.
+func (m *Manager) HelpASCII() (string, error) {
+	return m.readASCIIStringPayload("HELP")
+}
+
+// GetVersionASCII sends VERSION and returns the trimmed response string. The
+// helper consumes the entire payload (including the trailing newline) to keep
+// the ASCII stream in sync.
+func (m *Manager) GetVersionASCII() (string, error) {
+	return m.readASCIIStringPayload("VERSION")
+}
+
+// GetContextXMLASCII issues PRINT to fetch the XML context over ASCII. The
+// protocol returns the byte length on the first line followed by the XML and a
+// trailing newline delimiter, which this helper trims before returning.
+func (m *Manager) GetContextXMLASCII() ([]byte, error) {
+	if m == nil || m.conn == nil {
+		return nil, errors.New("not connected")
+	}
+
+	length, err := m.ExecASCII("PRINT")
+	if err != nil {
+		return nil, err
+	}
+	if length <= 0 {
+		return nil, fmt.Errorf("PRINT returned non-positive length %d", length)
+	}
+
+	payload, err := m.readASCIIPayload(length)
+	if err != nil {
+		return nil, fmt.Errorf("PRINT payload read failed: %w", err)
+	}
+
+	return payload, nil
+}
+
+// GetContextXMLCompressedASCII issues ZPRINT to fetch a zlib-compressed XML
+// context. The method trims the newline delimiter, inflates the payload, and
+// returns the decompressed XML bytes.
+func (m *Manager) GetContextXMLCompressedASCII() ([]byte, error) {
+	if m == nil || m.conn == nil {
+		return nil, errors.New("not connected")
+	}
+
+	length, err := m.ExecASCII("ZPRINT")
+	if err != nil {
+		return nil, err
+	}
+	if length <= 0 {
+		return nil, fmt.Errorf("ZPRINT returned non-positive length %d", length)
+	}
+
+	compressed, err := m.readASCIIPayload(length)
+	if err != nil {
+		return nil, fmt.Errorf("ZPRINT payload read failed: %w", err)
+	}
+
+	zr, err := zlib.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return nil, fmt.Errorf("decompress context: %w", err)
+	}
+	defer zr.Close()
+
+	var out bytes.Buffer
+	if _, err := io.Copy(&out, zr); err != nil {
+		return nil, fmt.Errorf("copy decompressed context: %w", err)
+	}
+
+	return out.Bytes(), nil
+}
+
+// HelpfunctionASCII is retained for callers using the legacy name. It delegates
+// to HelpASCII and drops the payload.
 func (m *Manager) HelpfunctionASCII() error {
-
-	log.Println("HelpfunctionASCII function")
-	data := []byte("HELP\n")
-	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
-	_, err := m.conn.Write(data)
-	if err != nil {
-		return err
-	}
-	m.readLine(512*1024, true)
-	log.Println("HelpfunctionASCII: function done")
+	_, err := m.HelpASCII()
 	return err
 }
 
-// VersionASCII issues the VERSION command over ASCII and drains the response
-// body. The method is used during bootstrap to detect server capabilities and
-// returns any write/read error encountered.
+// VersionASCII is retained for callers using the legacy name. It delegates to
+// GetVersionASCII and drops the payload.
 func (m *Manager) VersionASCII() error {
-
-	log.Println("VersionASCII function")
-	data := []byte("VERSION\n")
-	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
-	_, err := m.conn.Write(data)
-	if err != nil {
-		return err
-	}
-	m.readLine(512*1024, true)
-	log.Println("VersionASCII function done")
+	_, err := m.GetVersionASCII()
 	return err
 }
 
-// ZPrintASCII sends the ZPRINT command (extended PRINT variant) and drains the
-// response stream. Errors from socket writes or reads are returned to the
-// caller.
+// ZPrintASCII is retained for callers using the legacy name. It delegates to
+// GetContextXMLCompressedASCII and drops the payload.
 func (m *Manager) ZPrintASCII() error {
-
-	log.Println("ZPrintASCII function")
-	data := []byte("ZPRINT\n")
-	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
-	_, err := m.conn.Write(data)
-	if err != nil {
-		return err
-	}
-	m.readLine(512*1024, false)
-	log.Println("ZPrintASCII function done")
+	_, err := m.GetContextXMLCompressedASCII()
 	return err
 }
 
-// PrintASCII issues the PRINT command to fetch the ASCII device inventory and
-// drains the response. It logs the number of bytes consumed and returns any
-// socket error encountered.
+// PrintASCII is retained for callers using the legacy name. It delegates to
+// GetContextXMLASCII and drops the payload.
 func (m *Manager) PrintASCII() error {
-
-	log.Println("PRINT function")
-	data := []byte("PRINT\n")
-	log.Printf("Sending \nBytes:%b \nData:%b \nText:%q\n", len(data), data, string(data))
-	_, err := m.conn.Write(data)
-	if err != nil {
-		return err
-	}
-	log.Println("Print:Draining read buffer")
-	data, err = m.readLine(512*1024, false)
-	fmt.Println("Print:number of bytes read:", len(data))
-	if err != nil {
-		fmt.Println("Print:Error reading data:", err)
-	}
-	fmt.Println("Print:Drained read buffer, Done")
+	_, err := m.GetContextXMLASCII()
 	return err
 }
 

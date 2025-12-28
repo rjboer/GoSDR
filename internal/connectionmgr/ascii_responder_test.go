@@ -3,6 +3,7 @@ package connectionmgr
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"fmt"
 	"io"
 	"net"
@@ -105,6 +106,20 @@ func (r *asciiMockResponder) wait(t *testing.T) {
 	}
 }
 
+func compressString(t *testing.T, value string) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	if _, err := zw.Write([]byte(value)); err != nil {
+		t.Fatalf("compress payload: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("flush compressed payload: %v", err)
+	}
+	return buf.Bytes()
+}
+
 func TestASCIIMockResponderCommands(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -116,28 +131,31 @@ func TestASCIIMockResponderCommands(t *testing.T) {
 			name: "help drains response",
 			steps: []asciiMockStep{{
 				name:            "HELP",
-				expectLine:      "HELP\n",
+				expectLine:      "HELP\r\n",
+				responseStatus:  intPtr(len("available commands")),
 				responsePayload: []byte("available commands\n"),
 			}},
-			run: func(m *Manager) error { return m.HelpfunctionASCII() },
+			run: func(m *Manager) error { _, err := m.HelpASCII(); return err },
 		},
 		{
 			name: "version response",
 			steps: []asciiMockStep{{
 				name:            "VERSION",
-				expectLine:      "VERSION\n",
+				expectLine:      "VERSION\r\n",
+				responseStatus:  intPtr(len("0.26")),
 				responsePayload: []byte("0.26\n"),
 			}},
-			run: func(m *Manager) error { return m.VersionASCII() },
+			run: func(m *Manager) error { _, err := m.GetVersionASCII(); return err },
 		},
 		{
 			name: "print command",
 			steps: []asciiMockStep{{
 				name:            "PRINT",
-				expectLine:      "PRINT\n",
-				responsePayload: fixedLengthPayload(512*1024, "context dump"),
+				expectLine:      "PRINT\r\n",
+				responseStatus:  intPtr(10),
+				responsePayload: []byte("0123456789\n"),
 			}},
-			run: func(m *Manager) error { return m.PrintASCII() },
+			run: func(m *Manager) error { _, err := m.GetContextXMLASCII(); return err },
 		},
 		{
 			name: "timeout success",
@@ -195,6 +213,75 @@ func TestASCIIMockResponderCommands(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestASCIIContextCommandsAlignAndTrim(t *testing.T) {
+	const xmlContext = "<context/>"
+	compressed := compressString(t, xmlContext)
+
+	steps := []asciiMockStep{
+		{
+			name:            "HELP payload",
+			expectLine:      "HELP\r\n",
+			responseStatus:  intPtr(len("available commands")),
+			responsePayload: []byte("available commands\n"),
+		},
+		{
+			name:            "VERSION payload",
+			expectLine:      "VERSION\r\n",
+			responseStatus:  intPtr(len("0.26")),
+			responsePayload: []byte("0.26\n"),
+		},
+		{
+			name:            "PRINT payload",
+			expectLine:      "PRINT\r\n",
+			responseStatus:  intPtr(len(xmlContext)),
+			responsePayload: append([]byte(xmlContext), '\n'),
+		},
+		{
+			name:            "ZPRINT payload",
+			expectLine:      "ZPRINT\r\n",
+			responseStatus:  intPtr(len(compressed)),
+			responsePayload: append(compressed, '\n'),
+		},
+	}
+
+	client, responder := newASCIIMockResponder(t, steps)
+	mgr := &Manager{Mode: ModeASCII, conn: client}
+
+	help, err := mgr.HelpASCII()
+	if err != nil {
+		t.Fatalf("HelpASCII error: %v", err)
+	}
+	if help != "available commands" {
+		t.Fatalf("HelpASCII payload mismatch: %q", help)
+	}
+
+	version, err := mgr.GetVersionASCII()
+	if err != nil {
+		t.Fatalf("GetVersionASCII error: %v", err)
+	}
+	if version != "0.26" {
+		t.Fatalf("GetVersionASCII payload mismatch: %q", version)
+	}
+
+	ctx, err := mgr.GetContextXMLASCII()
+	if err != nil {
+		t.Fatalf("GetContextXMLASCII error: %v", err)
+	}
+	if string(ctx) != xmlContext {
+		t.Fatalf("GetContextXMLASCII payload mismatch: %q", string(ctx))
+	}
+
+	ctxCompressed, err := mgr.GetContextXMLCompressedASCII()
+	if err != nil {
+		t.Fatalf("GetContextXMLCompressedASCII error: %v", err)
+	}
+	if string(ctxCompressed) != xmlContext {
+		t.Fatalf("GetContextXMLCompressedASCII payload mismatch: %q", string(ctxCompressed))
+	}
+
+	responder.wait(t)
 }
 
 func TestASCIIMockResponderDataFlows(t *testing.T) {
