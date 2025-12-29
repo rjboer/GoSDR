@@ -1,6 +1,7 @@
 package connectionmgr
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ type Manager struct {
 	nextBufferID uint16
 
 	conn net.Conn
+	br   *bufio.Reader
 }
 
 var errBinaryRejected = errors.New("BINARY command rejected by server")
@@ -48,17 +50,18 @@ func (m *Manager) Connect() error {
 		return fmt.Errorf("connect failed: %w", err)
 	}
 	m.conn = c
+	m.br = bufio.NewReader(c)
 	m.clientID = 0
 	m.Mode = ModeASCII
 	return nil
 }
 
 func (m *Manager) ReadByte() error {
-	if m.conn == nil {
+	if m.br == nil {
 		return fmt.Errorf("not connected")
 	}
-	buf := make([]byte, 1)
-	if _, err := m.conn.Read(buf); err != nil {
+	_, err := m.br.ReadByte()
+	if err != nil {
 		return fmt.Errorf("read failed: %w", err)
 	}
 	return nil
@@ -67,6 +70,7 @@ func (m *Manager) ReadByte() error {
 // Safe reinjection (tests, SSH tunnels, etc.)
 func (m *Manager) SetConn(conn net.Conn) {
 	m.conn = conn
+	m.br = bufio.NewReader(conn)
 }
 
 func (m *Manager) Close() error {
@@ -113,7 +117,6 @@ func (m *Manager) SetClientID(id uint16) {
 
 // applyReadDeadline applies the configured read timeout to the socket.
 func (m *Manager) applyReadDeadline() {
-	fmt.Println("applyReadDeadline")
 	if m.conn != nil {
 		_ = m.conn.SetReadDeadline(time.Now().Add(time.Second * 5))
 	}
@@ -144,66 +147,43 @@ func (m *Manager) writeAll(b []byte) error {
 	return nil
 }
 
-// readAll reads exactly len(b) bytes from the socket.
+// readAll reads exactly len(b) bytes from the buffered reader.
 func (m *Manager) readAll(b []byte) error {
-	if m.conn == nil {
+	if m.br == nil {
 		return fmt.Errorf("readAll: not connected")
 	}
 
 	m.applyReadDeadline()
-	fmt.Println("readAll")
-	n, err := io.ReadFull(m.conn, b)
-	fmt.Println("readAll bytes, err", n, err)
+	_, err := io.ReadFull(m.br, b)
 	return err
 }
 
-// readLine reads exactly maxLen bytes from the IIOD socket and validates the
-// trailing newline delimiter.
-//
-// Protocol expectations:
-//   - Callers must provide the exact number of bytes expected for the line,
-//     including its trailing line ending.
-//   - Lines must terminate with '\n'. A preceding '\r' is permitted but not
-//     stripped.
+// readLine reads a single line ending in '\n'.
 //
 // Parameters:
-//   - maxLen specifies the exact byte count to read, including the trailing
-//     newline sequence.
-//   - output controls optional debug logging of the captured line.
+//   - maxLenHint is optional and effectively ignored by bufio.Reader, but retained
+//     for API compatibility. The buffer grows as needed.
+//   - output controls optional debug logging.
 //
-// Returns the raw line when exactly maxLen bytes are read and the final byte
-// is '\n'. Errors are returned when:
-//   - the Manager is disconnected or misconfigured,
-//   - maxLen is zero or negative,
-//   - the read completes without a trailing '\n',
-//   - fewer than maxLen bytes are received (including timeout conditions).
+// Returns the line including the trailing delimiter, or an error.
 func (m *Manager) readLine(
-	maxLen int, output bool,
+	maxLenHint int, output bool,
 ) (line []byte, err error) {
-	if m == nil || m.conn == nil {
+	if m == nil || m.br == nil {
 		return nil, fmt.Errorf("readLine: not connected")
 	}
-	if maxLen <= 0 {
-		return nil, fmt.Errorf("readLine: invalid maxBytes %d", maxLen)
-	}
 
-	buf := make([]byte, maxLen)
 	m.applyReadDeadline()
-	n, rErr := io.ReadFull(m.conn, buf)
-	if rErr != nil {
-		return buf[:n], fmt.Errorf("readLine: failed to read %d bytes: %w", maxLen, rErr)
-	}
-
-	if n == 0 || buf[n-1] != '\n' {
-		return buf[:n], fmt.Errorf("readLine: line missing trailing newline")
+	line, err = m.br.ReadBytes('\n')
+	if err != nil {
+		return line, fmt.Errorf("readLine failed: %w", err)
 	}
 
 	if output {
-		log.Printf("Bytes read:%b \nMessage:\n %q \nError: %v", len(buf), string(buf), nil)
-		log.Println("Readline string: ", string(buf))
+		log.Printf("[READ] %q", string(line))
 	}
 
-	return buf, nil
+	return line, nil
 }
 
 // ---------- Higher-level operations ----------

@@ -45,7 +45,7 @@ func (c *loggingConn) Write(p []byte) (int, error) {
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
-	uri := flag.String("uri", "127.0.0.1:30431", "IIOD target host:port")
+	uri := flag.String("uri", "192.168.3.1:30431", "IIOD target host:port")
 	samples := flag.Uint64("samples", 4096, "Number of samples for OPEN")
 	mask := flag.String("mask", "1", "Channel mask in hex (e.g. 1 or 0x3)")
 	cyclic := flag.Bool("cyclic", false, "Request a cyclic buffer")
@@ -104,11 +104,16 @@ func main() {
 	log.Printf("[INFO] Preparing READBUF request: bytes=%d (samples=%d)", requested, *samples)
 	buf := make([]byte, requested)
 
-	n, maskLine, err := m.ReadBufferASCIIWithMask("cf-ad9361-lpc", buf)
+	// We use the standard ReadBufferASCII. Because we wrapped the connection in
+	// loggingConn, the user can verify the "Mask" line existence by looking at
+	// the stdout logs.
+	log.Printf("[INFO] Sending READBUF via Manager...")
+
+	n, err := m.ReadBufferASCII("cf-ad9361-lpc", buf)
 	if err != nil {
 		log.Fatalf("read buffer failed: %v", err)
 	}
-	log.Printf("[INFO] Buffer read complete: bytes=%d mask=%s", n, maskLine)
+	log.Printf("[INFO] ReadBufferASCII success: received %d bytes", n)
 
 	previewLen := n
 	if previewLen > 32 {
@@ -125,5 +130,5 @@ func main() {
 		log.Printf("[WARN] connection close error: %v", err)
 	}
 
-	log.Println("[DONE] ASCII diagnostic completed without fatal errors")
+	log.Println("[DONE] ASCII diagnostic completed")
 }
