@@ -173,14 +173,37 @@ func (m *Manager) readAll(b []byte) error {
 //   - output controls optional debug logging.
 //
 // Returns the line including the trailing delimiter, or an error.
+// func (m *Manager) readLine(
+// 	maxLenHint int, output bool,
+// ) (line []byte, err error) {
+// 	if m == nil || m.br == nil {
+// 		return nil, fmt.Errorf("readLine: not connected")
+// 	}
+
+// 	m.applyReadDeadline()
+// 	line, err = m.br.ReadBytes('\n')
+// 	if err != nil {
+// 		return line, fmt.Errorf("readLine failed: %w", err)
+// 	}
+
+// 	if output {
+// 		log.Printf("[READ] %q", string(line))
+// 	}
+
+// 	return line, nil
+// }
+
 func (m *Manager) readLine(
-	maxLenHint int, output bool,
+	maxLen int, output bool,
 ) (line []byte, err error) {
 	if m == nil || m.br == nil {
 		return nil, fmt.Errorf("readLine: not connected")
 	}
 
 	m.applyReadDeadline()
+
+	// ReadBytes reads until the delimiter '\n'.
+	// It returns the data read (including the delimiter) and any error.
 	line, err = m.br.ReadBytes('\n')
 	if err != nil {
 		return line, fmt.Errorf("readLine failed: %w", err)

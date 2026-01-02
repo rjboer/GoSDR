@@ -17,6 +17,12 @@ Performance constraints
 Extensibility guidelines
 This document is normative and governs how all subsystems MUST interoperate.
 
+
+Restrictions:
+- I want functioncalls at max 3 levels deep
+- I want to use only the standard libraries
+
+
 1. System Overview
 
 The Monopulse SDR stack consists of the following core agents:

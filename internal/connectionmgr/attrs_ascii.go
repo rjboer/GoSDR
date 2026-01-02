@@ -637,10 +637,48 @@ func (m *Manager) readASCIIStringPayload(cmd string) (string, error) {
 	return string(payload), nil
 }
 
-// HelpASCII sends HELP and returns the trimmed response body. The socket is
-// fully drained for the response so subsequent calls remain aligned.
+// HelpASCII sends HELP and returns the help text directly.
+// Unlike commands like PRINT, HELP returns the help text as-is,
+// not as a length-prefixed payload.
 func (m *Manager) HelpASCII() (string, error) {
-	return m.readASCIIStringPayload("HELP")
+	if m == nil || m.conn == nil {
+		return "", errors.New("not connected")
+	}
+
+	// Send HELP command
+	if err := m.writeLine("HELP"); err != nil {
+		return "", fmt.Errorf("HELP write failed: %w", err)
+	}
+
+	// Read the help text - it may span multiple lines
+	// Read until we get an empty line or timeout
+	var helpLines []string
+	for {
+		line, err := m.readLine(4096, false)
+		if err != nil {
+			// If we already have some content, return it
+			if len(helpLines) > 0 {
+				break
+			}
+			return "", fmt.Errorf("HELP response read failed: %w", err)
+		}
+
+		trimmed := strings.TrimRight(string(line), "\r\n")
+
+		// Stop on empty line (end of help text)
+		if trimmed == "" || trimmed == "\x00" {
+			break
+		}
+
+		helpLines = append(helpLines, trimmed)
+
+		// Safety: limit to reasonable number of lines
+		if len(helpLines) > 100 {
+			break
+		}
+	}
+
+	return strings.Join(helpLines, "\n"), nil
 }
 
 // GetVersionASCII sends VERSION and returns the version string directly.
@@ -750,10 +788,10 @@ func (m *Manager) ZPrintASCII() error {
 }
 
 // PrintASCII is retained for callers using the legacy name. It delegates to
-// GetContextXMLASCII and drops the payload.
-func (m *Manager) PrintASCII() error {
-	_, err := m.GetContextXMLASCII()
-	return err
+// GetContextXMLASCII and returns the payload.
+func (m *Manager) PrintASCII() ([]byte, error) {
+	data, err := m.GetContextXMLASCII()
+	return data, err
 }
 
 // SwitchToBinary attempts the ASCII "BINARY" mode switch and drains the

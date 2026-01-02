@@ -57,7 +57,11 @@ func TestIntegratedSDRTEST(test *testing.T) {
 	}
 	log.Printf("[TEST] Help menu: %s", help)
 	log.Println("-------------------------STEP3-------------------------")
-	m.PrintASCII() //PRINT\n function
+	data2, err := m.PrintASCII() //PRINT\n function
+	if err != nil {
+		log.Fatalf("[TEST] PrintASCII failed: %v", err)
+	}
+	log.Printf("[TEST] Print received (%d bytes), data:%v", len(data2), data2)
 	log.Println("-------------------------STEP4-------------------------")
 	//m.SwitchToBinary()
 	m.EnterBinaryMode3()

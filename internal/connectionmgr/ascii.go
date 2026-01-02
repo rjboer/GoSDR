@@ -2,6 +2,7 @@ package connectionmgr
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -9,21 +10,29 @@ import (
 // readInteger reads a single ASCII integer terminated by '\n'. The call
 // leverages readLine's fixed-length strategy to avoid per-byte socket reads
 // while preserving protocol semantics.
+//
+// Uses regex to extract the integer from the response, handling cases where
+// the server may include extra text or formatting.
 func (m *Manager) readInteger() (int, error) {
 	line, err := m.readLine(64, false)
 	if err != nil {
 		return 0, err
 	}
 
-	trimmed := strings.TrimSpace(string(line))
-	trimmed = strings.Trim(trimmed, "\x00")
-	if trimmed == "" {
-		return 0, fmt.Errorf("empty integer line")
+	// Use regex to extract integer from the line
+	// Pattern: optional whitespace, optional minus sign, one or more digits
+	re := regexp.MustCompile(`^\s*(-?\d+)`)
+	matches := re.FindStringSubmatch(string(line))
+
+	if len(matches) < 2 {
+		trimmed := strings.TrimSpace(string(line))
+		trimmed = strings.Trim(trimmed, "\x00")
+		return 0, fmt.Errorf("no integer found in response %q", trimmed)
 	}
 
-	val, convErr := strconv.Atoi(trimmed)
+	val, convErr := strconv.Atoi(matches[1])
 	if convErr != nil {
-		return 0, fmt.Errorf("parse integer %q: %w", trimmed, convErr)
+		return 0, fmt.Errorf("parse integer %q: %w", matches[1], convErr)
 	}
 	return val, nil
 }
