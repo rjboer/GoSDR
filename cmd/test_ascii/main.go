@@ -164,16 +164,12 @@ func main() {
 	log.Printf("[INFO] Preparing READBUF request: bytes=%d (samples=%d)", requested, *samples)
 	buf := make([]byte, requested)
 
-<<<<<<< HEAD
 	// We use the standard ReadBufferASCII. Because we wrapped the connection in
 	// loggingConn, the user can verify the "Mask" line existence by looking at
 	// the stdout logs.
 	log.Printf("[INFO] Sending READBUF via Manager...")
 
-	n, err := m.ReadBufferASCII("cf-ad9361-lpc", buf)
-=======
-	n, maskLine, err := m.ReadBufferASCIIWithMask(rxDevice, buf)
->>>>>>> bcf5c542f692a67c168b2803febf622f13e996ca
+	n, err := m.ReadBufferASCII(rxDevice, buf)
 	if err != nil {
 		log.Fatalf("read buffer failed: %v", err)
 	}

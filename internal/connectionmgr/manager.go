@@ -8,6 +8,8 @@ import (
 	"log"
 	"net"
 	"time"
+
+	"github.com/rjboer/GoSDR/internal/sdrxml"
 )
 
 type Mode int
@@ -23,13 +25,18 @@ type Manager struct {
 	byteStream chan []byte
 	Timeout    time.Duration
 	Logger     *log.Logger
-
-	clientID uint16 // libiio client identifier (0 unless multiplexing is added)
+	ClientInfo ClientInfo_type
+	clientID   uint16 // libiio client identifier (0 unless multiplexing is added)
 	// nextBufferID increments for each newly created binary buffer.
 	nextBufferID uint16
 
 	conn net.Conn
 	br   *bufio.Reader
+}
+
+type ClientInfo_type struct {
+	Version    string
+	XMLcontext sdrxml.SDRContext
 }
 
 var errBinaryRejected = errors.New("BINARY command rejected by server")

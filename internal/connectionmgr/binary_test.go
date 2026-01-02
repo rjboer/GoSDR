@@ -14,7 +14,7 @@ func TestIntegratedSDRTEST(test *testing.T) {
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
-	addr := "192.168.3.1:30433"
+	addr := "192.168.3.1:30431"
 
 	m := &Manager{
 		Address: addr,
@@ -28,7 +28,6 @@ func TestIntegratedSDRTEST(test *testing.T) {
 	m.Connect()
 	defer m.Close()
 
-	m.EnterBinaryMode3()
 	m.clientID = 0x01 // any non-zero client ID is fine
 
 	// ------------------------------------------------------------
@@ -42,23 +41,35 @@ func TestIntegratedSDRTEST(test *testing.T) {
 	// 	log.Fatalf("[TEST] failed to switch to binary mode: %v", err)
 	// }
 	// m.PrimeASCII()
-
+	var err error
 	log.Println("-------------------------STEP1-------------------------")
-	m.VersionASCII()
+	m.ClientInfo.Version, err = m.GetVersionASCII()
+	if err != nil {
+		log.Fatalf("[TEST] GetVersionASCII failed: %v", err)
+	}
+	log.Printf("[TEST] Version received: %s", m.ClientInfo.Version)
+
 	log.Println("-------------------------STEP2-------------------------")
-	m.HelpfunctionASCII()
+	var help string
+	help, err = m.HelpASCII()
+	if err != nil {
+		log.Fatalf("[TEST] HelpASCII failed: %v", err)
+	}
+	log.Printf("[TEST] Help menu: %s", help)
 	log.Println("-------------------------STEP3-------------------------")
 	m.PrintASCII() //PRINT\n function
 	log.Println("-------------------------STEP4-------------------------")
-	m.SwitchToBinary()
+	//m.SwitchToBinary()
+	m.EnterBinaryMode3()
 	log.Println("-------------------------STEP5-------------------------")
 
-	data, err := m.Print(0)
+	var data []byte
+	data, err = m.Print(0)
 	if err != nil {
 		log.Fatalf("[TEST] Print failedd: %v", err)
 	}
 	log.Printf("[TEST] Print received (%d bytes), data:%v", len(data), data)
-	log.Println("-------------------------STEP5-------------------------")
+	log.Println("-------------------------STEP6-------------------------")
 	// ------------------------------------------------------------
 	// 3) PrimeCTX function
 	// ------------------------------------------------------------
@@ -67,7 +78,7 @@ func TestIntegratedSDRTEST(test *testing.T) {
 		log.Fatalf("[TEST] PrimeCTX failedd: %v", err)
 	}
 	log.Printf("[TEST] PrimeCTX received (%d bytes), data:%v", len(data), data)
-	log.Println("-------------------------STEP6-------------------------")
+	log.Println("-------------------------STEP7-------------------------")
 	return
 	// ------------------------------------------------------------
 	// 3) Retrieve XML using your existing wrapper

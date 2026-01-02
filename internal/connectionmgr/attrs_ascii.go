@@ -643,11 +643,30 @@ func (m *Manager) HelpASCII() (string, error) {
 	return m.readASCIIStringPayload("HELP")
 }
 
-// GetVersionASCII sends VERSION and returns the trimmed response string. The
-// helper consumes the entire payload (including the trailing newline) to keep
-// the ASCII stream in sync.
+// GetVersionASCII sends VERSION and returns the version string directly.
+// Unlike other IIOD commands, VERSION returns the version string as-is,
+// not as a length-prefixed payload.
 func (m *Manager) GetVersionASCII() (string, error) {
-	return m.readASCIIStringPayload("VERSION")
+	if m == nil || m.conn == nil {
+		return "", errors.New("not connected")
+	}
+
+	// Send VERSION command
+	if err := m.writeLine("VERSION"); err != nil {
+		return "", fmt.Errorf("VERSION write failed: %w", err)
+	}
+
+	// Read the version string directly (not length-prefixed)
+	line, err := m.readLine(128, false)
+	if err != nil {
+		return "", fmt.Errorf("VERSION response read failed: %w", err)
+	}
+
+	// Trim whitespace and null bytes
+	version := strings.TrimSpace(string(line))
+	version = strings.Trim(version, "\x00")
+
+	return version, nil
 }
 
 // GetContextXMLASCII issues PRINT to fetch the XML context over ASCII. The
